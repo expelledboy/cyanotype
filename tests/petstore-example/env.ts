@@ -40,6 +40,17 @@ const NGINX_PORT = 38080;
 
 const DOCKER_HOST_DNS = "host.docker.internal";
 
+// K8s mode: cross-component traffic uses Service DNS (D-020) on the
+// container port. Docker/memory mode: host.docker.internal + pinned host ports.
+const IS_K8S = process.env.SPECULUM_ADAPTER === "k8s";
+const REDIS_PRIMARY_DNS  = IS_K8S ? "redis-primary" : DOCKER_HOST_DNS;
+const REDIS_REPLICA_DNS  = IS_K8S ? "redis-replica" : DOCKER_HOST_DNS;
+const REDIS_PRIMARY_WIRE_PORT = IS_K8S ? 6379 : 36379;
+const REDIS_REPLICA_WIRE_PORT = IS_K8S ? 6379 : 36380;
+const petstoreServiceHost = (instance: "one" | "two" | "three"): string =>
+  IS_K8S ? `petstore-${instance}` : DOCKER_HOST_DNS;
+const petstoreWirePort = (hostPort: number): number => IS_K8S ? 8080 : hostPort;
+
 // ---------------------------------------------------------------------------
 // Petstore — schema-driven HTTP API + typed event catalog
 // ---------------------------------------------------------------------------
@@ -151,10 +162,10 @@ const petstore = (config: PetstoreConfig) =>
       INSTANCE_ID:        config.instanceId,
       BASE_PATH:          "/v1",
       PORT:               "8080",
-      REDIS_PRIMARY_HOST: DOCKER_HOST_DNS,
-      REDIS_PRIMARY_PORT: String(REDIS_PRIMARY_PORT),
-      REDIS_REPLICA_HOST: DOCKER_HOST_DNS,
-      REDIS_REPLICA_PORT: String(REDIS_REPLICA_PORT),
+      REDIS_PRIMARY_HOST: REDIS_PRIMARY_DNS,
+      REDIS_PRIMARY_PORT: String(REDIS_PRIMARY_WIRE_PORT),
+      REDIS_REPLICA_HOST: REDIS_REPLICA_DNS,
+      REDIS_REPLICA_PORT: String(REDIS_REPLICA_WIRE_PORT),
     },
     ports:     { "8080": config.httpPort },
     logParser: petstoreLogParser,
@@ -168,7 +179,7 @@ const redisPrimaryConfig = (): string =>
   `bind 0.0.0.0\nport 6379\nprotected-mode no\nappendonly yes\n`;
 
 const redisReplicaConfig = (primaryHostPort: number): string =>
-  `bind 0.0.0.0\nport 6379\nprotected-mode no\nappendonly yes\nreplicaof ${DOCKER_HOST_DNS} ${primaryHostPort}\n`;
+  `bind 0.0.0.0\nport 6379\nprotected-mode no\nappendonly yes\nreplicaof ${REDIS_PRIMARY_DNS} ${REDIS_PRIMARY_WIRE_PORT}\n`;
 
 type RedisApi = {
   readonly host: string;
@@ -227,9 +238,10 @@ const redis = (config: RedisConfig) =>
 // Nginx — load balancer in front of the three petstore instances
 // ---------------------------------------------------------------------------
 
-const nginxConfigText = (upstreamPorts: readonly number[]): string => {
-  const servers = upstreamPorts
-    .map((p) => `    server ${DOCKER_HOST_DNS}:${p} max_fails=1 fail_timeout=1s;`)
+type NginxUpstream = { host: string; port: number };
+const nginxConfigText = (upstreams: readonly NginxUpstream[]): string => {
+  const servers = upstreams
+    .map((u) => `    server ${u.host}:${u.port} max_fails=1 fail_timeout=1s;`)
     .join("\n");
   return `worker_processes 1;
 events {}
@@ -259,7 +271,7 @@ type NginxIface = {
   };
 };
 
-type NginxConfig = { httpPort: number; upstreamPorts: readonly number[] };
+type NginxConfig = { httpPort: number; upstreams: readonly NginxUpstream[] };
 
 const nginxBlueprint = defineBlueprint({
   portNames: ["8080"] as const,
@@ -288,7 +300,7 @@ const nginx = (config: NginxConfig) =>
     config,
     env:     {},
     ports:   { "8080": config.httpPort },
-    mounts:  { "/etc/nginx/nginx.conf": nginxConfigText(config.upstreamPorts) },
+    mounts:  { "/etc/nginx/nginx.conf": nginxConfigText(config.upstreams) },
   });
 
 // ---------------------------------------------------------------------------
@@ -306,8 +318,12 @@ export const env = createEnvironment({
     three: petstore({ instanceId: "three", httpPort: PETSTORE_PORTS.three }),
   },
   nginx: nginx({
-    httpPort:      NGINX_PORT,
-    upstreamPorts: [PETSTORE_PORTS.one, PETSTORE_PORTS.two, PETSTORE_PORTS.three],
+    httpPort: NGINX_PORT,
+    upstreams: [
+      { host: petstoreServiceHost("one"),   port: petstoreWirePort(PETSTORE_PORTS.one)   },
+      { host: petstoreServiceHost("two"),   port: petstoreWirePort(PETSTORE_PORTS.two)   },
+      { host: petstoreServiceHost("three"), port: petstoreWirePort(PETSTORE_PORTS.three) },
+    ],
   }),
 });
 

@@ -28,6 +28,7 @@ type Tracked = {
   readonly namespace: string;
   readonly context: string | undefined;
   readonly forwards: Subprocess[];
+  readonly serviceName: string | null;
 };
 
 let exitHandlerRegistered = false;
@@ -49,7 +50,7 @@ const registerExitHandler = () => {
     for (const s of globalSessions) {
       const argv = ["kubectl"];
       if (s.context) argv.push("--context", s.context);
-      argv.push("-n", s.namespace, "delete", "pods,configmaps",
+      argv.push("-n", s.namespace, "delete", "pods,configmaps,services",
         "-l", `speculum=1,speculum.session=${s.sessionId}`,
         "--wait=false", "--ignore-not-found=true");
       try { Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" }); } catch { /* ignore */ }
@@ -65,6 +66,7 @@ const buildPodManifest = (
   cmName: string | null,
   spec: StartSpec,
   namespace: string,
+  extraLabels: Record<string, string>,
 ): unknown => {
   const containerPorts = Object.keys(spec.ports).map((name) => ({
     containerPort: Number(name),
@@ -85,7 +87,7 @@ const buildPodManifest = (
   return {
     apiVersion: "v1",
     kind: "Pod",
-    metadata: { name: podName, namespace, labels: spec.labels },
+    metadata: { name: podName, namespace, labels: { ...spec.labels, ...extraLabels } },
     spec: {
       restartPolicy: "Never",
       containers: [
@@ -118,6 +120,41 @@ const buildConfigMapManifest = (
     kind: "ConfigMap",
     metadata: { name: cmName, namespace, labels: spec.labels },
     data,
+  };
+};
+
+const sanitiseDnsLabel = (s: string): string =>
+  s.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 63) || "x";
+
+const buildServiceName = (spec: StartSpec): string | null => {
+  const component = spec.labels["speculum.component"];
+  if (!component) return null;
+  const instance = spec.labels["speculum.instance"];
+  const raw = instance ? `${component}-${instance}` : component;
+  return sanitiseDnsLabel(raw);
+};
+
+const buildServiceManifest = (
+  serviceName: string,
+  podName: string,
+  spec: StartSpec,
+  namespace: string,
+): unknown => {
+  const ports = Object.keys(spec.ports).map((name) => ({
+    name: `p-${name}`,
+    port: Number(name),
+    targetPort: Number(name),
+    protocol: "TCP",
+  }));
+  return {
+    apiVersion: "v1",
+    kind: "Service",
+    metadata: { name: serviceName, namespace, labels: spec.labels },
+    spec: {
+      type: "ClusterIP",
+      selector: { "speculum.podname": podName },
+      ports,
+    },
   };
 };
 
@@ -162,29 +199,19 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
 
   const waitForPodRunning = async (podName: string): Promise<void> => {
     const start = Date.now();
+    // kubectl wait uses the watch API — returns as soon as the kubelet
+    // marks Ready, rather than polling every 500ms.
+    const timeoutSec = Math.max(1, Math.floor(POD_READY_TIMEOUT_MS / 1000));
+    const r = await k.run(["wait", "pod", podName, "--for=condition=Ready", `--timeout=${timeoutSec}s`]);
+    if (r.exit === 0) return;
+    // Fall through: inspect once for a structured error.
+    const inspect = await k.run(["get", "pod", podName, "-o", "json"]);
     let lastPhase = "Unknown";
-    while (Date.now() - start < POD_READY_TIMEOUT_MS) {
-      const r = await k.run(["get", "pod", podName, "-o", "json"]);
-      if (r.exit === 0) {
-        try {
-          const obj = JSON.parse(r.stdout) as { status?: { phase?: string; containerStatuses?: Array<{ ready?: boolean }> } };
-          lastPhase = obj.status?.phase ?? lastPhase;
-          if (lastPhase === "Running") {
-            const cs = obj.status?.containerStatuses ?? [];
-            if (cs.length > 0 && cs.every((c) => c.ready === true)) return;
-            if (cs.length === 0) return;
-          }
-          if (lastPhase === "Failed" || lastPhase === "Succeeded") {
-            throw { kind: "k8s_pod_not_ready", podName, lastPhase, elapsedMs: Date.now() - start };
-          }
-        } catch (e) {
-          const err = e as { kind?: string };
-          if (err?.kind === "k8s_pod_not_ready") throw e;
-        }
-      }
-      await new Promise((res) => setTimeout(res, 500));
-    }
-    throw { kind: "k8s_pod_not_ready", podName, lastPhase, elapsedMs: Date.now() - start };
+    try {
+      const obj = JSON.parse(inspect.stdout) as { status?: { phase?: string } };
+      lastPhase = obj.status?.phase ?? lastPhase;
+    } catch { /* ignore */ }
+    throw { kind: "k8s_pod_not_ready", podName, lastPhase, elapsedMs: Date.now() - start, stderr: r.stderr };
   };
 
   const startPortForward = (podName: string, containerPort: number, requestedLocal: number | "auto"): Promise<{ proc: Subprocess; localPort: number }> => {
@@ -206,7 +233,9 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
             }
           }
           clearTimeout(timer);
-          reject({ kind: "k8s_port_forward_exited", podName, containerPort });
+          let stderr = "";
+          try { stderr = await new Response(handle.proc.stderr as unknown as ReadableStream).text(); } catch { /* ignore */ }
+          reject({ kind: "k8s_port_forward_exited", podName, containerPort, stderr });
         } catch (e) {
           clearTimeout(timer);
           reject(e);
@@ -225,8 +254,17 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     known.delete(containerId);
     globalKnown.delete(containerId);
     if (mode === "deploy") {
-      await k.run(["delete", "pod", containerId, "--ignore-not-found=true"]);
-      await k.run(["delete", "configmap", `${containerId}-mounts`, "--wait=false", "--ignore-not-found=true"]);
+      // Fire deletes in parallel and don't block on graceful termination —
+      // chaos tests stop+start within a single afterEach hook and the default
+      // bun:test hook timeout (5s) is tight on K8s substrate.
+      const tasks: Array<Promise<unknown>> = [
+        k.run(["delete", "pod", containerId, "--wait=false", "--ignore-not-found=true", "--grace-period=0", "--force"]),
+        k.run(["delete", "configmap", `${containerId}-mounts`, "--wait=false", "--ignore-not-found=true"]),
+      ];
+      if (t?.serviceName) {
+        tasks.push(k.run(["delete", "service", t.serviceName, "--wait=false", "--ignore-not-found=true"]));
+      }
+      await Promise.all(tasks);
     }
   };
 
@@ -249,7 +287,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       }
     }
 
-    const podManifest = buildPodManifest(podName, cmName, spec, namespace);
+    const podManifest = buildPodManifest(podName, cmName, spec, namespace, { "speculum.podname": podName });
     const podRes = await k.run(["apply", "-f", "-"], { stdin: JSON.stringify(podManifest) });
     if (podRes.exit !== 0) {
       if (cmName) {
@@ -268,12 +306,32 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       throw e;
     }
 
+    // D-020: per-Pod Service for in-cluster DNS. Service name is stable
+    // (`<component>[-<instance>]`); selector is the unique podname label so
+    // each Service points to exactly one Pod.
+    const serviceName = Object.keys(spec.ports).length > 0 ? buildServiceName(spec) : null;
+    if (serviceName) {
+      const svcManifest = buildServiceManifest(serviceName, podName, spec, namespace);
+      const svcRes = await k.run(["apply", "-f", "-"], { stdin: JSON.stringify(svcManifest) });
+      if (svcRes.exit !== 0) {
+        await k.run(["delete", "pod", podName, "--wait=false", "--ignore-not-found=true"]);
+        if (cmName) {
+          await k.run(["delete", "configmap", cmName, "--wait=false", "--ignore-not-found=true"]);
+        }
+        throw { kind: "k8s_service_apply_failed", serviceName, stderr: svcRes.stderr };
+      }
+    }
+
     const ports: Record<string, number> = {};
     const forwards: Subprocess[] = [];
     try {
-      for (const [name, value] of Object.entries(spec.ports)) {
+      for (const [name, _value] of Object.entries(spec.ports)) {
         const containerPort = Number(name);
-        const { proc, localPort } = await startPortForward(podName, containerPort, value);
+        // Always "auto" for the local side: cross-component traffic uses the
+        // Service DNS (D-020), so pinning a stable host port across restarts
+        // has no remote consumer and creates a TIME_WAIT hazard for chaos
+        // tests that stop+start the same component within seconds.
+        const { proc, localPort } = await startPortForward(podName, containerPort, "auto");
         forwards.push(proc);
         ports[name] = localPort;
       }
@@ -283,10 +341,13 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       if (cmName) {
         await k.run(["delete", "configmap", cmName, "--wait=false", "--ignore-not-found=true"]);
       }
+      if (serviceName) {
+        await k.run(["delete", "service", serviceName, "--wait=false", "--ignore-not-found=true"]);
+      }
       throw e;
     }
 
-    const t: Tracked = { podName, namespace, context, forwards };
+    const t: Tracked = { podName, namespace, context, forwards, serviceName };
     tracked.set(podName, t);
     globalTracked.set(podName, t);
     known.add(podName);
@@ -325,7 +386,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     if (mode === "deploy") {
       try {
         await k.run([
-          "delete", "pods,configmaps",
+          "delete", "pods,configmaps,services",
           "-l", `speculum=1,speculum.session=${sessionId}`,
           "--wait=false", "--ignore-not-found=true",
         ]);

@@ -12,6 +12,7 @@ import {
   createDockerAdapter,
 } from "../../src/index";
 import { createInMemoryAdapter, type FakeFactory } from "../../src/adapters/memory";
+import { createK8sAdapter } from "../../src/adapters/kubernetes";
 import { petstoreFake, createSharedPetStore } from "../fakes/petstore";
 import { redisFake } from "../fakes/redis";
 import { nginxFake } from "../fakes/nginx";
@@ -60,6 +61,13 @@ const adapter = adapterType === "docker"
   ? createDockerAdapter({ sessionId })
   : adapterType === "memory"
   ? buildMemoryAdapter()
+  : adapterType === "k8s"
+  ? createK8sAdapter({
+      mode: "deploy",
+      sessionId,
+      context: process.env.SPECULUM_K8S_CONTEXT ?? "orbstack",
+      namespace: process.env.SPECULUM_K8S_NAMESPACE ?? "speculum-tests",
+    })
   : (() => { throw { kind: "unknown_adapter", value: adapterType }; })();
 
 export const shared = createSharedEnvs(

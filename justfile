@@ -35,6 +35,20 @@ test-petstore-docker:
 test-petstore-memory:
     SPECULUM_ADAPTER=memory bun test tests/petstore-example
 
+# Make test images visible to the OrbStack Kubernetes cluster. OrbStack
+# shares its containerd image store with the host Docker daemon, so this
+# recipe is build-test-images + a sanity check — no `docker save | ctr import`
+# step is needed. For non-OrbStack clusters (kind, k3d, EKS) image loading
+# would require `kind load`, `k3d image import`, or a registry push.
+load-k8s-images: build-test-images
+    @docker image inspect speculum/petstore-sla:latest >/dev/null 2>&1 || (echo "petstore-sla image missing"; exit 1)
+    @docker image inspect speculum/redis-configurable:latest >/dev/null 2>&1 || (echo "redis-configurable image missing"; exit 1)
+    @echo "OrbStack shares host Docker images with k8s — images present, no import needed."
+
+# Petstore-example against OrbStack Kubernetes (D-020 Service-per-Pod DNS).
+test-petstore-k8s: load-k8s-images
+    SPECULUM_ADAPTER=k8s SPECULUM_K8S_CONTEXT={{ env_var_or_default("SPECULUM_K8S_CONTEXT", "orbstack") }} bun test tests/petstore-example
+
 # Run the Kubernetes adapter suite. Requires kubectl + a reachable cluster.
 # Defaults to the OrbStack context; override with SPECULUM_K8S_CONTEXT.
 test-k8s:

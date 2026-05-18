@@ -23,6 +23,7 @@
 - [D-017 — Kubernetes adapter — deploy mode uses bare Pods + ConfigMaps + `kubectl port-forward`](#d-017-kubernetes-adapter--deploy-mode-uses-bare-pods--configmaps--kubectl-port-forward)
 - [D-018 — Kubernetes adapter — attach mode discovers via Service, refuses cluster mutation](#d-018-kubernetes-adapter--attach-mode-discovers-via-service-refuses-cluster-mutation)
 - [D-019 — `kubectl` shellout, not `@kubernetes/client-node`, for the Kubernetes adapter](#d-019-kubectl-shellout-not-kubernetesclient-node-for-the-kubernetes-adapter)
+- [D-020 — Kubernetes adapter — per-Pod `Service` for in-cluster DNS](#d-020-kubernetes-adapter--per-pod-service-for-in-cluster-dns)
 
 ---
 
@@ -316,3 +317,28 @@ A second spike replaced the library with `Bun.spawn` driving `kubectl` directly.
 - Subprocess overhead is non-trivial (~50–150ms per `kubectl get` invocation). Acceptable for test-infrastructure use; not a high-throughput path. Logs and port-forward are long-lived subprocesses, so per-call overhead does not stack there.
 - One Bun-specific detail captured for the implementation: `Bun.spawn`'s `proc.stdout` is a web `ReadableStream`. Feed it to `readline` via `Readable.fromWeb(proc.stdout)` — direct use throws `input.on is not a function`. This is a one-line wrapper at every streaming site.
 - If `@kubernetes/client-node` becomes Bun-compatible later, switching is internal to the adapter and does not affect the SPI. This ADR is not retired by that change unless we want it to be.
+
+---
+
+## D-020. Kubernetes adapter — per-Pod `Service` for in-cluster DNS
+
+**Context:** D-017 chose bare Pods + `kubectl port-forward` for the deploy-mode Kubernetes adapter. Port-forward gives the test runner on the dev machine a local TCP endpoint to each Pod, but it does nothing for **cross-component traffic inside the cluster.** In the petstore-SLA suite, nginx must reach three petstore Pods, the petstore Pods must reach two redis Pods, and the redis replica must reach the redis primary. The Docker harness solves this with `host.docker.internal:<pinned-host-port>` — every container hops back to the host's published port. That idiom does not translate to Kubernetes: Pods cannot route to the dev machine's localhost, and pinning hostPort across restarts is fragile (TIME_WAIT on chaos restarts, conflicts on multi-suite parallelism).
+
+The K8s-native answer is a `Service` per component instance: a stable in-cluster DNS name (`<component>` or `<component>-<instance>`) that components reference in their env wiring. The same name resolves identically on every Pod in the namespace, regardless of where the target was scheduled.
+
+**Decision:** The deploy-mode adapter creates one `Service` per Pod that has ports, alongside the Pod + ConfigMap from D-017.
+
+- **Naming:** `sanitiseDnsLabel(<speculum.component>[-<speculum.instance>])`. Stable across the test session — restarts of the same component reuse the same Service name.
+- **Selector:** the unique per-Pod label `speculum.podname=<podName>`. The adapter writes that label onto the Pod alongside the orchestrator-set labels. This makes the Service 1:1 with its Pod (no risk of cross-instance traffic when two Pods share `speculum.component` + `speculum.instance` — e.g. mid-chaos when an old Pod is terminating while the new one is starting).
+- **Ports:** one Service port per `StartSpec.ports` entry, with `port == targetPort == Number(name)`. The K8s adapter's `StartSpec.ports` keys are the container port (D-017).
+- **Labels:** the same `speculum=1`, `speculum.session`, `speculum.component`, `speculum.instance` labels the Pod and ConfigMap carry, so the existing label-scan teardown sweeps Services too.
+- **Lifecycle:** Service is applied after the Pod becomes Ready (Pod-Ready failures don't leak Services). Service deletion is appended to `stop()` and to the bulk session-teardown (`delete pods,configmaps,services -l speculum=1,speculum.session=<uuid>`).
+- **Cross-component env wiring:** `tests/petstore-example/env.ts` switches on `SPECULUM_ADAPTER === "k8s"` and uses the Service DNS names (`redis-primary`, `redis-replica`, `petstore-one|two|three`) on the **container** port (6379, 8080) instead of `host.docker.internal` on the pinned host port. The Docker / in-memory paths are unchanged.
+- **Port-forward in K8s mode binds to `"auto"`, not the pinned hostPort.** D-017's port-forward is for the dev machine's test runner; that traffic does not flow through the host's well-known port any more. Pinning would only create chaos-test TIME_WAIT hazards on stop+start cycles. The host-side port is reported back via the existing `Started.ports` contract, so user-facing test code is unchanged.
+
+**Consequences:**
+- Cross-component DNS in deploy mode now works identically to the Docker harness's `host.docker.internal` pattern, but cluster-native. Authoring an environment for both substrates is a single switch in the Binding env block (or a helper).
+- Attach mode (D-018) is unaffected: it already discovers via existing Services and creates nothing.
+- D-017's RBAC requirements grow by one resource: deploy mode now needs `create,get,list,watch,delete,deletecollection` on `services` in addition to `pods` + `configmaps`. `docs/k8s-rbac.md` should be updated.
+- The orchestrator's `chaos.stop` polls `exists()` for up to 5 seconds. K8s pod deletion under the default 30s grace period would blow that budget every time; the adapter uses `--grace-period=0 --force --wait=false` and parallelises pod / configmap / service deletes. Verified end-to-end: `tests/petstore-example` (15 tests including three chaos-stop+start cycles in an `afterEach`) is green against OrbStack under bun:test's default 5s hook timeout.
+- `kubectl wait --for=condition=Ready --timeout=<n>s` replaces the previous 500ms poll loop for Pod readiness. `kubectl wait` uses the watch API and returns within milliseconds of the kubelet flipping the Ready condition; the polled inspection is kept as a fall-through for structured error reporting on timeout.
