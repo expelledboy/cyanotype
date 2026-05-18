@@ -1,0 +1,10 @@
+{
+  "name": "petstore-sla",
+  "version": "1.0.0",
+  "description": "Petstore SLA test server",
+  "main": "server.js",
+  "license": "MIT",
+  "dependencies": {
+    "redis": "^4.6.13"
+  }
+}
