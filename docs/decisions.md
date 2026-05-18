@@ -20,6 +20,9 @@
 - [D-014 — SIGINT / SIGTERM teardown is mandatory](#d-014-sigint--sigterm-teardown-is-mandatory)
 - [D-015 — `createEnvironment` validates reserved component names](#d-015-createenvironment-validates-reserved-component-names)
 - [D-016 — Global teardown via `bun:test` preload + label-scan in `stopAll`](#d-016-global-teardown-via-buntest-preload--label-scan-in-stopall)
+- [D-017 — Kubernetes adapter — deploy mode uses bare Pods + ConfigMaps + `kubectl port-forward`](#d-017-kubernetes-adapter--deploy-mode-uses-bare-pods--configmaps--kubectl-port-forward)
+- [D-018 — Kubernetes adapter — attach mode discovers via Service, refuses cluster mutation](#d-018-kubernetes-adapter--attach-mode-discovers-via-service-refuses-cluster-mutation)
+- [D-019 — `kubectl` shellout, not `@kubernetes/client-node`, for the Kubernetes adapter](#d-019-kubectl-shellout-not-kubernetesclient-node-for-the-kubernetes-adapter)
 
 ---
 
@@ -249,3 +252,67 @@ The leak is not specific to a misbehaving test: it's structural. `runtime.stop()
 - `just test` no longer depends on `clean-containers`. `just clean-containers` remains as a manual reset for unusual situations (`kill -9`, partial state, ad-hoc debugging).
 - `--watch` mode: the preload's `afterAll` fires between watch iterations, so containers are stopped + re-created on each iteration. That's the conservative default; users wanting `--watch` with container reuse can write their own preload that omits the teardown call.
 - The SIGINT/SIGTERM handler in the Docker adapter remains as the safety net for Ctrl-C — orthogonal to the preload pattern.
+
+---
+
+## D-017. Kubernetes adapter — deploy mode uses bare Pods + ConfigMaps + `kubectl port-forward`
+
+**Context:** The Kubernetes adapter must satisfy the same 7-method SPI as the Docker adapter (D-004). The substrate primitives differ — K8s has Pods, Deployments, Jobs, Services, ConfigMaps, NodePort, Ingress, port-forward — and we need one shape per concern. The Docker adapter is the reference for behaviour, not for primitives.
+
+**Decision:**
+
+- **Workload:** bare `Pod`, not `Deployment` or `Job`. One Pod per `StartSpec`. Speculum owns the lifecycle; restart-on-crash would mask the very failures tests assert on. `containerId` is the Pod name.
+- **Mount-as-content (D-008):** one `ConfigMap` per Pod, `data[basename] = content`, mounted via `volumeMounts` with `subPath` to preserve the absolute target path. Labelled identically to the Pod so the label-scan teardown sweeps both.
+- **Port exposure:** long-lived `kubectl port-forward pod/<name> :<containerPort>` subprocess. The local port is parsed from kubectl's stdout (`Forwarding from 127.0.0.1:NNNNN -> NNNN`). One subprocess per `StartSpec` port. Avoids NodePort (requires node-IP discovery, breaks on managed clusters) and `hostPort` (requires cluster-side config).
+- **Namespace:** single configurable namespace (default `speculum-tests`). Session scoping via labels, not namespace suffix — per-session namespaces churn RBAC and orphan-cleanup logic.
+- **Labels** (on Pod and ConfigMap): `speculum=1`, `speculum.session=<uuid>`, `speculum.component=<name>`, `speculum.instance=<name>` when present.
+- **Teardown:** `kubectl delete pods,configmaps -n <ns> -l speculum=1,speculum.session=<uuid> --wait=false`. SIGINT/SIGTERM handler (D-014) ported from `src/adapters/docker.ts`, owning the same `globalKnown` / `globalStopFns` discipline plus the set of live port-forward subprocesses.
+
+**Consequences:**
+- Deploy mode requires `create,get,list,watch,delete,deletecollection` on `pods` + `configmaps` in the target namespace, plus `pods/log` (get) and `pods/portforward` (create). Documented in `docs/k8s-rbac.md`.
+- Pod crashes surface as `exists() === false` (matching the Docker contract). No silent restart.
+- Adding a `Deployment`-backed variant later is additive; this ADR doesn't foreclose it.
+- The local port held by `kubectl port-forward` is stable for the subprocess's lifetime; if the Pod is rescheduled mid-test, the subprocess exits and `exists()` returns false — the test sees the same failure mode as a Docker container exit.
+
+---
+
+## D-018. Kubernetes adapter — attach mode discovers via Service, refuses cluster mutation
+
+**Context:** Smoke-testing real environments — dev/uat/prod where components are Helm- or Terraform-deployed — needs an adapter that runs the same test suite without provisioning anything. The adapter must be loud-safe: one stray destructive call against prod is catastrophic. Discovery must work zero-config against existing Helm charts; we cannot require chart authors to add speculum-specific labels.
+
+**Decision:**
+
+- **Mode selection at factory time:** `createK8sAdapter({ mode: "deploy" | "attach", ... })`. `SPECULUM_K8S_MODE` env var overrides for CI ergonomics. Mode is a structural property of the adapter instance — matches D-003 (substrate decision is the single seam).
+- **Discovery:** convention-based `Service` lookup. The `Service` named `<component>` (or `<component>-<instance>` for multi-instance) in the configured namespace is the resolution target. Helm charts already name Services after components.
+- **Explicit override:** a Binding may declare `attach: { namespace, service, port }` to override the convention.
+- **`start()` is non-creating.** Resolves the Service via `kubectl get svc <name> -o json`, picks a ready Pod from the EndpointSlice (`kubectl get endpointslices -l kubernetes.io/service-name=<name> -o json`), opens a `kubectl port-forward` against that Pod. `containerId = "attach:<namespace>/<podName>"` so dispatch forks on prefix.
+- **`stop()` / `teardown()` are non-destructive.** They close the port-forward subprocess and nothing else. The adapter rejects, at one chokepoint, any `kubectl` invocation whose first subcommand is `apply`, `create`, `delete`, `patch`, `replace`, `edit`, `scale`, or `rollout` while `mode === "attach"`. Violations throw `{ kind: "attach_mode_violation", op, target }`. This is the loud safety guarantee — enforced in the adapter, not at call sites.
+- **`logs()`:** `kubectl logs -f --tail=0 <pod> -c <container>` subprocess, stdout streamed via `readline` over `Readable.fromWeb(proc.stdout)`. Identical to the Docker adapter's `AsyncIterable<string>` contract.
+- **`exists()`:** `kubectl get pod <name>` exit code (0 = exists, non-zero = gone). On 404 mid-session, re-resolve via the Service's EndpointSlice and update the cached Pod reference. Host-side port stays stable across the re-resolve (the port-forward subprocess restarts under the same local port via re-spawn).
+
+**Consequences:**
+- Attach mode needs only read RBAC + `pods/log` + `pods/portforward`. Safe to grant against prod.
+- Helm chart authors do not need to add speculum-specific labels for discovery to work.
+- Mode-dispatch is at the SPI boundary inside one adapter file, not two parallel adapters — keeps D-003 intact.
+- Rolling restarts of the target workload are survivable mid-test.
+- The kubectl-subcommand denylist is unit-tested: each destructive verb is exercised in attach mode and asserted to throw.
+
+---
+
+## D-019. `kubectl` shellout, not `@kubernetes/client-node`, for the Kubernetes adapter
+
+**Context:** A spike against OrbStack's local Kubernetes cluster (May 2026) found that `@kubernetes/client-node` cannot authenticate under Bun. The library configures client cert/key on a Node `https.Agent`; Bun's fetch path does not surface agent-supplied cert/key on the wire ([oven-sh/bun#10642](https://github.com/oven-sh/bun/issues/10642), [#9376](https://github.com/oven-sh/bun/issues/9376), [#23985](https://github.com/oven-sh/bun/issues/23985)). The blocker is tracked specifically as [oven-sh/bun#19754 "Cannot use @kubernetes/client-node under bun"](https://github.com/oven-sh/bun/issues/19754), open since May 2025 with no fix. `NODE_EXTRA_CA_CERTS` made TLS handshake succeed; the client cert still never reached the API server and every call returned 401.
+
+A second spike replaced the library with `Bun.spawn` driving `kubectl` directly. Four capabilities passed first attempt: `kubectl get -o json` + JSON parse; pod-exists via exit code; `kubectl port-forward` + 10 sequential local TCP connections; `kubectl logs -f` line streaming. Subprocess teardown via `proc.kill()` + `await proc.exited` was clean; no zombies; no warmup latency.
+
+`kubectl` is the de facto programmatic interface for Kubernetes — stable JSON output via `-o json`, native streaming for `logs -f`, native port-forward, and identical behaviour against OrbStack, kind, EKS, GKE, anywhere it runs. Its surface is more polished than `@kubernetes/client-node` for the operations Speculum needs.
+
+**Decision:** The Kubernetes adapter (`src/adapters/kubernetes.ts`) drives `kubectl` via `Bun.spawn`. All cluster I/O is subprocess I/O — `get -o json` for reads, `apply -f - <<<JSON` for creates, `delete --selector=...` for teardown, `port-forward` for port exposure, `logs -f` for log streaming. No TypeScript Kubernetes client is taken as a dependency.
+
+**Consequences:**
+- This **reverses D-013** for the Kubernetes substrate specifically. D-013 chose `dockerode` over CLI shellout for the Docker adapter because Docker's CLI is awkward for programmatic use (incomplete JSON output, ad-hoc flag conventions). The reverse trade-off holds for Kubernetes: `kubectl` is the canonical programmatic interface; the Bun-compatible library option is broken upstream with no committed fix.
+- Speculum gains zero new TLS / HTTP / auth code. The runtime trust path is owned by `kubectl`. In-cluster auth, kubeconfig auth, exec-plugin auth, OIDC, AWS IAM auth — all are handled by kubectl, free.
+- `kubectl` becomes a runtime dependency of the K8s adapter — documented in the adapter README and `docs/k8s-rbac.md`. CI images must include it.
+- Subprocess overhead is non-trivial (~50–150ms per `kubectl get` invocation). Acceptable for test-infrastructure use; not a high-throughput path. Logs and port-forward are long-lived subprocesses, so per-call overhead does not stack there.
+- One Bun-specific detail captured for the implementation: `Bun.spawn`'s `proc.stdout` is a web `ReadableStream`. Feed it to `readline` via `Readable.fromWeb(proc.stdout)` — direct use throws `input.on is not a function`. This is a one-line wrapper at every streaming site.
+- If `@kubernetes/client-node` becomes Bun-compatible later, switching is internal to the adapter and does not affect the SPI. This ADR is not retired by that change unless we want it to be.

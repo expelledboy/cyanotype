@@ -97,3 +97,7 @@ export type {
   FakeHandle,
   InMemoryAdapterOptions,
 } from "./adapters/memory";
+
+// --- Kubernetes adapter ---
+export type { K8sAdapterOptions } from "./adapters/kubernetes";
+export type { KubectlMode } from "./adapters/kubectl";

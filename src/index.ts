@@ -22,6 +22,7 @@ export { runProbe } from "./probe";
 export { createHelpers } from "./helpers";
 export { createInMemoryAdapter } from "./adapters/memory";
 export { createDockerAdapter } from "./adapters/docker";
+export { createK8sAdapter } from "./adapters/kubernetes";
 
 // Re-export types so direct `import { type Blueprint } from "speculum"` works
 // without going through index.d.ts. The canonical type contract is in

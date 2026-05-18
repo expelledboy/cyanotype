@@ -26,3 +26,8 @@ test:
 # Run just the harness self-tests (in-mem adapter; no Docker images needed).
 test-core:
     bun test tests/core/
+
+# Run the Kubernetes adapter suite. Requires kubectl + a reachable cluster.
+# Defaults to the OrbStack context; override with SPECULUM_K8S_CONTEXT.
+test-k8s:
+    SPECULUM_K8S_CONTEXT={{ env_var_or_default("SPECULUM_K8S_CONTEXT", "orbstack") }} bun test tests/core/kubernetes.test.ts
