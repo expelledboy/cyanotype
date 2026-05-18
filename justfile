@@ -27,6 +27,14 @@ test:
 test-core:
     bun test tests/core/
 
+# Petstore-example against the real Docker substrate.
+test-petstore-docker:
+    SPECULUM_ADAPTER=docker bun test tests/petstore-example
+
+# Petstore-example against the in-process fakes (no Docker needed).
+test-petstore-memory:
+    SPECULUM_ADAPTER=memory bun test tests/petstore-example
+
 # Run the Kubernetes adapter suite. Requires kubectl + a reachable cluster.
 # Defaults to the OrbStack context; override with SPECULUM_K8S_CONTEXT.
 test-k8s:
