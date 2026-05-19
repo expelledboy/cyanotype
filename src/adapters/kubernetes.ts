@@ -8,6 +8,7 @@
  * without re-plumbing.
  */
 
+import net from "node:net";
 import type { Subprocess } from "bun";
 import type { Adapter, StartSpec, Started } from "../adapter";
 import { createKubectl, type KubectlClient, type KubectlMode } from "./kubectl";
@@ -29,6 +30,22 @@ type Tracked = {
   readonly context: string | undefined;
   readonly forwards: Subprocess[];
   readonly serviceName: string | null;
+  readonly attach?: AttachState;
+};
+
+type ReconnectForward = {
+  readonly localPort: number;
+  readonly containerPort: number;
+  currentPod: string;
+  proc: Subprocess | null;
+  stopped: boolean;
+  kill(): void;
+};
+
+type AttachState = {
+  readonly serviceName: string;
+  currentPod: string;
+  readonly reconnects: ReconnectForward[];
 };
 
 let exitHandlerRegistered = false;
@@ -40,7 +57,29 @@ const killForwards = (t: Tracked) => {
   for (const p of t.forwards) {
     try { p.kill(); } catch { /* ignore */ }
   }
+  if (t.attach) {
+    for (const r of t.attach.reconnects) {
+      try { r.kill(); } catch { /* ignore */ }
+    }
+  }
 };
+
+const claimLocalPort = (): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      if (!addr || typeof addr === "string") {
+        srv.close();
+        reject({ kind: "k8s_local_port_claim_failed" });
+        return;
+      }
+      const p = addr.port;
+      srv.close(() => resolve(p));
+    });
+  });
 
 const registerExitHandler = () => {
   if (exitHandlerRegistered) return;
@@ -165,6 +204,115 @@ const sanitisePodName = (sessionId: string): string => {
   return `speculum-${sid}-${stamp}-${rand}`;
 };
 
+const resolveReadyPod = async (
+  k: KubectlClient,
+  serviceName: string,
+): Promise<string> => {
+  const r = await k.run([
+    "get", "endpointslices",
+    "-l", `kubernetes.io/service-name=${serviceName}`,
+    "-o", "json",
+  ]);
+  if (r.exit !== 0) {
+    throw { kind: "k8s_attach_no_ready_endpoints", service: serviceName, stderr: r.stderr };
+  }
+  type Slice = {
+    endpoints?: Array<{
+      conditions?: { ready?: boolean };
+      targetRef?: { name?: string; kind?: string };
+    }>;
+  };
+  let parsed: { items?: Slice[] };
+  try { parsed = JSON.parse(r.stdout) as { items?: Slice[] }; }
+  catch { throw { kind: "k8s_attach_endpointslice_parse_failed", service: serviceName }; }
+  for (const slice of parsed.items ?? []) {
+    for (const ep of slice.endpoints ?? []) {
+      if (ep.conditions?.ready === true && ep.targetRef?.kind === "Pod" && ep.targetRef.name) {
+        return ep.targetRef.name;
+      }
+    }
+  }
+  throw { kind: "k8s_attach_no_ready_endpoints", service: serviceName };
+};
+
+const startReconnectForward = async (
+  k: KubectlClient,
+  serviceName: string,
+  initialPod: string,
+  containerPort: number,
+  onPodChange: (pod: string) => void,
+): Promise<ReconnectForward> => {
+  const localPort = await claimLocalPort();
+  const state: ReconnectForward = {
+    localPort,
+    containerPort,
+    currentPod: initialPod,
+    proc: null,
+    stopped: false,
+    kill: () => {
+      state.stopped = true;
+      if (state.proc) { try { state.proc.kill(); } catch { /* ignore */ } }
+    },
+  };
+
+  const spawnOnce = (pod: string): Promise<void> => {
+    const handle = k.stream(["port-forward", `pod/${pod}`, `${localPort}:${containerPort}`]);
+    state.proc = handle.proc;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        try { handle.kill(); } catch { /* ignore */ }
+        reject({ kind: "k8s_port_forward_timeout", podName: pod, containerPort });
+      }, PORT_READY_TIMEOUT_MS);
+      (async () => {
+        try {
+          for await (const line of handle.lines) {
+            if (/Forwarding from 127\.0\.0\.1:\d+ ->/.test(line)) {
+              clearTimeout(timer);
+              resolve();
+              return;
+            }
+          }
+          clearTimeout(timer);
+          reject({ kind: "k8s_port_forward_exited", podName: pod, containerPort });
+        } catch (e) { clearTimeout(timer); reject(e); }
+      })();
+    });
+  };
+
+  await spawnOnce(initialPod);
+
+  (async () => {
+    while (!state.stopped) {
+      const proc = state.proc;
+      if (!proc) break;
+      try { await proc.exited; } catch { /* ignore */ }
+      if (state.stopped) break;
+      let attempts = 0;
+      let newPod: string | null = null;
+      while (attempts < 3 && !state.stopped) {
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+          newPod = await resolveReadyPod(k, serviceName);
+          break;
+        } catch { attempts++; }
+      }
+      if (state.stopped) break;
+      if (!newPod) {
+        state.stopped = true;
+        // biome-ignore lint/suspicious/noConsole: surface to test runner; throwing here is unobservable.
+        console.error(JSON.stringify({ kind: "k8s_attach_reconnect_failed", service: serviceName, attempts }));
+        break;
+      }
+      state.currentPod = newPod;
+      onPodChange(newPod);
+      try { await spawnOnce(newPod); }
+      catch { /* loop back, will try again on next exit */ }
+    }
+  })();
+
+  return state;
+};
+
 export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   const namespace = opts.namespace ?? DEFAULT_NS;
   const context = opts.context;
@@ -268,12 +416,46 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     }
   };
 
+  const startAttach = async (spec: StartSpec): Promise<Started> => {
+    const serviceName = buildServiceName(spec);
+    if (!serviceName) {
+      throw { kind: "k8s_attach_service_not_found", service: null, namespace, reason: "missing speculum.component label" };
+    }
+    const svc = await k.run(["get", "svc", serviceName, "-o", "json"]);
+    if (svc.exit !== 0) {
+      throw { kind: "k8s_attach_service_not_found", service: serviceName, namespace, stderr: svc.stderr };
+    }
+    const initialPod = await resolveReadyPod(k, serviceName);
+    const attach: AttachState = { serviceName, currentPod: initialPod, reconnects: [] };
+    const ports: Record<string, number> = {};
+    try {
+      for (const name of Object.keys(spec.ports)) {
+        const containerPort = Number(name);
+        const wrapper = await startReconnectForward(k, serviceName, initialPod, containerPort, (p) => {
+          attach.currentPod = p;
+        });
+        attach.reconnects.push(wrapper);
+        ports[name] = wrapper.localPort;
+      }
+    } catch (e) {
+      for (const r of attach.reconnects) { try { r.kill(); } catch { /* ignore */ } }
+      throw e;
+    }
+    const containerId = `attach:${namespace}/${initialPod}`;
+    const t: Tracked = { podName: initialPod, namespace, context, forwards: [], serviceName, attach };
+    tracked.set(containerId, t);
+    globalTracked.set(containerId, t);
+    known.add(containerId);
+    globalKnown.add(containerId);
+    return { containerId, ports };
+  };
+
   const start = async (spec: StartSpec): Promise<Started> => {
     if (spec.labels["speculum"] !== "1") {
       throw { kind: "missing_speculum_label", labels: spec.labels };
     }
-    if (mode !== "deploy") {
-      throw { kind: "k8s_mode_unsupported", mode };
+    if (mode === "attach") {
+      return await startAttach(spec);
     }
     const podName = sanitisePodName(sessionId);
     const hasMounts = Object.keys(spec.mounts).length > 0;
@@ -357,6 +539,15 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   };
 
   const exists = async (containerId: string): Promise<boolean> => {
+    if (containerId.startsWith("attach:")) {
+      const t = tracked.get(containerId);
+      const svcName = t?.serviceName;
+      if (!svcName) return false;
+      const r = await k.run(["get", "svc", svcName, "-o", "name"]);
+      if (r.exit === 0) return true;
+      if (/NotFound|not found/i.test(r.stderr)) return false;
+      return known.has(containerId);
+    }
     const r = await k.run(["get", "pod", containerId, "-o", "name"]);
     if (r.exit === 0) return true;
     if (/NotFound|not found/i.test(r.stderr)) return false;
@@ -365,7 +556,12 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
 
   async function* logs(containerId: string, signal?: AbortSignal): AsyncIterable<string> {
     if (signal?.aborted) return;
-    const handle = k.stream(["logs", "-f", "--tail=0", containerId]);
+    let target = containerId;
+    if (containerId.startsWith("attach:")) {
+      const t = tracked.get(containerId);
+      target = t?.attach?.currentPod ?? containerId.slice(containerId.indexOf("/") + 1);
+    }
+    const handle = k.stream(["logs", "-f", "--tail=0", target]);
     const onAbort = () => handle.kill();
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
     try {

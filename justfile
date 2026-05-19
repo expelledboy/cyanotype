@@ -53,3 +53,10 @@ test-petstore-k8s: load-k8s-images
 # Defaults to the OrbStack context; override with SPECULUM_K8S_CONTEXT.
 test-k8s:
     SPECULUM_K8S_CONTEXT={{ env_var_or_default("SPECULUM_K8S_CONTEXT", "orbstack") }} bun test tests/core/kubernetes.test.ts
+
+# Run the Kubernetes attach-mode suite. Denylist tests run without a cluster;
+# integration tests require kubectl + a reachable cluster and apply
+# tests/support/k8s/attach-fixture.yaml into namespace `speculum-attach-tests`
+# (cleaned up in afterAll).
+test-k8s-attach:
+    SPECULUM_K8S_CONTEXT={{ env_var_or_default("SPECULUM_K8S_CONTEXT", "orbstack") }} bun test tests/core/kubernetes-attach.test.ts
