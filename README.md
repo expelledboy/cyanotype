@@ -1,6 +1,6 @@
 # Speculum
 
-> Bun-native test harness built around the **Component Blueprint** — a typed contract that multiple Bindings can satisfy. Same test file runs unchanged against a real Docker container, an in-process simulator, or (future) a Kubernetes pod.
+> Bun-native test harness built around the **Component Blueprint** — a typed contract that multiple Bindings can satisfy. Same test file runs unchanged against a real Docker container, an in-process simulator, or a Kubernetes pod.
 
 ## What it is
 
@@ -103,6 +103,8 @@ test("primary down → 503 → recovery", async () => {
 ```
 
 > The `redis(...)` / `nginx(...)` Binding factories, `petstoreFake`, `petstoreEvents`, `petstoreRoutes`, and the `DOCKER_HOST_DNS` constant in the snippet above are defined in [`tests/petstore-example/env.ts`](tests/petstore-example/env.ts) — that file is the canonical runnable form of this example, with all imports.
+>
+> The example above wires the **Docker** adapter. The same `env.ts` switches to the in-memory simulator adapter or to Kubernetes (deploy mode, or attach against a pre-deployed cluster) by changing one constant — see [Adapters](#adapters) for the matrix, and [`docs/attach-mode.md`](docs/attach-mode.md) for the pre-deployed-cluster walkthrough.
 
 ## The two halves of the promise
 
@@ -132,6 +134,7 @@ Engineering teams that:
 | Cross-worker container reuse | Brittle global-setup hooks | Atomic file-claim metadata + dead-container fallback |
 | Config files referencing resolved ports | docker-compose templating limits | TypeScript strings, mount-as-content (tmpfile bind mounts) |
 | Quantitative SLA assertions on real traffic | Load-test in a separate suite | `expect(stats.p95).toBeLessThanOrEqual(500)` in the integration suite |
+| Smoke-test against a pre-deployed staging/UAT cluster | Maintain a parallel test-only env, or run e2e tests by hand | `SPECULUM_ADAPTER=k8s-attach` + a developer-owned derive script over your Helm/Terraform output ([walkthrough](docs/attach-mode.md)) |
 
 ## Adapters
 
@@ -141,22 +144,21 @@ The Adapter is Speculum's substrate seam (D-003). The same test suite runs again
 |---|---|---|
 | `createDockerAdapter` | Real Docker containers via `dockerode` | High-trust integration; default |
 | `createInMemoryAdapter` | In-process simulators (factory registry) | Fast inner loop; CI; no daemon needed |
-| `createK8sAdapter({ mode: "deploy" })` | Pods + ConfigMaps + Services in a real cluster (via `kubectl`) | Pre-prod / staging integration; cluster-native parity |
-| `createK8sAdapter({ mode: "attach" })` | Pre-deployed workloads (Helm / Terraform) discovered via Service | Smoke tests against dev/uat/prod; **refuses every write verb** by construction |
-| `createK8sAdapter({ mode: "attach" })` + per-Binding overrides | Same, but with developer-derived `adapter.k8s.attach.{service,namespace,port,allowChaos,deployment}` per Binding (see [D-022](docs/decisions.md#d-022-adapter-specific-binding-config-via-typescript-declaration-merging), [D-023](docs/decisions.md#d-023-attach-mode-chaos-via-kubectl-scale-against-a-named-deployment-opt-in)) | Non-convention service names; opt-in real cluster chaos via `kubectl scale` against a named Deployment |
+| `createK8sAdapter({ mode: "deploy" })` | Pods + ConfigMaps + per-Pod Services via `kubectl` | Pre-prod / staging integration; cluster-native parity |
+| `createK8sAdapter({ mode: "attach" })` | Pre-deployed workloads (Helm / Terraform / kustomize) discovered via Service. Per-Binding `adapter.k8s.attach` overrides for non-convention names; opt-in real chaos via `kubectl scale` ([D-022](docs/decisions.md#d-022-adapter-specific-binding-config-via-typescript-declaration-merging), [D-023](docs/decisions.md#d-023-attach-mode-chaos-via-kubectl-scale-against-a-named-deployment-opt-in), walkthrough: [`docs/attach-mode.md`](docs/attach-mode.md)) | Smoke / contract tests against an existing cluster; **refuses writes by default** |
 
-The `tests/petstore-example/` SLA suite (15 tests including chaos failover and p95 latency assertions) passes against **all three** substrates. Switch via `SPECULUM_ADAPTER=docker|memory|k8s`.
+The `tests/petstore-example/` SLA suite (15 tests including chaos failover and p95 latency assertions) passes against **all three** substrates, and across both Kubernetes modes (deploy + attach). Switch via `SPECULUM_ADAPTER=docker|memory|k8s|k8s-attach`.
 
 | Adapter | Suite time |
 |---|---|
 | in-memory | 0.75s |
 | docker | 10.3s |
-| k8s (OrbStack) | 16.4s |
-| k8s attach (OrbStack, 15/15 — see [D-023](docs/decisions.md#d-023-attach-mode-chaos-via-kubectl-scale-against-a-named-deployment-opt-in)) | 15.2s |
+| k8s deploy (OrbStack) | 16.4s |
+| k8s attach (OrbStack) | 15.2s |
 
 ## Status
 
-**v0.** Tri-adapter Blueprint thesis proven: 15/15 tests on each of Docker, in-memory, and Kubernetes. Plus 76/76 core harness tests, 6/6 K8s deploy tests, 12/12 K8s attach tests (denylist + integration including rolling-restart survivability). Bun-native development; library code is portable to Node consumers. ~3k LoC src, ~2.5k LoC tests. Runtime deps: `zod`, `dockerode`. The K8s adapter uses `kubectl` as a subprocess (D-019) — no Kubernetes client library is taken as a dependency.
+**v0.** Same 15-test SLA suite green across four adapter modes (in-memory, Docker, K8s deploy, K8s attach against a pre-deployed cluster). 15/15 in each. Plus 89/89 core harness self-tests; 13/13 K8s attach tests (denylist + integration including rolling-restart survivability and override-rescues-non-convention-name). Bun-native development; library code is portable to Node consumers. ~3k LoC src, ~2.5k LoC tests. Runtime deps: `zod`, `dockerode`. The K8s adapter uses `kubectl` as a subprocess (D-019) — no Kubernetes client library is taken as a dependency.
 
 ## Prerequisites
 
@@ -171,10 +173,15 @@ The `tests/petstore-example/` SLA suite (15 tests including chaos failover and p
 # One-time: build the petstore + redis-configurable test images
 just build-test-images
 
-# Tri-adapter SLA suite
+# Quad-adapter SLA suite
 SPECULUM_ADAPTER=docker bun test tests/petstore-example   # real Docker
 SPECULUM_ADAPTER=memory bun test tests/petstore-example   # in-process simulators
-SPECULUM_ADAPTER=k8s    bun test tests/petstore-example   # real Kubernetes
+SPECULUM_ADAPTER=k8s    bun test tests/petstore-example   # real Kubernetes (deploy mode)
+
+# Attach mode against a pre-deployed cluster — deploys fixtures, derives
+# override config from the YAML, runs the suite, tears down on exit.
+# See docs/attach-mode.md for the developer-derive-script flow.
+just test-petstore-k8s-attach
 
 # Harness self-tests (no Docker images needed, in-memory adapter only)
 just test-core

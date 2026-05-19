@@ -52,7 +52,7 @@ roleRef:
 
 ## Attach mode
 
-Discovers pre-existing workloads via Services and EndpointSlices (D-018). Opens port-forward and tails logs. **Refuses every write verb** at the `kubectl` chokepoint (`src/adapters/kubectl.ts`) — safe to grant against prod.
+Discovers pre-existing workloads via Services and EndpointSlices (D-018). Opens port-forward and tails logs. **Refuses every write verb** at the `kubectl` chokepoint (`src/adapters/kubectl.ts`) — safe to grant against prod, *unless* one or more Bindings opt in to the chaos extension below.
 
 | Resource | Verbs |
 |---|---|
@@ -84,6 +84,32 @@ rules:
 ```
 
 No write verbs. The adapter's denylist enforces this at the call site, but the RBAC boundary is the durable defence — if an operator grants only this Role, no path through the adapter can mutate the cluster.
+
+## Attach mode + chaos opt-in (D-023)
+
+A Binding can opt in to real cluster chaos by setting both `adapter.k8s.attach.allowChaos: true` and `adapter.k8s.attach.deployment: "<name>"`. When that is in effect, `runtime.chaos.stop / start / restart` for that Binding calls `kubectl scale deployment/<name> --replicas=0` / `--replicas=1` (and waits on the Service's `EndpointSlice`). The denylist lifts *only* the `scale` verb on the per-Binding kubectl client; every other write verb (`apply`, `create`, `delete`, `patch` on arbitrary resources, `replace`, `edit`, `rollout`) remains blocked at the chokepoint.
+
+To grant this, add the following rules **in addition to** the base attach Role for any namespace where chaos opt-in is allowed:
+
+| Resource | Verbs |
+|---|---|
+| `deployments` (apps) | `get` |
+| `deployments/scale` (apps) | `get`, `patch` |
+
+```yaml
+# Append these rules to the speculum-attach Role above for any namespace
+# where Bindings may opt in to chaos.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "patch"]
+```
+
+Whether to grant this is the operator's call. Typical pattern: deny in prod, allow in staging / UAT / dev clusters where chaos testing is intended. The adapter throws `chaos_unsupported_in_attach_mode` at the call site for any Binding that does not opt in; the RBAC boundary backs that up — without `deployments/scale` permission, even a misconfigured Binding cannot mutate the cluster.
+
+See [D-023](decisions.md#d-023-attach-mode-chaos-via-kubectl-scale-against-a-named-deployment-opt-in) for the design rationale (why `scale` rather than `delete pod`) and [`attach-mode.md`](attach-mode.md) for the developer-facing flow.
 
 ## Operator notes
 

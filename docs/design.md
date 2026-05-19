@@ -42,7 +42,7 @@ Six user-facing entities. Each maps to a TypeScript type. Inference helpers (`de
 | Entity | What it is | Where |
 |---|---|---|
 | **`Blueprint<C, E, I, A>`** | The typed contract. Declares port *names*, a factory `(config, env, resolvedPorts) => I`, an optional custom api factory, an `events` catalog, and readiness/health probes. Substrate-agnostic — no `image`, no `mounts`. | `src/blueprint.ts` |
-| **`Binding<B>`** | A Blueprint paired with substrate-bound fields: `image`, `version`, `config: C`, `env: E`, host port assignments, optional `mounts`, optional `logParser`, optional `labels`. | `src/binding.ts` |
+| **`Binding<B>`** | A Blueprint paired with substrate-bound fields: `image`, `version`, `config: C`, `env: E`, host port assignments, optional `mounts`, optional `logParser`, optional `labels`, optional `adapter?: AdapterConfig` (adapter-specific overrides — see [Adapter-specific Binding config](#adapter-specific-binding-config-d-022) below). | `src/binding.ts` |
 | **`Environment`** | A record of named Bindings or multi-instance groups (`Record<instance, Binding>`). The composition. `createEnvironment(record)` validates reserved names. | `src/environment.ts` |
 | **`Runtime<E>`** | What `startEnvironment` / `attachEnvironment` returns. Type-derived from the Environment. Components at the top level + `chaos` / `snapshot` / `metadata` / `stop` system ops. Exposes the Blueprint surface only — Binding substrate fields are invisible. | `src/runtime.ts` |
 | **`Adapter`** | The IO boundary, and the single point where real-vs-fake is decided. Docker / K8s / in-memory implementations. Seven methods. | `src/adapter.ts` |
@@ -107,8 +107,10 @@ Six user-facing entities. Each maps to a TypeScript type. Inference helpers (`de
        ┌──────────────────┼──────────────────┐
        ▼                  ▼                  ▼
    Docker             Kubernetes         In-memory
-   (dockerode)        (future)           (factory registry,
-                                          real ports)
+   (dockerode)        (kubectl,          (factory registry,
+                       D-019;             real ports)
+                       deploy +
+                       attach modes)
 ```
 
 ## The supporting types
@@ -125,6 +127,48 @@ Smaller pieces that live in their own files:
 | `metadata.ts` | `EnvironmentMetadata`, `SlotSnapshot`, `ComponentSnapshot` | Cross-process JSON snapshot; one concept, one file |
 | `index.d.ts` | Re-exports of all public TYPES | The type contract |
 | `index.ts` | Re-exports of all public VALUES (factories, helpers) | The runtime entry |
+
+## Adapter-specific Binding config (D-022)
+
+The Binding shape stays substrate-agnostic by construction. But some substrates have legitimate per-Binding configuration that doesn't belong in the core: a K8s attach Binding may need to override the Service name when the real cluster's name doesn't match the Speculum component label; a future Terraform-discovered Binding may need an endpoint hint; a Docker Binding may want to specify a network. Stuffing those onto `Binding` itself bleeds substrate concerns into the core, and a generic `Binding<Cfg>` parameter would virally propagate through every helper signature.
+
+Resolved via TypeScript declaration merging:
+
+```ts
+// src/adapter.ts (core — substrate-agnostic)
+export interface AdapterConfig {}                  // open, empty
+export type StartSpec = { /* ... */ ; adapterConfig?: AdapterConfig };
+
+// src/binding.ts
+export type Binding<B> = { /* ... */ ; readonly adapter?: AdapterConfig };
+
+// src/adapters/kubernetes.ts (each adapter augments from its own module)
+declare module "../adapter" {
+  interface AdapterConfig {
+    k8s?: { attach?: { namespace?: string; service?: string; port?: number;
+                       allowChaos?: boolean; deployment?: string } };
+  }
+}
+```
+
+Use site:
+
+```ts
+bind(petstoreBlueprint, {
+  image: "...", version: "...", config: {...}, env: {...}, ports: {...},
+  adapter: { k8s: { attach: { service: "pet-svc-1", deployment: "pet-svc-1", allowChaos: true } } },
+});
+```
+
+Properties:
+- The core stays generic-free — `Binding<B>` already carries one variance-sensitive type parameter and adding a second was a non-starter under `strictFunctionTypes`.
+- Adapter additions are zero-cost on the core: a new adapter contributes a `declare module` block in its own file. No central registry, no enum, no switch.
+- Users importing a Binding from an adapter-aware module get the merged interface automatically.
+- The orchestrator's `buildSpec` forwards `binding.adapter` into `StartSpec.adapterConfig`; each adapter reads its own top-level key (`spec.adapterConfig?.k8s?.attach`) and ignores the rest.
+
+Adapters that consume overrides honour them per-field, falling back to convention for any unset field. The K8s attach mode demonstrates this: omit `service` to fall back to label-derived discovery, omit `namespace` to use the adapter default, set `allowChaos: true` to opt in to real cluster chaos (which then requires `deployment` — see D-023). The walkthrough is in [`attach-mode.md`](attach-mode.md).
+
+See [D-022](decisions.md#d-022-adapter-specific-binding-config-via-typescript-declaration-merging).
 
 ## The lifecycle
 
@@ -143,7 +187,7 @@ Smaller pieces that live in their own files:
    ─ reserved component names (start, stop, snapshot, metadata, chaos) are rejected at construction
 
 4. User wires the harness
-   ─ pick the Adapter — Docker or in-memory — this is the real-vs-fake seam
+   ─ pick the Adapter — Docker, Kubernetes (deploy or attach), or in-memory — this is the real-vs-fake seam
    ─ `const shared = createSharedEnvs({ "petstore-sla": env }, { adapter, stateDir, mode, getTargetEnv })`
 
 5. Test calls shared.ensure(envKey)
@@ -256,10 +300,12 @@ The `ChaosArgs<E, K>` conditional discriminates single-instance from multi-insta
 - Cross-process registry via JSON metadata
 - Chaos primitives at the container level
 - Mount-as-content config injection
+- Per-Binding adapter-specific configuration via TypeScript declaration merging (D-022)
+- Attach to pre-deployed substrates with verified non-destructive guarantees, plus an opt-in for real chaos (D-018, D-022, D-023)
 
 **What's out of scope (would require a new ADR to add):**
 
-- Network-level chaos (latency injection, packet loss) — add via Toxiproxy as a user-provided Binding in their environment
+- Network-level chaos (latency injection, packet loss) — add via Toxiproxy as a user-provided Binding in their environment. Pod-level chaos against pre-deployed K8s workloads IS supported via the attach-mode opt-in (D-023).
 - Distributed tracing assertions — different from log-event assertions; would integrate with OTel via a separate concern
 - Performance/load testing — out of charter
 - Persistent event log / audit trail — explicitly excluded

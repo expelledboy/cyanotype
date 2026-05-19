@@ -41,7 +41,7 @@ Without this, log-event assertions are regex-greps that drift the moment anyone 
 
 #### B1. Substrate portability via the Adapter SPI
 
-A single test file runs identically against Docker locally, an in-memory adapter for fast inner-loop, and (future) a Kubernetes adapter for CI. The Adapter SPI is seven methods (`connect` / `disconnect` / `teardown` / `start` / `stop` / `logs` / `exists`), and it is the *only* place real-vs-fake or Docker-vs-K8s is decided. Bindings declare `image: string`; adapters interpret what that means.
+A single test file runs identically against Docker locally, an in-memory adapter for fast inner-loop, and a Kubernetes adapter for CI (deploy or attach mode). The Adapter SPI is seven methods (`connect` / `disconnect` / `teardown` / `start` / `stop` / `logs` / `exists`), and it is the *only* place real-vs-fake or Docker-vs-K8s is decided. Bindings declare `image: string`; adapters interpret what that means.
 
 Without this, every team rewrites integration tests for staging or pays for two suites that drift.
 
