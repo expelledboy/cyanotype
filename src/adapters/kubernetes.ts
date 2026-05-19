@@ -13,10 +13,10 @@
 import net from "node:net";
 import type { Subprocess } from "bun";
 import { z } from "zod";
-import type { Adapter, StartSpec, Started } from "../adapter";
-import { createKubectl, type KubectlClient, type KubectlMode } from "./kubectl";
+import type { Adapter, StartSpec, Started } from "../adapter.js";
+import { createKubectl, type KubectlClient, type KubectlMode } from "./kubectl.js";
 
-declare module "../adapter" {
+declare module "../adapter.js" {
   interface AdapterConfig {
     k8s?: {
       attach?: {

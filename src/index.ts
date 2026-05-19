@@ -11,18 +11,19 @@
  */
 
 // Runtime values
-export { http, opaque, createHttpClient } from "./protocol";
-export { iface } from "./interface";
-export { defineBlueprint } from "./blueprint";
-export { bind } from "./binding";
-export { createEnvironment, RESERVED_COMPONENT_NAMES } from "./environment";
-export { createSharedEnvs } from "./shared";
-export { createEventBus } from "./events";
-export { runProbe } from "./probe";
-export { createHelpers } from "./helpers";
-export { createInMemoryAdapter } from "./adapters/memory";
-export { createDockerAdapter } from "./adapters/docker";
-export { createK8sAdapter, K8sAdapterConfigSchema } from "./adapters/kubernetes";
+export { http, opaque, createHttpClient } from "./protocol.js";
+export { iface } from "./interface.js";
+export { defineBlueprint } from "./blueprint.js";
+export { bind } from "./binding.js";
+export { createEnvironment, RESERVED_COMPONENT_NAMES } from "./environment.js";
+export { createSharedEnvs } from "./shared.js";
+export { createEventBus } from "./events.js";
+export { runProbe } from "./probe.js";
+export { createHelpers } from "./helpers.js";
+export { startEnvironment, attachEnvironment } from "./orchestrator.js";
+export { createInMemoryAdapter } from "./adapters/memory.js";
+export { createDockerAdapter } from "./adapters/docker.js";
+export { createK8sAdapter, K8sAdapterConfigSchema } from "./adapters/kubernetes.js";
 
 // Re-export types so direct `import { type Blueprint } from "speculum"` works
 // without going through index.d.ts. The canonical type contract is in
@@ -30,21 +31,24 @@ export { createK8sAdapter, K8sAdapterConfigSchema } from "./adapters/kubernetes"
 export type {
   Protocol, HttpProtocol, OpaqueProtocol,
   HttpMethod, HttpRoute, HttpRouteMap, HttpClient, ApiOf,
-} from "./protocol";
-export type { Interface, InterfaceRecord, ApiFromInterface } from "./interface";
-export type { HelperContext, HttpHelpers, HttpRequestInit, HttpResponse } from "./helpers";
-export type { Probe, HttpProbe, CustomProbe } from "./probe";
+} from "./protocol.js";
+export type { Interface, InterfaceRecord, ApiFromInterface } from "./interface.js";
+export type { HelperContext, HttpHelpers, HttpRequestInit, HttpResponse } from "./helpers.js";
+export type { Probe, HttpProbe, CustomProbe } from "./probe.js";
 export type {
   EventSchema, EventCatalog, AttributesOf,
   Event, EventBus, EventFilter, LogParser, ParsedEvent,
-} from "./events";
-export type { Blueprint } from "./blueprint";
+} from "./events.js";
+export type { Blueprint } from "./blueprint.js";
 export type {
   Binding, BlueprintOf, ConfigOf, EnvOf, IfaceOf, ApiOfBlueprint, EventsOf,
-} from "./binding";
-export type { Environment, Slot, IsMultiInstance } from "./environment";
-export type { Adapter, AdapterConfig, StartSpec, Started } from "./adapter";
-export type { EnvironmentMetadata, SlotSnapshot, ComponentSnapshot } from "./metadata";
-export type { Runtime, Running, ComponentRuntime, ChaosControls, RuntimeSnapshot } from "./runtime";
-export type { SharedMode, SharedOptions, SharedHarness } from "./shared";
-export type { FakeFactory, FakeHandle, InMemoryAdapterOptions } from "./adapters/memory";
+} from "./binding.js";
+export type { Environment, Slot, IsMultiInstance } from "./environment.js";
+export type { Adapter, AdapterConfig, StartSpec, Started } from "./adapter.js";
+export type { EnvironmentMetadata, SlotSnapshot, ComponentSnapshot } from "./metadata.js";
+export type { Runtime, Running, ComponentRuntime, ChaosControls, RuntimeSnapshot } from "./runtime.js";
+export type { SharedMode, SharedOptions, SharedHarness } from "./shared.js";
+export type { OrchestratorOptions, AttachSnapshot } from "./orchestrator.js";
+export type { FakeFactory, FakeHandle, InMemoryAdapterOptions } from "./adapters/memory.js";
+export type { K8sAdapterOptions } from "./adapters/kubernetes.js";
+export type { KubectlMode } from "./adapters/kubectl.js";

@@ -13,7 +13,7 @@
  * path would silently shadow.
  */
 
-import type { Binding } from "./binding";
+import type { Binding } from "./binding.js";
 
 /**
  * One component slot: a single Binding or a record of named instances.

@@ -6,3 +6,4 @@ result-*
 *.log
 .DS_Store
 .claude/
+dist/

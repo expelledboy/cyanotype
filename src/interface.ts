@@ -15,7 +15,7 @@
  * the keyed form is uniform across multi- and single-interface components.
  */
 
-import type { ApiOf, Protocol } from "./protocol";
+import type { ApiOf, Protocol } from "./protocol.js";
 
 /**
  * `host` and `port` are typed `string | undefined` / `number | undefined`

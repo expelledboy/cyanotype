@@ -22,10 +22,10 @@
  * is *required* for multi-instance slots and *prohibited* for single-instance.
  */
 
-import type { Binding, IfaceOf, ApiOfBlueprint, EventsOf } from "./binding";
-import type { Environment } from "./environment";
-import type { EventBus, EventCatalog } from "./events";
-import type { EnvironmentMetadata } from "./metadata";
+import type { Binding, IfaceOf, ApiOfBlueprint, EventsOf } from "./binding.js";
+import type { Environment } from "./environment.js";
+import type { EventBus, EventCatalog } from "./events.js";
+import type { EnvironmentMetadata } from "./metadata.js";
 
 /**
  * A frozen view of the orchestrator's live state at call time. `snapshot()`

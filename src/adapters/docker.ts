@@ -15,7 +15,7 @@ import https from "node:https";
 import { PassThrough } from "node:stream";
 import readline from "node:readline";
 import { createRequire } from "node:module";
-import type { Adapter, StartSpec, Started } from "../adapter";
+import type { Adapter, StartSpec, Started } from "../adapter.js";
 
 // WHY: @types/dockerode is not a dependency of this project. Load via
 // createRequire so TS doesn't type-resolve it; DockerClient below captures

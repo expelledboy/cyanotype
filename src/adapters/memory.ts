@@ -15,7 +15,7 @@
  * Test code and Bindings are unchanged.
  */
 
-import type { Adapter, StartSpec, Started } from "../adapter";
+import type { Adapter, StartSpec, Started } from "../adapter.js";
 
 // WHY: the adapter owns the line buffer + pub/sub for logs(). The factory only
 // supplies ports + close. `emit` is provided BY the adapter to the factory so

@@ -23,11 +23,11 @@
  * decides what `image: string` means against the substrate it owns.
  */
 
-import type { InterfaceRecord, ApiFromInterface } from "./interface";
-import type { EventCatalog, LogParser } from "./events";
-import type { HelperContext } from "./helpers";
-import type { Blueprint } from "./blueprint";
-import type { AdapterConfig } from "./adapter";
+import type { InterfaceRecord, ApiFromInterface } from "./interface.js";
+import type { EventCatalog, LogParser } from "./events.js";
+import type { HelperContext } from "./helpers.js";
+import type { Blueprint } from "./blueprint.js";
+import type { AdapterConfig } from "./adapter.js";
 
 /**
  * `Blueprint<any, any, any, any>` as a slot constraint preserves the literal

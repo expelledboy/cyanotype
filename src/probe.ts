@@ -17,7 +17,7 @@
  * a status-code-shaped readiness signal.
  */
 
-import type { InterfaceRecord } from "./interface";
+import type { InterfaceRecord } from "./interface.js";
 
 export type Probe<I extends InterfaceRecord = InterfaceRecord> =
   | HttpProbe<I>

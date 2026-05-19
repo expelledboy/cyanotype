@@ -63,7 +63,7 @@ export type Adapter = {
 
 /**
  * Open interface for adapter-specific Binding configuration. Adapters
- * augment this via `declare module "../adapter" { interface AdapterConfig { ... } }`
+ * augment this via `declare module "../adapter.js" { interface AdapterConfig { ... } }`
  * to slot in their own typed sub-key (e.g. `k8s`). Type-safe and
  * adapter-extensible without forcing a generic onto `Binding`.
  */

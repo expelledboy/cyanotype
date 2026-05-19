@@ -10,11 +10,11 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Adapter } from "./adapter";
-import type { Environment } from "./environment";
-import type { Runtime } from "./runtime";
-import type { EnvironmentMetadata } from "./metadata";
-import { startEnvironment, attachEnvironment, type AttachSnapshot } from "./orchestrator";
+import type { Adapter } from "./adapter.js";
+import type { Environment } from "./environment.js";
+import type { Runtime } from "./runtime.js";
+import type { EnvironmentMetadata } from "./metadata.js";
+import { startEnvironment, attachEnvironment, type AttachSnapshot } from "./orchestrator.js";
 
 export type SharedMode = "start" | "attach" | "startOrAttach";
 

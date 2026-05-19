@@ -21,10 +21,10 @@
  *     from schema-bearing interfaces); overridden when `api?:` is supplied.
  */
 
-import type { InterfaceRecord, ApiFromInterface } from "./interface";
-import type { Probe } from "./probe";
-import type { EventCatalog } from "./events";
-import type { HelperContext } from "./helpers";
+import type { InterfaceRecord, ApiFromInterface } from "./interface.js";
+import type { Probe } from "./probe.js";
+import type { EventCatalog } from "./events.js";
+import type { HelperContext } from "./helpers.js";
 
 /**
  * Method syntax for `interface` / `api` / `readiness` is deliberate — it

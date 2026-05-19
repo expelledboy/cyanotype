@@ -21,17 +21,17 @@
  *   - attachEnvironment: trusts containerIds + ports from a metadata snapshot
  */
 
-import type { Adapter, StartSpec } from "./adapter";
-import type { Environment } from "./environment";
-import type { Runtime, RuntimeSnapshot, Running } from "./runtime";
-import type { Binding } from "./binding";
-import type { InterfaceRecord } from "./interface";
-import type { EventBusInternals, EventCatalog } from "./events";
-import { createEventBus } from "./events";
-import { createHelpers } from "./helpers";
-import { createHttpClient } from "./protocol";
-import { runProbe } from "./probe";
-import type { EnvironmentMetadata, SlotSnapshot, ComponentSnapshot } from "./metadata";
+import type { Adapter, StartSpec } from "./adapter.js";
+import type { Environment } from "./environment.js";
+import type { Runtime, RuntimeSnapshot, Running } from "./runtime.js";
+import type { Binding } from "./binding.js";
+import type { InterfaceRecord } from "./interface.js";
+import type { EventBusInternals, EventCatalog } from "./events.js";
+import { createEventBus } from "./events.js";
+import { createHelpers } from "./helpers.js";
+import { createHttpClient } from "./protocol.js";
+import { runProbe } from "./probe.js";
+import type { EnvironmentMetadata, SlotSnapshot, ComponentSnapshot } from "./metadata.js";
 
 export type OrchestratorOptions = {
   readonly adapter: Adapter;
