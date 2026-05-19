@@ -24,6 +24,7 @@
 - [D-018 — Kubernetes adapter — attach mode discovers via Service, refuses cluster mutation](#d-018-kubernetes-adapter--attach-mode-discovers-via-service-refuses-cluster-mutation)
 - [D-019 — `kubectl` shellout, not `@kubernetes/client-node`, for the Kubernetes adapter](#d-019-kubectl-shellout-not-kubernetesclient-node-for-the-kubernetes-adapter)
 - [D-020 — Kubernetes adapter — per-Pod `Service` for in-cluster DNS](#d-020-kubernetes-adapter--per-pod-service-for-in-cluster-dns)
+- [D-021 — Attach-mode port stability via local-port-claim + Watch-driven respawn](#d-021-attach-mode-port-stability-via-local-port-claim--watch-driven-respawn)
 
 ---
 
@@ -342,3 +343,27 @@ The K8s-native answer is a `Service` per component instance: a stable in-cluster
 - D-017's RBAC requirements grow by one resource: deploy mode now needs `create,get,list,watch,delete,deletecollection` on `services` in addition to `pods` + `configmaps`. `docs/k8s-rbac.md` should be updated.
 - The orchestrator's `chaos.stop` polls `exists()` for up to 5 seconds. K8s pod deletion under the default 30s grace period would blow that budget every time; the adapter uses `--grace-period=0 --force --wait=false` and parallelises pod / configmap / service deletes. Verified end-to-end: `tests/petstore-example` (15 tests including three chaos-stop+start cycles in an `afterEach`) is green against OrbStack under bun:test's default 5s hook timeout.
 - `kubectl wait --for=condition=Ready --timeout=<n>s` replaces the previous 500ms poll loop for Pod readiness. `kubectl wait` uses the watch API and returns within milliseconds of the kubelet flipping the Ready condition; the polled inspection is kept as a fall-through for structured error reporting on timeout.
+
+---
+
+## D-021. Attach-mode port stability via local-port-claim + Watch-driven respawn
+
+**Context:** Attach mode (D-018) opens `kubectl port-forward` against a Service-resolved Pod. `kubectl port-forward` does not reconnect: per [kubectl reference](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_port-forward/), "the forwarding session ends when the selected pod terminates." `kubectl port-forward service/X` resolves to one Pod once and does not re-target on rolling restart ([kubectl#686](https://github.com/kubernetes/kubectl/issues/686), closed not-planned). For attach mode against real environments where ops actions (Helm upgrade, autoscaler, rollout) routinely replace pods, the naive shape — one subprocess per port — fails the first time a Pod is rescheduled.
+
+A Speculum test holds a reference to `Started.ports[name]` and connects to `127.0.0.1:<port>` repeatedly. The contract that makes test code portable across substrates is that the local port stays the same for the lifetime of the runtime. If the port flaps on every backend churn, test code has to refresh its references — bleeding substrate concerns up into tests.
+
+**Decision:** The K8s adapter's attach mode wraps each `kubectl port-forward` in a reconnection layer (`startReconnectForward` in `src/adapters/kubernetes.ts`):
+
+1. **Claim a local port up-front.** `net.createServer().listen(0, "127.0.0.1")`, read `address().port`, then `close()`. The kernel assigned port is recorded as `localPort`.
+2. **Spawn `kubectl port-forward pod/<X> LOCAL:CONTAINER`.** Explicit `LOCAL` means subsequent respawns use the same host-side port.
+3. **Detect subprocess exit asynchronously.** A background loop awaits `proc.exited`. On exit (any code), if the wrapper hasn't been explicitly `kill()`ed, re-resolve a ready Pod via the Service's EndpointSlice (with 500ms backoff and a 3-strike give-up), then respawn with the same `LOCAL`.
+4. **Surface terminal failure as a typed error.** After 3 consecutive re-resolution failures, the wrapper marks itself stopped and emits `{ kind: "k8s_attach_reconnect_failed", service, attempts }`.
+
+`stop()` and `teardown()` set `state.stopped = true` and kill the current subprocess (via the `killForwards` path that already handles deploy-mode tracking).
+
+**Consequences:**
+- `kubectl rollout restart` against an attached Deployment causes a brief blip; the local port stays valid and the next request succeeds. Integration-tested in `tests/core/kubernetes-attach.test.ts > survives rolling restart via reconnection layer`.
+- The host-side port is allocated by the OS and immediately released before kubectl claims it. The window between `close()` and kubectl's bind is small but non-zero — if another process steals the port in that window, the initial port-forward fails with `bind: address already in use`. Not observed in practice; if it surfaces, the next-step mitigation is to retry the initial spawn with a fresh local port.
+- Re-resolution polls EndpointSlices, not Pods, so attach mode tolerates ReplicaSet rolls correctly: the EndpointSlice represents "the Pods that are currently ready endpoints of this Service."
+- The reconnection layer never mutates the cluster — it only spawns `kubectl port-forward` (allowed in attach mode by the D-018 chokepoint) and reads via `kubectl get svc` / `kubectl get endpointslices` (read verbs only). Safe to use against prod.
+- Same shape can be lifted into deploy mode if a use case appears (e.g., chaos tests that restart the Pod). Not done — deploy mode owns the Pod's identity, so a Pod loss is a test failure, not a substrate event.

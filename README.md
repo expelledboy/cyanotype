@@ -133,15 +133,35 @@ Engineering teams that:
 | Config files referencing resolved ports | docker-compose templating limits | TypeScript strings, mount-as-content (tmpfile bind mounts) |
 | Quantitative SLA assertions on real traffic | Load-test in a separate suite | `expect(stats.p95).toBeLessThanOrEqual(500)` in the integration suite |
 
+## Adapters
+
+The Adapter is Speculum's substrate seam (D-003). The same test suite runs against any of them.
+
+| Adapter | Substrate | Use case |
+|---|---|---|
+| `createDockerAdapter` | Real Docker containers via `dockerode` | High-trust integration; default |
+| `createInMemoryAdapter` | In-process simulators (factory registry) | Fast inner loop; CI; no daemon needed |
+| `createK8sAdapter({ mode: "deploy" })` | Pods + ConfigMaps + Services in a real cluster (via `kubectl`) | Pre-prod / staging integration; cluster-native parity |
+| `createK8sAdapter({ mode: "attach" })` | Pre-deployed workloads (Helm / Terraform) discovered via Service | Smoke tests against dev/uat/prod; **refuses every write verb** by construction |
+
+The `tests/petstore-example/` SLA suite (15 tests including chaos failover and p95 latency assertions) passes against **all three** substrates. Switch via `SPECULUM_ADAPTER=docker|memory|k8s`.
+
+| Adapter | Suite time |
+|---|---|
+| in-memory | 0.75s |
+| docker | 10.3s |
+| k8s (OrbStack) | 16.4s |
+
 ## Status
 
-**v0.** 85 pass / 0 fail including the end-to-end SLA suite against real Docker (petstore + redis primary/replica + nginx load balancer + chaos + p95 latency assertions). Bun-native development; library code is portable to Node consumers. ~2.4k LoC src, ~2k LoC tests. Runtime deps: `zod`, `dockerode`.
+**v0.** Tri-adapter Blueprint thesis proven: 15/15 tests on each of Docker, in-memory, and Kubernetes. Plus 76/76 core harness tests, 6/6 K8s deploy tests, 12/12 K8s attach tests (denylist + integration including rolling-restart survivability). Bun-native development; library code is portable to Node consumers. ~3k LoC src, ~2.5k LoC tests. Runtime deps: `zod`, `dockerode`. The K8s adapter uses `kubectl` as a subprocess (D-019) — no Kubernetes client library is taken as a dependency.
 
 ## Prerequisites
 
 - [Bun](https://bun.sh) `~1.3` or newer (for development; Node consumers can `npm install` the published package)
-- Docker daemon running (Mac/Windows Docker Desktop, or Linux Docker with `host.docker.internal` configured)
 - [just](https://github.com/casey/just) — `brew install just`
+- **Docker** daemon running, for the Docker adapter (Mac/Windows Docker Desktop, or Linux Docker with `host.docker.internal` configured).
+- **`kubectl`** on PATH and a reachable cluster context, for the K8s adapter. OrbStack's local Kubernetes works out of the box; for `kind` or remote clusters see [`docs/k8s-rbac.md`](./docs/k8s-rbac.md).
 
 ## Run the tests
 
@@ -149,11 +169,17 @@ Engineering teams that:
 # One-time: build the petstore + redis-configurable test images
 just build-test-images
 
-# Run everything (force-cleans orphan containers first)
-just test
+# Tri-adapter SLA suite
+SPECULUM_ADAPTER=docker bun test tests/petstore-example   # real Docker
+SPECULUM_ADAPTER=memory bun test tests/petstore-example   # in-process simulators
+SPECULUM_ADAPTER=k8s    bun test tests/petstore-example   # real Kubernetes
 
-# Just the harness self-tests (no Docker images needed)
+# Harness self-tests (no Docker images needed, in-memory adapter only)
 just test-core
+
+# K8s adapter self-tests (deploy + attach)
+just test-k8s
+just test-k8s-attach
 
 # Type-check
 just typecheck
