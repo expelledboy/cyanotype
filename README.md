@@ -1,37 +1,106 @@
 # Speculum
 
-> Bun-native test harness built around the **Component Blueprint** — a typed contract that multiple Bindings can satisfy. Same test file runs unchanged against a real Docker container, an in-process simulator, or a Kubernetes pod.
+[![npm version](https://img.shields.io/npm/v/@expelledboy/speculum.svg)](https://www.npmjs.com/package/@expelledboy/speculum)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![status: developer preview](https://img.shields.io/badge/status-developer%20preview-orange.svg)](#status)
 
-## What it is
+> Run the same integration test against a real Docker container, an in-process simulator, or a Kubernetes pod — without changing the test.
 
-Speculum's central abstraction is the **Component Blueprint**: a typed contract describing what a component exposes (API schemas) and what it observably emits (a log-event catalog). Anything that satisfies the contract — the real production image, a hand-written in-process simulator, a prior version, a vendor-compatible alternative — is a valid **Binding** for that Blueprint.
+Speculum is a Bun-native blackbox test harness for multi-container service systems. A test consumes a **Component Blueprint** — a typed contract describing what a component exposes (API schemas) and what it observably emits (a log-event catalog). Any **Binding** that satisfies the contract — the real production image, a hand-written in-process simulator, a prior version, a vendor-compatible alternative — is interchangeable. One line at harness wiring flips the substrate.
 
-A test consumes the Blueprint, not the Binding:
+## Install
 
-```ts
-const pet = await runtime.petstore.api.http.createPet({ name: "Fido" });   // typed end-to-end
-await runtime.petstore.events.waitFor("PETSTORE_REQUEST",
-  { attributes: { method: "POST", status: 201 } }, 5_000);                  // typed event catalog
+```sh
+bun add @expelledboy/speculum
+# or
+npm install @expelledboy/speculum
 ```
 
-`runtime.petstore` is the Blueprint surface. The Binding behind it — real Docker container, in-process fake, future K8s pod — is wiring, not test concern. The substrate is the `Adapter` seam, and it is also where real-vs-simulator is decided. **One line flips the whole suite from real to simulator:**
+Bun ≥ 1.3 is required to **run** the test suite (Speculum uses `Bun.spawn` and `bun:test`). The library is published as ESM only; consumers can `import` it from Bun, or from Node ≥ 22 (which supports `require()` of ESM modules for CJS callers).
+
+## Quickstart
+
+The whole library is one shape: **define a contract once, then swap which substrate runs it**. Below is a complete runnable test. The Blueprint, the Binding, and the test body are written once; the only thing that changes between Docker, Kubernetes, and an in-memory simulator is the line that creates the adapter.
 
 ```ts
-// harness.ts
-const adapter = useReal
-  ? createDockerAdapter({ sessionId: randomUUID() })
-  : createInMemoryAdapter({ factories: { "petstore:latest": petstoreFake } });
+// health.test.ts
+import { test, expect } from "bun:test";
+import { randomUUID } from "node:crypto";
+import {
+  defineBlueprint, bind, iface, http,
+  createEnvironment, createSharedEnvs,
+  createInMemoryAdapter, createDockerAdapter, createK8sAdapter,
+} from "@expelledboy/speculum";
+import { z } from "zod";
+
+// 1. The contract — substrate-agnostic. No image, no env, no ports.
+const routes = {
+  ping: { method: "GET", path: "/", response: z.object({ ok: z.boolean() }) },
+} as const;
+
+const healthBp = defineBlueprint({
+  portNames: ["3000"] as const,
+  interface: (_c, _e, ports) => ({
+    http: iface({ uri: `http://127.0.0.1:${ports["3000"]}`, protocol: http(routes) }),
+  }),
+});
+
+// 2. The Binding — pairs the contract with an image identifier.
+const health = bind(healthBp, {
+  image: "speculum-health-example:latest", version: "latest",
+  config: {}, env: {}, ports: { "3000": 13000 },
+});
+
+// 3. Pick a substrate. Exactly one of the three lines below is active — and that
+//    is the entire substrate switch. The Binding above never changes; the test
+//    below never changes.
+const adapter = createDockerAdapter({ sessionId: randomUUID() });
+// const adapter = createK8sAdapter({ mode: "deploy", sessionId: randomUUID() });
+// const adapter = createInMemoryAdapter({
+//   factories: {
+//     "speculum-health-example:latest": async () => {
+//       const server = Bun.serve({ port: 0, fetch: () => Response.json({ ok: true }) });
+//       return { ports: { "3000": server.port }, close: async () => { server.stop(true); } };
+//     },
+//   },
+// });
+
+const shared = createSharedEnvs(
+  { app: createEnvironment({ health }) },
+  { adapter, stateDir: ".speculum-state", mode: "start", getTargetEnv: () => "app" },
+);
+
+// 4. The test — substrate-blind. Identical code under every adapter above.
+test("health responds", async () => {
+  const rt = await shared.ensure("app");
+  expect(await rt.health.api.http.ping()).toEqual({ ok: true });
+});
 ```
 
-Test files unchanged. Environment composition unchanged. Same Blueprint, different Binding.
+The Docker adapter (default above) needs an image to run. This Dockerfile produces one:
 
-## Why this matters
+```dockerfile
+# Dockerfile
+FROM oven/bun:1-alpine
+WORKDIR /app
+RUN printf '%s\n' \
+  "Bun.serve({ port: 3000, fetch: () => Response.json({ ok: true }) });" \
+  > server.ts
+EXPOSE 3000
+CMD ["bun", "server.ts"]
+```
 
-This shape unlocks three things that are hard or impossible with the conventional `docker-compose up && bun test` separation:
+```sh
+docker build -t speculum-health-example:latest .
+bun test health.test.ts
+```
 
-- **Fast inner-loop + high-trust outer-loop.** Develop against an in-process simulator binding (milliseconds per test). CI runs the identical suite against the real Docker binding. No two test suites to maintain; no mock-vs-real drift.
-- **Cross-implementation contract verification.** Multiple Bindings claiming the same Blueprint can be tested against the same suite — version-to-version, vendor-to-vendor, real-vs-simulator. The Blueprint *is* the cross-implementation contract.
-- **Failure-mode coverage as code.** Because the contract requires tests to own container lifecycle, `await runtime.chaos.stop("redis", "primary")` is an `expect()` away. Real failover semantics, primary-down paths, p95 SLA assertions on real traffic — all live in the same test file as the happy path.
+Now swap which `const adapter = …` line is active and re-run the same test:
+
+- **Kubernetes** — uncomment `createK8sAdapter`. Your kubectl context must point at a cluster that can pull `speculum-health-example:latest` (OrbStack mounts the host Docker registry automatically; for `kind`, `kind load docker-image speculum-health-example:latest`). The test code does not change.
+- **In-memory simulator** — uncomment `createInMemoryAdapter`. No Docker daemon, no cluster — milliseconds per test. The factories map registers a `Bun.serve` fake under the same image key the Binding already declares. The test code does not change.
+
+That is the entire architectural claim — `Blueprint → Binding → Adapter`, with the substrate as the only swappable layer. Everything else in the library is the machinery that makes it true.
 
 ## Worked example
 
@@ -106,6 +175,20 @@ test("primary down → 503 → recovery", async () => {
 >
 > The example above wires the **Docker** adapter. The same `env.ts` switches to the in-memory simulator adapter or to Kubernetes (deploy mode, or attach against a pre-deployed cluster) by changing one constant — see [Adapters](#adapters) for the matrix, and [`docs/attach-mode.md`](docs/attach-mode.md) for the pre-deployed-cluster walkthrough.
 
+## Why this matters
+
+This shape unlocks three things that are hard or impossible with the conventional `docker-compose up && bun test` separation:
+
+- **Fast inner-loop + high-trust outer-loop.** Develop against an in-process simulator binding (milliseconds per test). CI runs the identical suite against the real Docker binding. No two test suites to maintain; no mock-vs-real drift.
+- **Cross-implementation contract verification.** Multiple Bindings claiming the same Blueprint can be tested against the same suite — version-to-version, vendor-to-vendor, real-vs-simulator. The Blueprint *is* the cross-implementation contract.
+- **Failure-mode coverage as code.** Because the contract requires tests to own container lifecycle, `await runtime.chaos.stop("redis", "primary")` is an `expect()` away. Real failover semantics, primary-down paths, p95 SLA assertions on real traffic — all live in the same test file as the happy path.
+
+## How it differs from existing tools
+
+- **vs. [testcontainers-node](https://node.testcontainers.org/).** Testcontainers is image-first: you ask for an image, it runs. Speculum is contract-first: you declare a Blueprint, and *any* binding (real image, in-process fake, K8s pod) can satisfy it. The same suite runs on a simulator OR a real container OR a cluster.
+- **vs. [supertest](https://github.com/ladjs/supertest).** Supertest is in-process and protocol-bound to HTTP-against-an-Express-app. Speculum exercises real sockets against real containers (or in-process servers reachable over real ports), spans multiple components, and handles topology, mounts, and chaos.
+- **vs. [msw](https://mswjs.io/).** MSW intercepts requests at the client. Speculum runs the real server (or a real in-process server implementing the same contract) and never mocks the network — the contract is the Blueprint, and the test owns the lifecycle.
+
 ## The two halves of the promise
 
 1. **A Blueprint declares a contract** — multi-protocol API surfaces with typed schemas (HTTP today; TCP / SOAP / opaque extensible), plus a typed log-event catalog. The Blueprint carries no `image`, no `mounts`, no `env` values. Substrate-agnostic by construction.
@@ -156,9 +239,21 @@ The `tests/petstore-example/` SLA suite (15 tests including chaos failover and p
 | k8s deploy (OrbStack) | 16.4s |
 | k8s attach (OrbStack) | 15.2s |
 
+## FAQ
+
+**Does this work with Jest or Vitest?** Not today. Speculum's teardown relies on a `bun:test` global preload (`afterAll` in `tests/preload.ts`). A `vitest`/`jest` wrapper is straightforward (it's one `afterAll` hook), but the published package only ships the `bun:test` path.
+
+**Can I use it without Docker?** Yes. The in-memory adapter runs in-process simulators with no daemon at all (the Hello World above needs nothing but Bun). The K8s adapter targets any reachable kubectl context.
+
+**Does it replace testcontainers?** Different goals — see the comparison above. If your need is "spin up a Postgres for one test and tear it down," testcontainers is simpler. If you need contract-typed multi-component topologies that run identically on a simulator and on real infrastructure, Speculum is the shape.
+
+**Linux support?** Yes for the K8s adapter (kubectl shellout — anywhere kubectl works). The Docker adapter works on Linux too; Bindings that use `host.docker.internal` for cross-container traffic need that DNS name configured (`--add-host=host.docker.internal:host-gateway`).
+
 ## Status
 
-**v0.** Same 15-test SLA suite green across four adapter modes (in-memory, Docker, K8s deploy, K8s attach against a pre-deployed cluster). 15/15 in each. Plus 89/89 core harness self-tests; 13/13 K8s attach tests (denylist + integration including rolling-restart survivability and override-rescues-non-convention-name). Bun-native development; library code is portable to Node consumers. ~3k LoC src, ~2.5k LoC tests. Runtime deps: `zod`, `dockerode`. The K8s adapter uses `kubectl` as a subprocess (D-019) — no Kubernetes client library is taken as a dependency.
+**0.1.0 — developer preview.** Semver below 1.0 means minor versions may include breaking changes. The Blueprint / Binding / Adapter shape is stable; specific adapter configs may evolve.
+
+Same 15-test SLA suite green across four adapter modes (in-memory, Docker, K8s deploy, K8s attach against a pre-deployed cluster). 15/15 in each. Plus 89/89 core harness self-tests; 13/13 K8s attach tests (denylist + integration including rolling-restart survivability and override-rescues-non-convention-name). Bun-native development; library code is portable to Node consumers. ~3k LoC src, ~2.5k LoC tests. Runtime deps: `zod`, `dockerode`. The K8s adapter uses `kubectl` as a subprocess (D-019) — no Kubernetes client library is taken as a dependency.
 
 ## Prerequisites
 
@@ -202,4 +297,4 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for dev setup, the ADR process, and t
 
 ## License
 
-TBD.
+MIT — see [`LICENSE`](./LICENSE).

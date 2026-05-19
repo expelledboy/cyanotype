@@ -120,19 +120,23 @@ src/                    Library source
   adapters/
     docker.ts           dockerode + SIGINT cleanup
     memory.ts           Factory-registry in-process adapter
+    kubernetes.ts       K8s adapter (deploy + attach modes), reconnection layer
+    kubectl.ts          kubectl subprocess wrapper (D-019)
   index.ts, index.d.ts  Public surface
 
 tests/
   preload.ts            bun:test global setup + teardown (afterAll → shared.stopAll)
   core/                 Harness self-tests (in-memory adapter)
   fakes/                Reusable in-process simulators for Blueprints
-  petstore-example/     End-to-end SLA suite against real Docker
+  petstore-example/     End-to-end SLA suite (runs across all four adapters)
   support/containers/   Dockerfiles for the test images
 
 docs/
   axioms.md             The seven forces — contract-derived constraints
   decisions.md          Append-only ADRs
   design.md             Architecture map, concept relationships, type flows
+  attach-mode.md        Walkthrough for k8s-attach against a pre-deployed cluster
+  k8s-rbac.md           RBAC requirements + cluster setup for the K8s adapter
 
 bunfig.toml             Registers tests/preload.ts as the test preload
 CONVENTIONS.md          Coding discipline (read before writing code)
@@ -143,4 +147,4 @@ README.md               Marketing / usage intro
 
 ## License
 
-TBD.
+MIT — see [`LICENSE`](./LICENSE). Contributions are accepted under the same license.

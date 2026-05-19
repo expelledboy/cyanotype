@@ -29,10 +29,14 @@ just clean-containers          # manual reset; not needed on the normal path
 | Multi-env registry | `src/shared.ts` |
 | Docker adapter | `src/adapters/docker.ts` |
 | In-process simulator adapter | `src/adapters/memory.ts` |
+| K8s adapter (deploy + attach modes, reconnection layer) | `src/adapters/kubernetes.ts` |
+| kubectl subprocess wrapper (D-019) | `src/adapters/kubectl.ts` |
 | Public surface | `src/index.ts`, `src/index.d.ts` |
-| End-to-end smoke | `tests/petstore-example/` |
+| End-to-end smoke (runs across all four adapters) | `tests/petstore-example/` |
 | Harness self-tests | `tests/core/` |
 | Test setup/teardown hooks | `tests/preload.ts` (registered in `bunfig.toml`) |
+| K8s attach walkthrough | `docs/attach-mode.md` |
+| K8s RBAC + cluster setup | `docs/k8s-rbac.md` |
 
 ## Hard rules
 
