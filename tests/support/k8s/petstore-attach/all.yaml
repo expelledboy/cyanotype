@@ -1,0 +1,345 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: speculum-petstore-attach
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: front-door-conf
+  namespace: speculum-petstore-attach
+data:
+  nginx.conf: |
+    worker_processes 1;
+    events {}
+    http {
+      upstream petstore_backend {
+        server pet-svc-1:8080 max_fails=1 fail_timeout=1s;
+        server pet-svc-2:8080 max_fails=1 fail_timeout=1s;
+        server pet-svc-3:8080 max_fails=1 fail_timeout=1s;
+      }
+      server {
+        listen 8080;
+        location / {
+          proxy_pass http://petstore_backend;
+          proxy_next_upstream error timeout http_502 http_503 http_504;
+          proxy_connect_timeout 2s;
+          proxy_read_timeout 5s;
+        }
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cache-leader-conf
+  namespace: speculum-petstore-attach
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    port 6379
+    protected-mode no
+    appendonly yes
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cache-follower-conf
+  namespace: speculum-petstore-attach
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    port 6379
+    protected-mode no
+    appendonly yes
+    replicaof cache-leader 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cache-leader
+  namespace: speculum-petstore-attach
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cache-leader
+  template:
+    metadata:
+      labels:
+        app: cache-leader
+        speculum.component: redis
+        speculum.instance: primary
+    spec:
+      containers:
+        - name: redis
+          image: redis:alpine
+          imagePullPolicy: IfNotPresent
+          command: ["redis-server", "/etc/redis/redis.conf"]
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/redis
+      volumes:
+        - name: conf
+          configMap:
+            name: cache-leader-conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache-leader
+  namespace: speculum-petstore-attach
+spec:
+  type: ClusterIP
+  selector:
+    app: cache-leader
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cache-follower
+  namespace: speculum-petstore-attach
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cache-follower
+  template:
+    metadata:
+      labels:
+        app: cache-follower
+        speculum.component: redis
+        speculum.instance: replica
+    spec:
+      containers:
+        - name: redis
+          image: redis:alpine
+          imagePullPolicy: IfNotPresent
+          command: ["redis-server", "/etc/redis/redis.conf"]
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/redis
+      volumes:
+        - name: conf
+          configMap:
+            name: cache-follower-conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache-follower
+  namespace: speculum-petstore-attach
+spec:
+  type: ClusterIP
+  selector:
+    app: cache-follower
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pet-svc-1
+  namespace: speculum-petstore-attach
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pet-svc-1
+  template:
+    metadata:
+      labels:
+        app: pet-svc-1
+        speculum.component: petstore
+        speculum.instance: one
+    spec:
+      containers:
+        - name: petstore
+          image: speculum/petstore-sla:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: INSTANCE_ID
+              value: one
+            - name: PORT
+              value: "8080"
+            - name: BASE_PATH
+              value: /v1
+            - name: REDIS_PRIMARY_HOST
+              value: cache-leader
+            - name: REDIS_PRIMARY_PORT
+              value: "6379"
+            - name: REDIS_REPLICA_HOST
+              value: cache-follower
+            - name: REDIS_REPLICA_PORT
+              value: "6379"
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pet-svc-1
+  namespace: speculum-petstore-attach
+spec:
+  type: ClusterIP
+  selector:
+    app: pet-svc-1
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pet-svc-2
+  namespace: speculum-petstore-attach
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pet-svc-2
+  template:
+    metadata:
+      labels:
+        app: pet-svc-2
+        speculum.component: petstore
+        speculum.instance: two
+    spec:
+      containers:
+        - name: petstore
+          image: speculum/petstore-sla:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: INSTANCE_ID
+              value: two
+            - name: PORT
+              value: "8080"
+            - name: BASE_PATH
+              value: /v1
+            - name: REDIS_PRIMARY_HOST
+              value: cache-leader
+            - name: REDIS_PRIMARY_PORT
+              value: "6379"
+            - name: REDIS_REPLICA_HOST
+              value: cache-follower
+            - name: REDIS_REPLICA_PORT
+              value: "6379"
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pet-svc-2
+  namespace: speculum-petstore-attach
+spec:
+  type: ClusterIP
+  selector:
+    app: pet-svc-2
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pet-svc-3
+  namespace: speculum-petstore-attach
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pet-svc-3
+  template:
+    metadata:
+      labels:
+        app: pet-svc-3
+        speculum.component: petstore
+        speculum.instance: three
+    spec:
+      containers:
+        - name: petstore
+          image: speculum/petstore-sla:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: INSTANCE_ID
+              value: three
+            - name: PORT
+              value: "8080"
+            - name: BASE_PATH
+              value: /v1
+            - name: REDIS_PRIMARY_HOST
+              value: cache-leader
+            - name: REDIS_PRIMARY_PORT
+              value: "6379"
+            - name: REDIS_REPLICA_HOST
+              value: cache-follower
+            - name: REDIS_REPLICA_PORT
+              value: "6379"
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pet-svc-3
+  namespace: speculum-petstore-attach
+spec:
+  type: ClusterIP
+  selector:
+    app: pet-svc-3
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: front-door
+  namespace: speculum-petstore-attach
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: front-door
+  template:
+    metadata:
+      labels:
+        app: front-door
+        speculum.component: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+      volumes:
+        - name: conf
+          configMap:
+            name: front-door-conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: front-door
+  namespace: speculum-petstore-attach
+spec:
+  type: ClusterIP
+  selector:
+    app: front-door
+  ports:
+    - port: 80
+      targetPort: 8080

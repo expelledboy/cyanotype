@@ -143,6 +143,7 @@ The Adapter is Speculum's substrate seam (D-003). The same test suite runs again
 | `createInMemoryAdapter` | In-process simulators (factory registry) | Fast inner loop; CI; no daemon needed |
 | `createK8sAdapter({ mode: "deploy" })` | Pods + ConfigMaps + Services in a real cluster (via `kubectl`) | Pre-prod / staging integration; cluster-native parity |
 | `createK8sAdapter({ mode: "attach" })` | Pre-deployed workloads (Helm / Terraform) discovered via Service | Smoke tests against dev/uat/prod; **refuses every write verb** by construction |
+| `createK8sAdapter({ mode: "attach" })` + per-Binding overrides | Same, but with developer-derived `adapter.k8s.attach.{service,namespace,port,allowChaos,deployment}` per Binding (see [D-022](docs/decisions.md#d-022-adapter-specific-binding-config-via-typescript-declaration-merging), [D-023](docs/decisions.md#d-023-attach-mode-chaos-via-kubectl-scale-against-a-named-deployment-opt-in)) | Non-convention service names; opt-in real cluster chaos via `kubectl scale` against a named Deployment |
 
 The `tests/petstore-example/` SLA suite (15 tests including chaos failover and p95 latency assertions) passes against **all three** substrates. Switch via `SPECULUM_ADAPTER=docker|memory|k8s`.
 
@@ -151,6 +152,7 @@ The `tests/petstore-example/` SLA suite (15 tests including chaos failover and p
 | in-memory | 0.75s |
 | docker | 10.3s |
 | k8s (OrbStack) | 16.4s |
+| k8s attach (OrbStack, 15/15 — see [D-023](docs/decisions.md#d-023-attach-mode-chaos-via-kubectl-scale-against-a-named-deployment-opt-in)) | 15.2s |
 
 ## Status
 

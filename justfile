@@ -54,6 +54,29 @@ test-petstore-k8s: load-k8s-images
 test-k8s:
     SPECULUM_K8S_CONTEXT={{ env_var_or_default("SPECULUM_K8S_CONTEXT", "orbstack") }} bun test tests/core/kubernetes.test.ts
 
+# Deploy the petstore-attach fixture stack into the cluster and wait Available.
+deploy-petstore-k8s-attach: load-k8s-images
+    kubectl --context {{ env_var_or_default("SPECULUM_K8S_CONTEXT", "orbstack") }} apply -f tests/support/k8s/petstore-attach/all.yaml
+    kubectl --context {{ env_var_or_default("SPECULUM_K8S_CONTEXT", "orbstack") }} -n speculum-petstore-attach wait --for=condition=Available --timeout=180s deployment --all
+
+# Walk the petstore-attach manifests and emit derived.json for env.ts.
+derive-petstore-attach:
+    bun tests/petstore-example/scripts/derive-speculum.ts --k8s tests/support/k8s/petstore-attach/all.yaml --out tests/petstore-example/derived.json
+
+# Run petstore-example against pre-deployed k8s workloads (k8s attach mode).
+# Full chain: deploy → derive → test → teardown. Teardown runs even on failure
+# so cluster state isn't leaked (chaos in attach mode is real cluster mutation).
+test-petstore-k8s-attach: deploy-petstore-k8s-attach derive-petstore-attach
+    #!/usr/bin/env bash
+    set -u
+    SPECULUM_ADAPTER=k8s-attach SPECULUM_K8S_CONTEXT={{ env_var_or_default("SPECULUM_K8S_CONTEXT", "orbstack") }} bun test tests/petstore-example
+    status=$?
+    just teardown-petstore-k8s-attach
+    exit $status
+
+teardown-petstore-k8s-attach:
+    kubectl --context {{ env_var_or_default("SPECULUM_K8S_CONTEXT", "orbstack") }} delete ns speculum-petstore-attach --wait=false --ignore-not-found=true
+
 # Run the Kubernetes attach-mode suite. Denylist tests run without a cluster;
 # integration tests require kubectl + a reachable cluster and apply
 # tests/support/k8s/attach-fixture.yaml into namespace `speculum-attach-tests`

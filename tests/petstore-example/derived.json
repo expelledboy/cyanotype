@@ -1,0 +1,68 @@
+{
+  "redis.primary": {
+    "k8s": {
+      "attach": {
+        "namespace": "speculum-petstore-attach",
+        "service": "cache-leader",
+        "port": 6379,
+        "allowChaos": true,
+        "deployment": "cache-leader"
+      }
+    }
+  },
+  "redis.replica": {
+    "k8s": {
+      "attach": {
+        "namespace": "speculum-petstore-attach",
+        "service": "cache-follower",
+        "port": 6379,
+        "allowChaos": true,
+        "deployment": "cache-follower"
+      }
+    }
+  },
+  "petstore.one": {
+    "k8s": {
+      "attach": {
+        "namespace": "speculum-petstore-attach",
+        "service": "pet-svc-1",
+        "port": 8080,
+        "allowChaos": true,
+        "deployment": "pet-svc-1"
+      }
+    }
+  },
+  "petstore.two": {
+    "k8s": {
+      "attach": {
+        "namespace": "speculum-petstore-attach",
+        "service": "pet-svc-2",
+        "port": 8080,
+        "allowChaos": true,
+        "deployment": "pet-svc-2"
+      }
+    }
+  },
+  "petstore.three": {
+    "k8s": {
+      "attach": {
+        "namespace": "speculum-petstore-attach",
+        "service": "pet-svc-3",
+        "port": 8080,
+        "allowChaos": true,
+        "deployment": "pet-svc-3"
+      }
+    }
+  },
+  "nginx": {
+    "k8s": {
+      "attach": {
+        "namespace": "speculum-petstore-attach",
+        "service": "front-door",
+        "port": 8080,
+        "allowChaos": true,
+        "deployment": "front-door"
+      }
+    }
+  }
+}

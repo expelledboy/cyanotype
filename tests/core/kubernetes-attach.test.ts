@@ -18,6 +18,7 @@ const CONTEXT = process.env["SPECULUM_K8S_CONTEXT"] ?? "orbstack";
 const NAMESPACE = "speculum-attach-tests";
 const SERVICE = "attach-nginx";
 const FIXTURE = path.join(import.meta.dir, "..", "support", "k8s", "attach-fixture.yaml");
+const OVERRIDE_FIXTURE = path.join(import.meta.dir, "..", "support", "k8s", "attach-override-fixture.yaml");
 
 const k8sAvailable = async (): Promise<boolean> => {
   try {
@@ -122,11 +123,22 @@ beforeAll(async () => {
     // biome-ignore lint/suspicious/noConsole: surface to test runner.
     console.error("attach-fixture not Available:", ready.stderr);
   }
-}, 180_000);
+  const applyOverride = await kubectl(["apply", "-f", OVERRIDE_FIXTURE]);
+  if (applyOverride.exit !== 0) {
+    // biome-ignore lint/suspicious/noConsole: surface to test runner.
+    console.error("attach-override-fixture apply failed:", applyOverride.stderr);
+    return;
+  }
+  await kubectl([
+    "-n", NAMESPACE, "wait", "deployment/override-nginx",
+    "--for=condition=Available", "--timeout=120s",
+  ]);
+}, 240_000);
 
 afterAll(async () => {
   if (!HAS_K8S) return;
   await kubectl(["delete", "-f", FIXTURE, "--wait=false", "--ignore-not-found=true"]);
+  await kubectl(["delete", "-f", OVERRIDE_FIXTURE, "--wait=false", "--ignore-not-found=true"]);
 }, 60_000);
 
 describe("kubernetes/adapter/attach integration", () => {
@@ -173,6 +185,37 @@ describe("kubernetes/adapter/attach integration", () => {
     }
   }, 240_000);
 
+  test("honours adapter.k8s.attach.service override when convention does not match", async () => {
+    if (!HAS_K8S || !FIXTURE_READY) return;
+    const sid = "ovr-" + Math.random().toString(36).slice(2, 8);
+    const adapter: Adapter = createK8sAdapter({
+      mode: "attach", sessionId: sid, context: CONTEXT, namespace: NAMESPACE,
+    });
+    await adapter.connect();
+    try {
+      const spec: StartSpec = {
+        image: "ignored-in-attach-mode",
+        env: {},
+        ports: { "80": "auto" },
+        mounts: {},
+        labels: {
+          speculum: "1",
+          "speculum.session": sid,
+          "speculum.component": "does-not-match-any-service",
+        },
+        adapterConfig: { k8s: { attach: { service: "my-real-prod-nginx" } } },
+      };
+      const r = await adapter.start(spec);
+      expect(r.containerId.startsWith("attach:")).toBe(true);
+      expect(r.ports["80"]).toBeGreaterThan(0);
+      const ok = await waitUntil(async () => (await httpGet(r.ports["80"]!)) === 200, 15_000);
+      expect(ok).toBe(true);
+    } finally {
+      await adapter.teardown();
+      await adapter.disconnect();
+    }
+  }, 180_000);
+
   test("teardown does NOT delete cluster resources", async () => {
     if (!HAS_K8S || !FIXTURE_READY) return;
     const sid = "safe-" + Math.random().toString(36).slice(2, 8);
@@ -180,8 +223,9 @@ describe("kubernetes/adapter/attach integration", () => {
       mode: "attach", sessionId: sid, context: CONTEXT, namespace: NAMESPACE,
     });
     await adapter.connect();
-    const r = await adapter.start(mkSpec(sid));
-    await adapter.stop(r.containerId);
+    // teardown (not chaos.stop) is the safe path; verify cluster resources
+    // survive even when adapter.teardown rips down forwards directly.
+    await adapter.start(mkSpec(sid));
     await adapter.teardown();
     await adapter.disconnect();
     const dep = await kubectl(["-n", NAMESPACE, "get", "deployment", "attach-nginx", "-o", "name"]);

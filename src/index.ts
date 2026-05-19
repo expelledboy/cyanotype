@@ -22,7 +22,7 @@ export { runProbe } from "./probe";
 export { createHelpers } from "./helpers";
 export { createInMemoryAdapter } from "./adapters/memory";
 export { createDockerAdapter } from "./adapters/docker";
-export { createK8sAdapter } from "./adapters/kubernetes";
+export { createK8sAdapter, K8sAdapterConfigSchema } from "./adapters/kubernetes";
 
 // Re-export types so direct `import { type Blueprint } from "speculum"` works
 // without going through index.d.ts. The canonical type contract is in
@@ -43,7 +43,7 @@ export type {
   Binding, BlueprintOf, ConfigOf, EnvOf, IfaceOf, ApiOfBlueprint, EventsOf,
 } from "./binding";
 export type { Environment, Slot, IsMultiInstance } from "./environment";
-export type { Adapter, StartSpec, Started } from "./adapter";
+export type { Adapter, AdapterConfig, StartSpec, Started } from "./adapter";
 export type { EnvironmentMetadata, SlotSnapshot, ComponentSnapshot } from "./metadata";
 export type { Runtime, Running, ComponentRuntime, ChaosControls, RuntimeSnapshot } from "./runtime";
 export type { SharedMode, SharedOptions, SharedHarness } from "./shared";

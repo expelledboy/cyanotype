@@ -23,6 +23,8 @@
  */
 
 import net from "node:net";
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import {
   http, opaque, iface, defineBlueprint, bind, createEnvironment, createHttpClient,
@@ -30,7 +32,9 @@ import {
   type HttpRouteMap,
   type LogParser,
   type HelperContext,
+  type AdapterConfig,
 } from "../../src/index";
+import { K8sAdapterConfigSchema } from "../../src/adapters/kubernetes";
 
 // Pinned host ports — see header.
 const PETSTORE_PORTS = { one: 38081, two: 38082, three: 38083 } as const;
@@ -42,7 +46,28 @@ const DOCKER_HOST_DNS = "host.docker.internal";
 
 // K8s mode: cross-component traffic uses Service DNS (D-020) on the
 // container port. Docker/memory mode: host.docker.internal + pinned host ports.
-const IS_K8S = process.env.SPECULUM_ADAPTER === "k8s";
+// k8s-attach: pre-deployed workloads, env vars baked into Deployment manifests.
+const ADAPTER = process.env.SPECULUM_ADAPTER ?? "docker";
+const IS_K8S = ADAPTER === "k8s";
+const IS_K8S_ATTACH = ADAPTER === "k8s-attach";
+
+const EXPECTED_KEYS = ["petstore.one","petstore.two","petstore.three","redis.primary","redis.replica","nginx"] as const;
+const loadDerived = (): Record<string, AdapterConfig> => {
+  const p = join(import.meta.dir, "derived.json");
+  if (!existsSync(p)) throw { kind: "derived_json_missing", path: p };
+  const parsed = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
+  const out: Record<string, AdapterConfig> = {};
+  const missing: string[] = [];
+  for (const k of EXPECTED_KEYS) {
+    const entry = parsed[k];
+    if (!entry) { missing.push(k); continue; }
+    out[k] = K8sAdapterConfigSchema.parse(entry) as AdapterConfig;
+  }
+  if (missing.length > 0) throw { kind: "derived_json_missing_keys", missing };
+  return out;
+};
+const derived: Record<string, AdapterConfig> = IS_K8S_ATTACH ? loadDerived() : {};
+const adapterFor = (key: string): AdapterConfig | undefined => IS_K8S_ATTACH ? derived[key] : undefined;
 const REDIS_PRIMARY_DNS  = IS_K8S ? "redis-primary" : DOCKER_HOST_DNS;
 const REDIS_REPLICA_DNS  = IS_K8S ? "redis-replica" : DOCKER_HOST_DNS;
 const REDIS_PRIMARY_WIRE_PORT = IS_K8S ? 6379 : 36379;
@@ -169,6 +194,10 @@ const petstore = (config: PetstoreConfig) =>
     },
     ports:     { "8080": config.httpPort },
     logParser: petstoreLogParser,
+    ...((): { adapter?: AdapterConfig } => {
+      const a = adapterFor(`petstore.${config.instanceId}`);
+      return a ? { adapter: a } : {};
+    })(),
   });
 
 // ---------------------------------------------------------------------------
@@ -220,7 +249,7 @@ const redisBlueprint = defineBlueprint({
   },
 });
 
-const redis = (config: RedisConfig) =>
+const redis = (config: RedisConfig & { adapterKey?: string }) =>
   bind(redisBlueprint, {
     image:   "speculum/redis-configurable:latest",
     version: "latest",
@@ -232,6 +261,10 @@ const redis = (config: RedisConfig) =>
         ? redisReplicaConfig(config.replicaOfPort)
         : redisPrimaryConfig(),
     },
+    ...((): { adapter?: AdapterConfig } => {
+      const a = config.adapterKey ? adapterFor(config.adapterKey) : undefined;
+      return a ? { adapter: a } : {};
+    })(),
   });
 
 // ---------------------------------------------------------------------------
@@ -301,6 +334,10 @@ const nginx = (config: NginxConfig) =>
     env:     {},
     ports:   { "8080": config.httpPort },
     mounts:  { "/etc/nginx/nginx.conf": nginxConfigText(config.upstreams) },
+    ...((): { adapter?: AdapterConfig } => {
+      const a = adapterFor("nginx");
+      return a ? { adapter: a } : {};
+    })(),
   });
 
 // ---------------------------------------------------------------------------
@@ -309,8 +346,8 @@ const nginx = (config: NginxConfig) =>
 
 export const env = createEnvironment({
   redis: {
-    primary: redis({ hostPort: REDIS_PRIMARY_PORT }),
-    replica: redis({ hostPort: REDIS_REPLICA_PORT, replicaOfPort: REDIS_PRIMARY_PORT }),
+    primary: redis({ hostPort: REDIS_PRIMARY_PORT, adapterKey: "redis.primary" }),
+    replica: redis({ hostPort: REDIS_REPLICA_PORT, replicaOfPort: REDIS_PRIMARY_PORT, adapterKey: "redis.replica" }),
   },
   petstore: {
     one:   petstore({ instanceId: "one",   httpPort: PETSTORE_PORTS.one   }),

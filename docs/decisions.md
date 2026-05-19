@@ -25,6 +25,8 @@
 - [D-019 — `kubectl` shellout, not `@kubernetes/client-node`, for the Kubernetes adapter](#d-019-kubectl-shellout-not-kubernetesclient-node-for-the-kubernetes-adapter)
 - [D-020 — Kubernetes adapter — per-Pod `Service` for in-cluster DNS](#d-020-kubernetes-adapter--per-pod-service-for-in-cluster-dns)
 - [D-021 — Attach-mode port stability via local-port-claim + Watch-driven respawn](#d-021-attach-mode-port-stability-via-local-port-claim--watch-driven-respawn)
+- [D-022 — Adapter-specific Binding config via TypeScript declaration merging](#d-022-adapter-specific-binding-config-via-typescript-declaration-merging)
+- [D-023 — Attach-mode chaos via `kubectl scale` against a named Deployment (opt-in)](#d-023-attach-mode-chaos-via-kubectl-scale-against-a-named-deployment-opt-in)
 
 ---
 
@@ -367,3 +369,53 @@ A Speculum test holds a reference to `Started.ports[name]` and connects to `127.
 - Re-resolution polls EndpointSlices, not Pods, so attach mode tolerates ReplicaSet rolls correctly: the EndpointSlice represents "the Pods that are currently ready endpoints of this Service."
 - The reconnection layer never mutates the cluster — it only spawns `kubectl port-forward` (allowed in attach mode by the D-018 chokepoint) and reads via `kubectl get svc` / `kubectl get endpointslices` (read verbs only). Safe to use against prod.
 - Same shape can be lifted into deploy mode if a use case appears (e.g., chaos tests that restart the Pod). Not done — deploy mode owns the Pod's identity, so a Pod loss is a test failure, not a substrate event.
+
+---
+
+## D-022. Adapter-specific Binding config via TypeScript declaration merging
+
+**Context:** Attach mode (D-018) derives the K8s `Service` name from `speculum.component` (+ optional instance) labels. That convention works when the Speculum-internal name matches the real cluster's Service name, but breaks the moment a user attaches to an existing Service whose name was decided by ops (`my-real-prod-nginx`, `payments-api-v2`, etc.). The Binding needs a substrate-specific escape hatch — but stuffing K8s-specific fields onto `Binding` itself bleeds substrate concerns into the substrate-agnostic core, and a generic `Binding<Cfg>` parameter would virally propagate through every helper and test signature.
+
+**Decision:** Adapter-specific Binding overrides flow through an open `AdapterConfig` interface on `src/adapter.ts`, augmented per-adapter via TypeScript declaration merging.
+
+- Core declares `export interface AdapterConfig {}` (open, empty).
+- `Binding` carries `readonly adapter?: AdapterConfig`.
+- `StartSpec` carries `readonly adapterConfig?: AdapterConfig`; orchestrator's `buildSpec` forwards `binding.adapter` into it.
+- Each adapter augments the interface from its own module — e.g. the K8s adapter declares `interface AdapterConfig { k8s?: { attach?: { namespace?: string; service?: string; port?: number } } }`. Other adapters get their own top-level key (`docker?`, `inMemory?`, …) and never collide.
+- Adapters honour overrides per-field with fallback to the existing convention (override `service` → use it; else derive from labels).
+
+**Consequences:**
+- Substrate-agnostic core stays generic-free — `Binding<B>` already carries one variance-sensitive type parameter and adding a second was a non-starter under `strictFunctionTypes`. Module augmentation gives full type-safety without a generic.
+- Adapter additions are zero-cost on the core: a new adapter contributes a `declare module` block in its own file. No central registry, no enum, no switch.
+- Users importing a Binding from an adapter-aware module get the merged interface automatically; importing only the core sees the empty interface and the override slot is `unknown`-shaped — degrade is graceful.
+- Convention-based discovery remains the default. Overrides are opt-in per Binding, per field. Integration-verified against a Service whose name (`my-real-prod-nginx`) intentionally does not match the component label.
+
+---
+
+## D-023. Attach-mode chaos via `kubectl scale` against a named Deployment (opt-in)
+
+**Context:** D-018 made attach mode refuse every cluster-mutating verb — the right default against shared dev/uat/prod. But the petstore-example resilience tests assert behaviour under *component* outage, and need a chaos shape that actually exercises real failure. A first cut (the original D-023) tried to satisfy this entirely at the network seam: pause the `kubectl port-forward` subprocess on `chaos.stop`, resume it on `chaos.start`. From the test runner's local socket the component looked gone — but from inside the cluster *nothing changed*. Cluster-internal traffic (petstore Pod → redis Service via cluster DNS) was untouched, so backend-to-backend resilience tests passed trivially without exercising real failure. That defeated the entire point of the opt-in: the developer says "yes, you may mutate my cluster for chaos" — and we then did not mutate it.
+
+**Decision:** Attach-mode chaos is real cluster mutation, gated by *two* fields on the Binding:
+
+- `adapter: { k8s: { attach: { allowChaos: true, deployment: "<name>" } } }`. Both required. `allowChaos: true` without `deployment` throws `k8s_attach_deployment_required` at `start` time — failing the developer loudly rather than silently degrading to network-seam chaos.
+
+Mechanism:
+
+- `chaos.stop(component, instance)` pauses the D-021 reconnection wrapper (kills the current `kubectl port-forward`, holds the local port), then `kubectl scale deployment/<name> --replicas=0`, then polls the Service's EndpointSlice until zero endpoints are Ready (30s timeout).
+- `chaos.start(...)` `kubectl scale deployment/<name> --replicas=1`, polls until ≥1 Ready endpoint, then resumes the reconnection wrapper which re-resolves a Ready Pod and respawns `kubectl port-forward` against the same local port (D-021 invariant intact).
+- `chaos.restart(...)` is stop + start sequenced.
+- `chaos.stop` with `allowChaos: false` still throws `chaos_unsupported_in_attach_mode` (unchanged from the original D-023).
+
+`scale` is chosen over `delete pod`: a bare `delete pod` against a Deployment is respawned by the ReplicaSet controller within milliseconds, so chaos would last under a second and resilience tests would race. `scale --replicas=0` holds the outage until we choose to lift it.
+
+The kubectl denylist (D-018) is lifted *only* for the `scale` verb, and only on the per-Binding kubectl client created with `allowChaosScale: true`. `apply / create / delete / patch / replace / edit / rollout` remain blocked at the chokepoint regardless. Denylist tests for those verbs are unchanged.
+
+**Consequences:**
+- This **reverses the original D-023 design** (network-seam pause/resume). The pause/resume scaffolding is kept — it still holds the local port stable across the outage — but the *real* outage now comes from the Deployment having no Ready endpoints, observable to every consumer inside the cluster.
+- The opt-in surface gains one required field. Discovery scripts (e.g. `tests/petstore-example/scripts/derive-speculum.ts`) must emit the Deployment name alongside the Service name; the reference derive script does this by finding the Deployment whose `spec.template.metadata.labels` satisfies the Service's `spec.selector`.
+- All 15 petstore-example tests pass under attach mode, including the previously-trivially-green resilience tests (which now exercise real failure) and the previously-failing primary-outage test (which now passes for real because petstore Pods actually observe their redis-primary endpoint disappear).
+- RBAC for attach + chaos: read everything previously listed in D-018, plus `patch` on `deployments/scale` in the target namespace. Without `allowChaos: true` the read-only attach RBAC is unchanged — still safe against prod.
+- `just test-petstore-k8s-attach` chains `deploy → derive → test → teardown` so cluster state is never leaked even when the suite fails. Teardown deletes the entire `speculum-petstore-attach` namespace.
+- Cross-namespace attach (D-022) still composes: the paused-attaches registry remains keyed by `${namespace}/${serviceName}` and now also carries the Deployment name and the per-binding kubectl client.
+

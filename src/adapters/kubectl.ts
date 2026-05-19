@@ -37,12 +37,15 @@ const WRITE_VERBS = new Set([
   "apply", "create", "delete", "patch", "replace", "edit", "scale", "rollout",
 ]);
 
-const guardAttach = (mode: KubectlMode, args: string[]): void => {
+const guardAttach = (mode: KubectlMode, args: string[], allowChaosScale: boolean): void => {
   if (mode !== "attach") return;
   const op = args[0];
-  if (op && WRITE_VERBS.has(op)) {
-    throw { kind: "attach_mode_violation", op, target: args };
-  }
+  if (!op || !WRITE_VERBS.has(op)) return;
+  // D-023 (rewritten): when allowChaosScale is on (Binding opted in via
+  // adapter.k8s.attach.allowChaos: true), `scale` is the one lifted verb —
+  // real chaos via kubectl scale deployment/<x> --replicas=0|1.
+  if (allowChaosScale && op === "scale") return;
+  throw { kind: "attach_mode_violation", op, target: args };
 };
 
 const prefix = (context: string | undefined, namespace: string): string[] => {
@@ -56,13 +59,15 @@ export type CreateKubectlOptions = {
   readonly mode: KubectlMode;
   readonly namespace: string;
   readonly context?: string | undefined;
+  readonly allowChaosScale?: boolean;
 };
 
 export const createKubectl = (opts: CreateKubectlOptions): KubectlClient => {
   const { mode, namespace, context } = opts;
+  const allowChaosScale = opts.allowChaosScale === true;
 
   const run: KubectlClient["run"] = async (args, runOpts) => {
-    guardAttach(mode, args);
+    guardAttach(mode, args, allowChaosScale);
     const argv = ["kubectl", ...prefix(context, namespace), ...args];
     const stdin = runOpts?.stdin;
     const proc = Bun.spawn(argv, {
@@ -84,7 +89,7 @@ export const createKubectl = (opts: CreateKubectlOptions): KubectlClient => {
   };
 
   const stream: KubectlClient["stream"] = (args) => {
-    guardAttach(mode, args);
+    guardAttach(mode, args, allowChaosScale);
     const argv = ["kubectl", ...prefix(context, namespace), ...args];
     const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
     // biome-ignore lint/suspicious/noExplicitAny: Bun's web ReadableStream → Node Readable.fromWeb variance.

@@ -61,6 +61,15 @@ export type Adapter = {
   exists(containerId: string): Promise<boolean>;
 };
 
+/**
+ * Open interface for adapter-specific Binding configuration. Adapters
+ * augment this via `declare module "../adapter" { interface AdapterConfig { ... } }`
+ * to slot in their own typed sub-key (e.g. `k8s`). Type-safe and
+ * adapter-extensible without forcing a generic onto `Binding`.
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: open interface for declaration merging
+export interface AdapterConfig {}
+
 export type StartSpec = {
   readonly image: string;
   readonly env: Record<string, string>;
@@ -81,6 +90,8 @@ export type StartSpec = {
    * Adapters still mirror it into labels for teardown discovery.
    */
   readonly instance?: string;
+  /** Adapter-specific per-Binding config; merged interface — see `AdapterConfig`. */
+  readonly adapterConfig?: AdapterConfig;
 };
 
 export type Started = {

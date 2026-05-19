@@ -189,6 +189,7 @@ export const startEnvironment = async <E extends Environment>(
       ...(instanceId !== undefined ? { "speculum.instance": instanceId } : {}),
     },
     ...(instanceId !== undefined ? { instance: instanceId } : {}),
+    ...(binding.adapter !== undefined ? { adapterConfig: binding.adapter } : {}),
   });
 
   const startOne = async (

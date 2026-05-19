@@ -1,17 +1,46 @@
 /**
  * KubernetesAdapter — drives `kubectl` via `Bun.spawn` (D-019).
  *
- * Deploy mode is implemented here: bare Pod + ConfigMap per `StartSpec`,
- * one `kubectl port-forward` subprocess per port (D-017). Attach mode
- * (D-018) is out of scope for this PR; the `mode` factory option and the
- * kubectl helper's write-verb denylist exist so attach can slot in later
- * without re-plumbing.
+ * Deploy mode (D-017/D-020): bare Pod + ConfigMap + Service per `StartSpec`,
+ * one `kubectl port-forward` subprocess per port.
+ *
+ * Attach mode (D-018/D-021): Service-discovery + Watch-driven reconnect, no
+ * cluster mutation by default. Per-Binding `allowChaos: true + deployment:
+ * <name>` (D-023, rewritten) lifts the `scale` verb only and drives real
+ * outage via `kubectl scale deployment/<x> --replicas=0|1`.
  */
 
 import net from "node:net";
 import type { Subprocess } from "bun";
+import { z } from "zod";
 import type { Adapter, StartSpec, Started } from "../adapter";
 import { createKubectl, type KubectlClient, type KubectlMode } from "./kubectl";
+
+declare module "../adapter" {
+  interface AdapterConfig {
+    k8s?: {
+      attach?: {
+        namespace?: string;
+        service?: string;
+        port?: number;
+        allowChaos?: boolean;
+        deployment?: string;
+      };
+    };
+  }
+}
+
+export const K8sAdapterConfigSchema = z.object({
+  k8s: z.object({
+    attach: z.object({
+      namespace: z.string().optional(),
+      service: z.string().optional(),
+      port: z.number().optional(),
+      allowChaos: z.boolean().optional(),
+      deployment: z.string().optional(),
+    }).optional(),
+  }).optional(),
+});
 
 export type K8sAdapterOptions = {
   readonly mode: KubectlMode;
@@ -39,19 +68,68 @@ type ReconnectForward = {
   currentPod: string;
   proc: Subprocess | null;
   stopped: boolean;
+  paused: boolean;
   kill(): void;
+  pause(): void;
 };
 
 type AttachState = {
   readonly serviceName: string;
+  readonly namespace: string;
+  readonly allowChaos: boolean;
+  readonly deployment: string | null;
+  readonly k: KubectlClient;
   currentPod: string;
-  readonly reconnects: ReconnectForward[];
+  paused: boolean;
+  readonly reconnects: ResumableForward[];
 };
 
 let exitHandlerRegistered = false;
 const globalKnown = new Set<string>();
 const globalTracked = new Map<string, Tracked>();
 const globalSessions = new Set<{ namespace: string; sessionId: string; context: string | undefined }>();
+const pausedAttaches = new Map<string, {
+  reconnects: ResumableForward[];
+  serviceName: string;
+  namespace: string;
+  deployment: string | null;
+  k: KubectlClient;
+}>();
+
+const ENDPOINT_WAIT_TIMEOUT_MS = 30_000;
+
+const countReadyEndpoints = async (k: KubectlClient, serviceName: string): Promise<number> => {
+  const r = await k.run([
+    "get", "endpointslices",
+    "-l", `kubernetes.io/service-name=${serviceName}`,
+    "-o", "json",
+  ]);
+  if (r.exit !== 0) return 0;
+  type Slice = { endpoints?: Array<{ conditions?: { ready?: boolean } }> };
+  let parsed: { items?: Slice[] };
+  try { parsed = JSON.parse(r.stdout) as { items?: Slice[] }; } catch { return 0; }
+  let n = 0;
+  for (const slice of parsed.items ?? []) {
+    for (const ep of slice.endpoints ?? []) {
+      if (ep.conditions?.ready === true) n++;
+    }
+  }
+  return n;
+};
+
+const waitForEndpoints = async (
+  k: KubectlClient,
+  serviceName: string,
+  predicate: (n: number) => boolean,
+  timeoutMs = ENDPOINT_WAIT_TIMEOUT_MS,
+): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate(await countReadyEndpoints(k, serviceName))) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw { kind: "k8s_attach_endpoint_wait_timeout", service: serviceName, timeoutMs };
+};
 
 const killForwards = (t: Tracked) => {
   for (const p of t.forwards) {
@@ -235,23 +313,36 @@ const resolveReadyPod = async (
   throw { kind: "k8s_attach_no_ready_endpoints", service: serviceName };
 };
 
+type ResumableForward = ReconnectForward & { resume(initialPod: string): Promise<void> };
+
 const startReconnectForward = async (
   k: KubectlClient,
   serviceName: string,
   initialPod: string,
   containerPort: number,
   onPodChange: (pod: string) => void,
-): Promise<ReconnectForward> => {
-  const localPort = await claimLocalPort();
-  const state: ReconnectForward = {
+  presetLocalPort?: number,
+): Promise<ResumableForward> => {
+  const localPort = presetLocalPort ?? await claimLocalPort();
+  const state: ResumableForward = {
     localPort,
     containerPort,
     currentPod: initialPod,
     proc: null,
     stopped: false,
+    paused: false,
     kill: () => {
       state.stopped = true;
       if (state.proc) { try { state.proc.kill(); } catch { /* ignore */ } }
+    },
+    pause: () => {
+      state.paused = true;
+      if (state.proc) { try { state.proc.kill(); } catch { /* ignore */ } }
+    },
+    resume: async (pod: string) => {
+      state.currentPod = pod;
+      state.paused = false;
+      await spawnOnce(pod);
     },
   };
 
@@ -287,6 +378,12 @@ const startReconnectForward = async (
       if (!proc) break;
       try { await proc.exited; } catch { /* ignore */ }
       if (state.stopped) break;
+      if (state.paused) {
+        while (state.paused && !state.stopped) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        if (state.stopped) break;
+      }
       let attempts = 0;
       let newPod: string | null = null;
       while (attempts < 3 && !state.stopped) {
@@ -342,6 +439,12 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   };
 
   const disconnect = async (): Promise<void> => {
+    for (const [key, p] of Array.from(pausedAttaches.entries())) {
+      if (p.namespace === namespace) {
+        for (const r of p.reconnects) { try { r.kill(); } catch { /* ignore */ } }
+        pausedAttaches.delete(key);
+      }
+    }
     globalSessions.delete(sessionEntry);
   };
 
@@ -394,6 +497,50 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
 
   const stop = async (containerId: string): Promise<void> => {
     const t = tracked.get(containerId);
+    if (t && t.attach && containerId.startsWith("attach:")) {
+      if (!t.attach.allowChaos) {
+        throw {
+          kind: "chaos_unsupported_in_attach_mode",
+          message: "chaos.stop on an attached binding requires adapter.k8s.attach.allowChaos: true",
+          service: t.attach.serviceName,
+          namespace: t.namespace,
+        };
+      }
+      const deployment = t.attach.deployment;
+      if (!deployment) {
+        throw {
+          kind: "k8s_attach_deployment_required",
+          message: "adapter.k8s.attach.deployment is required when allowChaos: true (service=" + t.attach.serviceName + ")",
+          service: t.attach.serviceName,
+          namespace: t.namespace,
+        };
+      }
+      t.attach.paused = true;
+      for (const r of t.attach.reconnects) r.pause();
+      // D-023 (rewritten): real cluster mutation. Scale the Deployment to 0
+      // so cluster-internal traffic actually fails — pausing the port-forward
+      // alone leaves Service DNS routing intact.
+      const ak = t.attach.k;
+      const scaleRes = await ak.run([
+        "scale", `deployment/${deployment}`, "--replicas=0",
+      ]);
+      if (scaleRes.exit !== 0) {
+        throw { kind: "k8s_attach_scale_failed", deployment, replicas: 0, stderr: scaleRes.stderr };
+      }
+      await waitForEndpoints(ak, t.attach.serviceName, (n) => n === 0);
+      pausedAttaches.set(`${t.namespace}/${t.attach.serviceName}`, {
+        reconnects: t.attach.reconnects,
+        serviceName: t.attach.serviceName,
+        namespace: t.namespace,
+        deployment,
+        k: ak,
+      });
+      tracked.delete(containerId);
+      globalTracked.delete(containerId);
+      known.delete(containerId);
+      globalKnown.delete(containerId);
+      return;
+    }
     if (t) {
       killForwards(t);
       tracked.delete(containerId);
@@ -417,21 +564,71 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   };
 
   const startAttach = async (spec: StartSpec): Promise<Started> => {
-    const serviceName = buildServiceName(spec);
+    const override = spec.adapterConfig?.k8s?.attach;
+    const attachNamespace = override?.namespace ?? namespace;
+    const allowChaos = override?.allowChaos === true;
+    const deployment = override?.deployment ?? null;
+    if (allowChaos && !deployment) {
+      throw {
+        kind: "k8s_attach_deployment_required",
+        message: `adapter.k8s.attach.deployment is required when allowChaos: true (binding=${spec.labels["speculum.component"] ?? "<unknown>"})`,
+        component: spec.labels["speculum.component"],
+        instance: spec.labels["speculum.instance"],
+      };
+    }
+    // D-023 (rewritten): the per-binding attach kubectl client only lifts
+    // the `scale` verb when allowChaos is on — every other write stays
+    // blocked at the D-018 chokepoint.
+    const attachK: KubectlClient = createKubectl({
+      mode, namespace: attachNamespace, context, allowChaosScale: allowChaos,
+    });
+    const serviceName = override?.service ?? buildServiceName(spec);
     if (!serviceName) {
-      throw { kind: "k8s_attach_service_not_found", service: null, namespace, reason: "missing speculum.component label" };
+      throw { kind: "k8s_attach_service_not_found", service: null, namespace: attachNamespace, reason: "missing speculum.component label and no adapter.k8s.attach.service override" };
     }
-    const svc = await k.run(["get", "svc", serviceName, "-o", "json"]);
+    const pausedKey = `${attachNamespace}/${serviceName}`;
+    const paused = pausedAttaches.get(pausedKey);
+    if (paused) {
+      // Scale the Deployment back to 1 (chaos.start half of D-023). Then wait
+      // for the EndpointSlice to report ≥1 Ready endpoint before re-resolving
+      // a Pod for the port-forward respawn.
+      if (paused.deployment) {
+        const scaleRes = await paused.k.run([
+          "scale", `deployment/${paused.deployment}`, "--replicas=1",
+        ]);
+        if (scaleRes.exit !== 0) {
+          throw { kind: "k8s_attach_scale_failed", deployment: paused.deployment, replicas: 1, stderr: scaleRes.stderr };
+        }
+        await waitForEndpoints(paused.k, serviceName, (n) => n >= 1);
+      }
+      pausedAttaches.delete(pausedKey);
+      const initialPod = await resolveReadyPod(attachK, serviceName);
+      const ports: Record<string, number> = {};
+      for (const r of paused.reconnects) {
+        await r.resume(initialPod);
+        ports[String(r.containerPort)] = r.localPort;
+      }
+      const attach: AttachState = { serviceName, namespace: attachNamespace, allowChaos, deployment, k: attachK, currentPod: initialPod, paused: false, reconnects: paused.reconnects };
+      const containerId = `attach:${attachNamespace}/${initialPod}`;
+      const t: Tracked = { podName: initialPod, namespace: attachNamespace, context, forwards: [], serviceName, attach };
+      tracked.set(containerId, t);
+      globalTracked.set(containerId, t);
+      known.add(containerId);
+      globalKnown.add(containerId);
+      return { containerId, ports };
+    }
+    const svc = await attachK.run(["get", "svc", serviceName, "-o", "json"]);
     if (svc.exit !== 0) {
-      throw { kind: "k8s_attach_service_not_found", service: serviceName, namespace, stderr: svc.stderr };
+      throw { kind: "k8s_attach_service_not_found", service: serviceName, namespace: attachNamespace, stderr: svc.stderr };
     }
-    const initialPod = await resolveReadyPod(k, serviceName);
-    const attach: AttachState = { serviceName, currentPod: initialPod, reconnects: [] };
+    const initialPod = await resolveReadyPod(attachK, serviceName);
+    const attach: AttachState = { serviceName, namespace: attachNamespace, allowChaos, deployment, k: attachK, currentPod: initialPod, paused: false, reconnects: [] };
     const ports: Record<string, number> = {};
     try {
-      for (const name of Object.keys(spec.ports)) {
+      const portKeys = override?.port !== undefined ? [String(override.port)] : Object.keys(spec.ports);
+      for (const name of portKeys) {
         const containerPort = Number(name);
-        const wrapper = await startReconnectForward(k, serviceName, initialPod, containerPort, (p) => {
+        const wrapper = await startReconnectForward(attachK, serviceName, initialPod, containerPort, (p) => {
           attach.currentPod = p;
         });
         attach.reconnects.push(wrapper);
@@ -441,8 +638,8 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       for (const r of attach.reconnects) { try { r.kill(); } catch { /* ignore */ } }
       throw e;
     }
-    const containerId = `attach:${namespace}/${initialPod}`;
-    const t: Tracked = { podName: initialPod, namespace, context, forwards: [], serviceName, attach };
+    const containerId = `attach:${attachNamespace}/${initialPod}`;
+    const t: Tracked = { podName: initialPod, namespace: attachNamespace, context, forwards: [], serviceName, attach };
     tracked.set(containerId, t);
     globalTracked.set(containerId, t);
     known.add(containerId);
@@ -541,7 +738,8 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   const exists = async (containerId: string): Promise<boolean> => {
     if (containerId.startsWith("attach:")) {
       const t = tracked.get(containerId);
-      const svcName = t?.serviceName;
+      if (!t) return false;
+      const svcName = t.serviceName;
       if (!svcName) return false;
       const r = await k.run(["get", "svc", svcName, "-o", "name"]);
       if (r.exit === 0) return true;
@@ -577,7 +775,22 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
 
   const teardown = async (): Promise<void> => {
     for (const id of Array.from(known)) {
+      const t = tracked.get(id);
+      if (t && t.attach) {
+        for (const r of t.attach.reconnects) { try { r.kill(); } catch { /* ignore */ } }
+        tracked.delete(id);
+        globalTracked.delete(id);
+        known.delete(id);
+        globalKnown.delete(id);
+        continue;
+      }
       try { await stop(id); } catch { /* ignore */ }
+    }
+    for (const [key, p] of Array.from(pausedAttaches.entries())) {
+      if (p.namespace === namespace) {
+        for (const r of p.reconnects) { try { r.kill(); } catch { /* ignore */ } }
+        pausedAttaches.delete(key);
+      }
     }
     if (mode === "deploy") {
       try {

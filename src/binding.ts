@@ -27,6 +27,7 @@ import type { InterfaceRecord, ApiFromInterface } from "./interface";
 import type { EventCatalog, LogParser } from "./events";
 import type { HelperContext } from "./helpers";
 import type { Blueprint } from "./blueprint";
+import type { AdapterConfig } from "./adapter";
 
 /**
  * `Blueprint<any, any, any, any>` as a slot constraint preserves the literal
@@ -60,6 +61,12 @@ export type Binding<
   readonly logParser?: LogParser;
   /** Adapter labels for teardown discovery and selective cleanup. */
   readonly labels?: Record<string, string>;
+  /**
+   * Adapter-specific overrides keyed by adapter id (e.g. `k8s`). Open
+   * interface — each adapter augments `AdapterConfig` with its own slot
+   * via TypeScript declaration merging.
+   */
+  readonly adapter?: AdapterConfig;
 };
 
 /**

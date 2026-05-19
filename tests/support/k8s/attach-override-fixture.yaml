@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: override-nginx
+  namespace: speculum-attach-tests
+  labels:
+    app: override-nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: override-nginx
+  template:
+    metadata:
+      labels:
+        app: override-nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-real-prod-nginx
+  namespace: speculum-attach-tests
+spec:
+  type: ClusterIP
+  selector:
+    app: override-nginx
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
