@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-21
+
+Docker Compose attach adapter, framework lifecycle observer stream, and built-in console reporter.
+
 ### Added
 - Docker Compose attach adapter mode (`createDockerAdapter({ mode: "attach", project })`):
   containers discovered via `com.docker.compose.project`/`.service` labels; compose service
@@ -33,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New exports: `createConsoleReporter`, `ConsoleReporterOptions`, `Observer`,
   `ObserverEvent`, `ObserverEventData`, `ObserverEnvelope`.
 
+### Changed
+- `justfile` reorganized; contributor recipes renamed: `test-k8s` →
+  `test-adapter-k8s`, `test-k8s-attach` → `test-adapter-k8s-attach`.
+
 ## [0.1.0] - 2026-05-19
 
 Initial public release. Developer preview — pre-1.0, expect minor-version breaking changes.
@@ -55,5 +63,6 @@ Initial public release. Developer preview — pre-1.0, expect minor-version brea
 - Only HTTP and Opaque protocols implemented; TCP/gRPC/SOAP deferred
 - OrbStack K8s degrades under prolonged port-forward + rollout-restart load (kind/remote recommended for sustained CI)
 
-[Unreleased]: https://github.com/expelledboy/speculum/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/expelledboy/speculum/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/expelledboy/speculum/releases/tag/v0.2.0
 [0.1.0]: https://github.com/expelledboy/speculum/releases/tag/v0.1.0
