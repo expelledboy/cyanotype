@@ -9,7 +9,7 @@ Read in this order if you have time: [`docs/axioms.md`](docs/axioms.md) → [`do
 ```sh
 bun install                    # one-time
 just typecheck                 # tsc --noEmit
-just test-core                 # in-memory adapter only, no Docker images
+just test-core                 # harness functionality tests; Docker/K8s tests self-skip if unavailable
 just build-test-images         # one-time: builds petstore + redis-configurable
 just test                      # full suite against real Docker
 just clean-containers          # manual reset; not needed on the normal path

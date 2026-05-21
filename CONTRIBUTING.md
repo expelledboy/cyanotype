@@ -22,7 +22,7 @@ bun install
 # Type-check.
 just typecheck
 
-# Harness self-tests (no Docker images needed; in-memory adapter only).
+# Harness functionality tests — exercises adapters/orchestrator directly, not via the example; Docker/K8s tests self-skip when unavailable.
 just test-core
 
 # Full suite. Teardown runs automatically; back-to-back `bun test` invocations
