@@ -18,6 +18,7 @@
  */
 
 import type { InterfaceRecord } from "./interface.js";
+import type { Emit } from "./observer.js";
 
 export type Probe<I extends InterfaceRecord = InterfaceRecord> =
   | HttpProbe<I>
@@ -40,6 +41,11 @@ export type CustomProbe<I extends InterfaceRecord = InterfaceRecord> = {
    * Predicate. Receives the resolved interface record; the runtime polls
    * until this returns true or `timeoutMs` elapses.
    *
+   * Returning `false` retries with a generic reason. To surface *which*
+   * sub-check failed on the observer's `probe.attempt` event, `throw` a
+   * tagged error instead — `throw { kind: "zero_ping_failed" }` — its `kind`
+   * is carried through as the attempt's error.
+   *
    * Method syntax (bivariant params) — see `Blueprint.interface` note for
    * why this matters for `Blueprint<..., SpecificIface, ...>` to fit into
    * the wider `Probe<InterfaceRecord>` constraint via Environment's slot.
@@ -58,6 +64,7 @@ export const runProbe = async <I extends InterfaceRecord>(
   probe: Probe<I>,
   iface: I,
   signal?: AbortSignal,
+  emit?: Emit,
 ): Promise<void> => {
   const intervalMs = probe.intervalMs ?? 1000;
   const timeoutMs = probe.timeoutMs ?? 30_000;
@@ -66,6 +73,8 @@ export const runProbe = async <I extends InterfaceRecord>(
 
   let lastError: unknown = undefined;
   let attempts = 0;
+
+  emit?.({ type: "probe.started", probeKind: probe.kind, timeoutMs, intervalMs });
 
   while (Date.now() - start < timeoutMs && !signal?.aborted) {
     attempts += 1;
@@ -83,7 +92,10 @@ export const runProbe = async <I extends InterfaceRecord>(
           const res = await fetch(url, { signal: ac.signal });
           const min = probe.statusMin ?? 200;
           const max = probe.statusMax ?? 499;
-          if (res.status >= min && res.status <= max) return;
+          if (res.status >= min && res.status <= max) {
+            emit?.({ type: "probe.ready", attempts, elapsedMs: Date.now() - start });
+            return;
+          }
           throw new Error(`http probe status not acceptable: ${res.status}`);
         } finally {
           clearTimeout(timer);
@@ -91,11 +103,15 @@ export const runProbe = async <I extends InterfaceRecord>(
         }
       } else {
         const ok = await probe.check(iface);
-        if (ok === true) return;
+        if (ok === true) {
+          emit?.({ type: "probe.ready", attempts, elapsedMs: Date.now() - start });
+          return;
+        }
         throw new Error("custom probe returned false");
       }
     } catch (e) {
       lastError = e;
+      emit?.({ type: "probe.attempt", attempt: attempts, elapsedMs: Date.now() - start, error: e });
       if (signal?.aborted) break;
       await sleep(intervalMs);
     }
@@ -104,5 +120,6 @@ export const runProbe = async <I extends InterfaceRecord>(
   if (signal?.aborted) {
     throw { kind: "probe_aborted", probe, elapsedMs: Date.now() - start, attempts };
   }
+  emit?.({ type: "probe.timed_out", attempts, elapsedMs: Date.now() - start, error: lastError });
   throw { kind: "probe_timeout", probe, lastError, elapsedMs: Date.now() - start, attempts };
 };

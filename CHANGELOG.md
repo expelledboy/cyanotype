@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Docker Compose attach adapter mode (`createDockerAdapter({ mode: "attach", project })`):
+  containers discovered via `com.docker.compose.project`/`.service` labels; compose service
+  maps to a Speculum component by convention (`speculum.component` label), overridable
+  per-Binding via the `compose.attach` config slot (`{ project, service, containerNumber,
+  port, allowChaos }`). A guard blocks `createContainer`/`pull`/`remove`; `stop`/`start`
+  are also blocked unless `allowChaos: true`, which enables real `docker stop`/`start`
+  chaos. Services under test must publish ports to the host. The same 15-test petstore SLA
+  suite runs unchanged against this fifth substrate via `SPECULUM_ADAPTER=docker-attach`
+  (ADR D-025, D-026).
+- Framework lifecycle observer stream (ADR D-024): opt-in `observer` on
+  `OrchestratorOptions` receives typed `substrate.*` / `image.*` / `container.*`
+  / `probe.*` / `environment.*` / `chaos.*` telemetry — including throttled
+  Docker image-pull progress and per-attempt readiness polling. Zero cost when
+  unset, and a throwing reporter is isolated — it never aborts provisioning.
+  Reachable via `OrchestratorOptions.observer` and forwarded from
+  `SharedOptions.observer` through `createSharedEnvs`.
+- `createConsoleReporter()` — a built-in reporter that renders the observer
+  stream as `speculum`-prefixed stderr lines (state glyph + component column),
+  with a live per-layer image-pull progress bar on a TTY. Renders the probe
+  phase so a slow custom readiness check is not silent; shortens registry
+  image refs. `environment.component_ready` is emitted with component scope so
+  a reporter can attribute the `ready` line to its component.
+- New exports: `createConsoleReporter`, `ConsoleReporterOptions`, `Observer`,
+  `ObserverEvent`, `ObserverEventData`, `ObserverEnvelope`.
+
 ## [0.1.0] - 2026-05-19
 
 Initial public release. Developer preview — pre-1.0, expect minor-version breaking changes.

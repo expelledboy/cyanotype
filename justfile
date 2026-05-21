@@ -74,6 +74,28 @@ test-petstore-k8s-attach: deploy-petstore-k8s-attach derive-petstore-attach
     just teardown-petstore-k8s-attach
     exit $status
 
+# Bring up the petstore-attach Compose stack in detached mode.
+up-petstore-docker-attach:
+    docker compose -p speculum-petstore-attach -f tests/support/compose/petstore-attach/compose.yaml up -d
+
+# Walk the petstore-attach Compose file and emit derived-compose.json for env.ts.
+derive-petstore-docker-attach:
+    bun tests/petstore-example/scripts/derive-speculum.ts --compose tests/support/compose/petstore-attach/compose.yaml --out tests/petstore-example/derived-compose.json
+
+# Run petstore-example against a pre-running Compose stack (docker-attach mode).
+# Full chain: up → derive → test → teardown. Teardown runs even on failure
+# so Compose state isn't leaked (chaos in attach mode is real container mutation).
+test-petstore-docker-attach: up-petstore-docker-attach derive-petstore-docker-attach
+    #!/usr/bin/env bash
+    set -u
+    SPECULUM_ADAPTER=docker-attach bun test tests/petstore-example
+    status=$?
+    just teardown-petstore-docker-attach
+    exit $status
+
+teardown-petstore-docker-attach:
+    docker compose -p speculum-petstore-attach -f tests/support/compose/petstore-attach/compose.yaml down -v
+
 teardown-petstore-k8s-attach:
     kubectl --context {{ env_var_or_default("SPECULUM_K8S_CONTEXT", "orbstack") }} delete ns speculum-petstore-attach --wait=false --ignore-not-found=true
 

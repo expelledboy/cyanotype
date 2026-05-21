@@ -4,7 +4,7 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![status: developer preview](https://img.shields.io/badge/status-developer%20preview-orange.svg)](#status)
 
-> Run the same integration test against a real Docker container, an in-process simulator, or a Kubernetes pod — without changing the test.
+> Run the same integration test against a real Docker container, an in-process simulator, a Kubernetes pod, or an already-running Docker Compose stack — without changing the test.
 
 Speculum is a Bun-native blackbox test harness for multi-container service systems. A test consumes a **Component Blueprint** — a typed contract describing what a component exposes (API schemas) and what it observably emits (a log-event catalog). Any **Binding** that satisfies the contract — the real production image, a hand-written in-process simulator, a prior version, a vendor-compatible alternative — is interchangeable. One line at harness wiring flips the substrate.
 
@@ -51,10 +51,11 @@ const health = bind(healthBp, {
   config: {}, env: {}, ports: { "3000": 13000 },
 });
 
-// 3. Pick a substrate. Exactly one of the three lines below is active — and that
-//    is the entire substrate switch. The Binding above never changes; the test
+// 3. Pick a substrate. Exactly one of the lines below is active — and that is
+//    the entire substrate switch. The Binding above never changes; the test
 //    below never changes.
 const adapter = createDockerAdapter({ sessionId: randomUUID() });
+// const adapter = createDockerAdapter({ mode: "attach", project: "<compose project>" });
 // const adapter = createK8sAdapter({ mode: "deploy", sessionId: randomUUID() });
 // const adapter = createInMemoryAdapter({
 //   factories: {
@@ -97,7 +98,8 @@ bun test health.test.ts
 
 Now swap which `const adapter = …` line is active and re-run the same test:
 
-- **Kubernetes** — uncomment `createK8sAdapter`. Your kubectl context must point at a cluster that can pull `speculum-health-example:latest` (OrbStack mounts the host Docker registry automatically; for `kind`, `kind load docker-image speculum-health-example:latest`). The test code does not change.
+- **Docker Compose attach** — uncomment `createDockerAdapter({ mode: "attach", ... })`. Point it at an already-running `docker compose up` stack; Speculum discovers containers via `com.docker.compose.project`/`com.docker.compose.service` labels and never creates or removes containers. Services must publish their ports to the host (`ports:` in your Compose file). The test code does not change.
+- **Kubernetes** — uncomment `createK8sAdapter`. Your kubectl context must point at a cluster that can pull `speculum-health-example:latest` (OrbStack mounts the host Docker registry automatically; for `kind`, `kind load docker-image speculum-health-example:latest`). Also supports `mode: "attach"` to test against pre-deployed workloads without managing the cluster yourself. The test code does not change.
 - **In-memory simulator** — uncomment `createInMemoryAdapter`. No Docker daemon, no cluster — milliseconds per test. The factories map registers a `Bun.serve` fake under the same image key the Binding already declares. The test code does not change.
 
 That is the entire architectural claim — `Blueprint → Binding → Adapter`, with the substrate as the only swappable layer. Everything else in the library is the machinery that makes it true.
@@ -173,7 +175,7 @@ test("primary down → 503 → recovery", async () => {
 
 > The `redis(...)` / `nginx(...)` Binding factories, `petstoreFake`, `petstoreEvents`, `petstoreRoutes`, and the `DOCKER_HOST_DNS` constant in the snippet above are defined in [`tests/petstore-example/env.ts`](tests/petstore-example/env.ts) — that file is the canonical runnable form of this example, with all imports.
 >
-> The example above wires the **Docker** adapter. The same `env.ts` switches to the in-memory simulator adapter or to Kubernetes (deploy mode, or attach against a pre-deployed cluster) by changing one constant — see [Adapters](#adapters) for the matrix, and [`docs/attach-mode.md`](docs/attach-mode.md) for the pre-deployed-cluster walkthrough.
+> The example above wires the **Docker** adapter. The same `env.ts` switches to the in-memory simulator adapter, to Kubernetes (deploy mode, or attach against a pre-deployed cluster), or to Docker Compose attach by changing one constant — see [Adapters](#adapters) for the matrix, and [`docs/attach-mode.md`](docs/attach-mode.md) for the pre-deployed-cluster walkthrough.
 
 ## Why this matters
 
@@ -218,6 +220,8 @@ Engineering teams that:
 | Config files referencing resolved ports | docker-compose templating limits | TypeScript strings, mount-as-content (tmpfile bind mounts) |
 | Quantitative SLA assertions on real traffic | Load-test in a separate suite | `expect(stats.p95).toBeLessThanOrEqual(500)` in the integration suite |
 | Smoke-test against a pre-deployed staging/UAT cluster | Maintain a parallel test-only env, or run e2e tests by hand | `SPECULUM_ADAPTER=k8s-attach` + a developer-owned derive script over your Helm/Terraform output ([walkthrough](docs/attach-mode.md)) |
+| Smoke-test against an already-running Docker Compose stack | Separate test stack, or duplicate compose files | `SPECULUM_ADAPTER=docker-attach` — discovers containers by label; non-destructive by default ([D-025](docs/decisions.md#d-025), [D-026](docs/decisions.md#d-026)) |
+| See where slow provisioning time goes | A silent multi-minute hang during image pull / readiness wait | Opt-in observer stream — typed `image.pull_progress`, `probe.attempt`, per-phase `environment.*` timing ([D-024](docs/decisions.md#d-024-framework-lifecycle-telemetry-via-an-opt-in-observer-stream)) |
 
 ## Adapters
 
@@ -225,17 +229,19 @@ The Adapter is Speculum's substrate seam (D-003). The same test suite runs again
 
 | Adapter | Substrate | Use case |
 |---|---|---|
-| `createDockerAdapter` | Real Docker containers via `dockerode` | High-trust integration; default |
+| `createDockerAdapter` | Real Docker containers via `dockerode` | High-trust integration; default (`mode: "deploy"`) |
+| `createDockerAdapter({ mode: "attach", project })` | Pre-running Docker Compose stack — containers discovered via `com.docker.compose.project`/`.service` labels. Per-Binding `compose.attach` overrides for non-convention names; opt-in stop/start chaos via `allowChaos: true` ([D-025](docs/decisions.md#d-025), [D-026](docs/decisions.md#d-026)) | Smoke / contract tests against an existing Compose stack; **refuses writes by default** |
 | `createInMemoryAdapter` | In-process simulators (factory registry) | Fast inner loop; CI; no daemon needed |
 | `createK8sAdapter({ mode: "deploy" })` | Pods + ConfigMaps + per-Pod Services via `kubectl` | Pre-prod / staging integration; cluster-native parity |
 | `createK8sAdapter({ mode: "attach" })` | Pre-deployed workloads (Helm / Terraform / kustomize) discovered via Service. Per-Binding `adapter.k8s.attach` overrides for non-convention names; opt-in real chaos via `kubectl scale` ([D-022](docs/decisions.md#d-022-adapter-specific-binding-config-via-typescript-declaration-merging), [D-023](docs/decisions.md#d-023-attach-mode-chaos-via-kubectl-scale-against-a-named-deployment-opt-in), walkthrough: [`docs/attach-mode.md`](docs/attach-mode.md)) | Smoke / contract tests against an existing cluster; **refuses writes by default** |
 
-The `tests/petstore-example/` SLA suite (15 tests including chaos failover and p95 latency assertions) passes against **all three** substrates, and across both Kubernetes modes (deploy + attach). Switch via `SPECULUM_ADAPTER=docker|memory|k8s|k8s-attach`.
+The `tests/petstore-example/` SLA suite (15 tests including chaos failover and p95 latency assertions) passes against **all five** substrates. Switch via `SPECULUM_ADAPTER=docker|docker-attach|memory|k8s|k8s-attach`.
 
 | Adapter | Suite time |
 |---|---|
 | in-memory | 0.75s |
 | docker | 10.3s |
+| docker-attach (Compose) | 10.8s |
 | k8s deploy (OrbStack) | 16.4s |
 | k8s attach (OrbStack) | 15.2s |
 
@@ -247,13 +253,43 @@ The `tests/petstore-example/` SLA suite (15 tests including chaos failover and p
 
 **Does it replace testcontainers?** Different goals — see the comparison above. If your need is "spin up a Postgres for one test and tear it down," testcontainers is simpler. If you need contract-typed multi-component topologies that run identically on a simulator and on real infrastructure, Speculum is the shape.
 
+**Why is provisioning slow — how do I see what it's doing?** Pass an `observer` when wiring the harness. Speculum ships a built-in reporter; gate it behind an env var so local runs and CI opt in explicitly:
+
+```ts
+import { createConsoleReporter } from "@expelledboy/speculum";
+
+const shared = createSharedEnvs(registry, {
+  adapter, stateDir: ".speculum-state", mode: "start",
+  observer: process.env.SPECULUM_OBSERVER ? createConsoleReporter() : undefined,
+});
+```
+
+`createConsoleReporter()` renders the framework-lifecycle stream as readable stderr lines — substrate connect, image pull (a live progress bar per Docker layer on a TTY), the readiness-probe phase, and per-phase timing:
+
+```
+speculum  ·  environment starting · 2 component(s)
+speculum  ✓  substrate   connected · 0ms
+speculum  ·  petstore    image pulling · …/petstore-sla:latest…
+speculum  ·  petstore    image ▕████████████▏ 100%
+speculum  ·  petstore    image pulled · 8.4s
+speculum  ✗  petstore    probe attempt 3 · ECONNREFUSED · 2.1s
+speculum  ✓  petstore    ready · 1/2 · 11.0s
+speculum  ✓  environment ready · 14.7s
+```
+
+The stream is also yours to consume directly — pass any `(e: ObserverEvent) => void` for CI annotations or timing dumps. It is distinct from the per-component `events` bus (that one is your *system under test*; this one is the *harness itself*). Opt-in; zero cost when omitted. A throwing reporter is isolated and never breaks provisioning.
+
+> A custom readiness `check()` that returns `false` shows the generic `custom probe returned false`. To see *which* sub-check failed, **throw a tagged error** from `check()` instead — `throw { kind: "zero_ping_failed" }` — and that `kind` appears on the `probe attempt` line. A `check()` that blocks for a long time before returning is shown only as `probe running …` until it resolves; break long work into fast polls that return `false` if you want per-attempt visibility.
+
+See [D-024](docs/decisions.md#d-024-framework-lifecycle-telemetry-via-an-opt-in-observer-stream).
+
 **Linux support?** Yes for the K8s adapter (kubectl shellout — anywhere kubectl works). The Docker adapter works on Linux too; Bindings that use `host.docker.internal` for cross-container traffic need that DNS name configured (`--add-host=host.docker.internal:host-gateway`).
 
 ## Status
 
 **0.1.0 — developer preview.** Semver below 1.0 means minor versions may include breaking changes. The Blueprint / Binding / Adapter shape is stable; specific adapter configs may evolve.
 
-Same 15-test SLA suite green across four adapter modes (in-memory, Docker, K8s deploy, K8s attach against a pre-deployed cluster). 15/15 in each. Plus 89/89 core harness self-tests; 13/13 K8s attach tests (denylist + integration including rolling-restart survivability and override-rescues-non-convention-name). Bun-native development; library code is portable to Node consumers. ~3k LoC src, ~2.5k LoC tests. Runtime deps: `zod`, `dockerode`. The K8s adapter uses `kubectl` as a subprocess (D-019) — no Kubernetes client library is taken as a dependency.
+Same 15-test SLA suite green across five adapter modes (in-memory, Docker, Docker Compose attach, K8s deploy, K8s attach against a pre-deployed cluster). 15/15 in each. Plus 106/106 core harness self-tests; 13/13 K8s attach tests (denylist + integration including rolling-restart survivability and override-rescues-non-convention-name). Bun-native development; library code is portable to Node consumers. ~3k LoC src, ~2.5k LoC tests. Runtime deps: `zod`, `dockerode`. The K8s adapter uses `kubectl` as a subprocess (D-019) — no Kubernetes client library is taken as a dependency.
 
 ## Prerequisites
 
@@ -268,10 +304,14 @@ Same 15-test SLA suite green across four adapter modes (in-memory, Docker, K8s d
 # One-time: build the petstore + redis-configurable test images
 just build-test-images
 
-# Quad-adapter SLA suite
-SPECULUM_ADAPTER=docker bun test tests/petstore-example   # real Docker
-SPECULUM_ADAPTER=memory bun test tests/petstore-example   # in-process simulators
-SPECULUM_ADAPTER=k8s    bun test tests/petstore-example   # real Kubernetes (deploy mode)
+# Five-adapter SLA suite
+SPECULUM_ADAPTER=docker        bun test tests/petstore-example   # real Docker
+SPECULUM_ADAPTER=memory        bun test tests/petstore-example   # in-process simulators
+SPECULUM_ADAPTER=k8s           bun test tests/petstore-example   # real Kubernetes (deploy mode)
+
+# Attach mode against a pre-running Compose stack — brings the stack up, derives
+# override config from the Compose file, runs the suite, tears down on exit.
+just test-petstore-docker-attach
 
 # Attach mode against a pre-deployed cluster — deploys fixtures, derives
 # override config from the YAML, runs the suite, tears down on exit.

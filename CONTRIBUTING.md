@@ -41,6 +41,8 @@ just clean-containers
 
 `bun test` runs all files in a single process. `bunfig.toml` registers `tests/preload.ts` as a preload script; that file's top-level `afterAll` (from `bun:test`) fires once after the entire run and calls `shared.stopAll()`. The harness stops cached runtimes, then reconnects briefly to force-clean any session-labelled stragglers, then disconnects. No orphan containers remain between runs.
 
+**Docker Compose attach mode is non-destructive and requires manual teardown.** When running `SPECULUM_ADAPTER=docker-attach`, Speculum never removes the Compose stack's containers — they must be stopped with `docker compose down` when you're done. `just clean-containers` will **not** catch Compose containers because they lack the `speculum=1` label that the cleanup filter targets.
+
 If you wire your own integration suite for a Speculum-based project, you'll need the same pattern:
 
 ```ts
@@ -115,6 +117,8 @@ src/                    Library source
   adapter.ts            Adapter SPI (7 methods) + StartSpec
   metadata.ts           Cross-process JSON snapshot schema
   orchestrator.ts       startEnvironment / attachEnvironment + chaos
+  observer.ts           Framework lifecycle event stream (D-024)
+  reporter.ts           createConsoleReporter — built-in stream consumer
   runtime.ts            Runtime<E> + ChaosControls<E>
   shared.ts             createSharedEnvs — atomic file claim
   adapters/
@@ -122,20 +126,24 @@ src/                    Library source
     memory.ts           Factory-registry in-process adapter
     kubernetes.ts       K8s adapter (deploy + attach modes), reconnection layer
     kubectl.ts          kubectl subprocess wrapper (D-019)
-  index.ts, index.d.ts  Public surface
+  index.ts              Public surface (.d.ts emitted by tsc at build)
 
 tests/
   preload.ts            bun:test global setup + teardown (afterAll → shared.stopAll)
   core/                 Harness self-tests (in-memory adapter)
   fakes/                Reusable in-process simulators for Blueprints
-  petstore-example/     End-to-end SLA suite (runs across all four adapters)
+  petstore-example/     End-to-end SLA suite (runs across all five adapters)
   support/containers/   Dockerfiles for the test images
+  support/k8s/
+    petstore-attach/    K8s manifests for the k8s-attach fixture topology
+  support/compose/
+    petstore-attach/    Docker Compose stack for the docker-attach fixture topology
 
 docs/
   axioms.md             The seven forces — contract-derived constraints
   decisions.md          Append-only ADRs
   design.md             Architecture map, concept relationships, type flows
-  attach-mode.md        Walkthrough for k8s-attach against a pre-deployed cluster
+  attach-mode.md        Walkthrough for attach mode against K8s clusters and Docker Compose stacks
   k8s-rbac.md           RBAC requirements + cluster setup for the K8s adapter
 
 bunfig.toml             Registers tests/preload.ts as the test preload

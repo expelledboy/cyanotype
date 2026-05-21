@@ -35,6 +35,7 @@ import {
   type AdapterConfig,
 } from "../../src/index";
 import { K8sAdapterConfigSchema } from "../../src/adapters/kubernetes";
+import { ComposeAdapterConfigSchema } from "../../src/adapters/docker";
 
 // Pinned host ports — see header.
 const PETSTORE_PORTS = { one: 38081, two: 38082, three: 38083 } as const;
@@ -47,9 +48,12 @@ const DOCKER_HOST_DNS = "host.docker.internal";
 // K8s mode: cross-component traffic uses Service DNS (D-020) on the
 // container port. Docker/memory mode: host.docker.internal + pinned host ports.
 // k8s-attach: pre-deployed workloads, env vars baked into Deployment manifests.
+// docker-attach: pre-deployed compose stack; components reached via published
+//   host ports (same as docker deploy mode).
 const ADAPTER = process.env.SPECULUM_ADAPTER ?? "docker";
 const IS_K8S = ADAPTER === "k8s";
 const IS_K8S_ATTACH = ADAPTER === "k8s-attach";
+const IS_DOCKER_ATTACH = ADAPTER === "docker-attach";
 
 const EXPECTED_KEYS = ["petstore.one","petstore.two","petstore.three","redis.primary","redis.replica","nginx"] as const;
 const loadDerived = (): Record<string, AdapterConfig> => {
@@ -66,8 +70,27 @@ const loadDerived = (): Record<string, AdapterConfig> => {
   if (missing.length > 0) throw { kind: "derived_json_missing_keys", missing };
   return out;
 };
-const derived: Record<string, AdapterConfig> = IS_K8S_ATTACH ? loadDerived() : {};
-const adapterFor = (key: string): AdapterConfig | undefined => IS_K8S_ATTACH ? derived[key] : undefined;
+const loadDerivedCompose = (): Record<string, AdapterConfig> => {
+  const p = join(import.meta.dir, "derived-compose.json");
+  if (!existsSync(p)) throw { kind: "derived_json_missing", path: p };
+  const parsed = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
+  const out: Record<string, AdapterConfig> = {};
+  const missing: string[] = [];
+  for (const k of EXPECTED_KEYS) {
+    const entry = parsed[k];
+    if (!entry) { missing.push(k); continue; }
+    out[k] = ComposeAdapterConfigSchema.parse(entry) as AdapterConfig;
+  }
+  if (missing.length > 0) throw { kind: "derived_json_missing_keys", missing };
+  return out;
+};
+const derived: Record<string, AdapterConfig> = IS_K8S_ATTACH
+  ? loadDerived()
+  : IS_DOCKER_ATTACH
+  ? loadDerivedCompose()
+  : {};
+const adapterFor = (key: string): AdapterConfig | undefined =>
+  (IS_K8S_ATTACH || IS_DOCKER_ATTACH) ? derived[key] : undefined;
 const REDIS_PRIMARY_DNS  = IS_K8S ? "redis-primary" : DOCKER_HOST_DNS;
 const REDIS_REPLICA_DNS  = IS_K8S ? "redis-replica" : DOCKER_HOST_DNS;
 const REDIS_PRIMARY_WIRE_PORT = IS_K8S ? 6379 : 36379;

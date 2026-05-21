@@ -26,8 +26,8 @@
 
 - **File LoC: typical ~200, redesign before 400.** Most files are one concept and should fit in 200 lines. IO-procedural code (the orchestrator, the Docker adapter) is allowed to be larger when splitting would be artificial separation of cohesive logic — but if a file is approaching 400, the design is probably wrong.
 - **Whole-project budget: ~2500 LoC of source.** If the project is heading past 3000, a concept is missing — stop and find it before adding more.
-- **Runtime values live in the same file as their types** when natural (e.g. `EventBus<Cat>` type and `createEventBus()` value both in `src/events.ts`). The split into separate value/type files is reserved for the public surface (`index.ts` / `index.d.ts`).
-- **`src/index.d.ts` is the public type surface; `src/index.ts` is the public value surface.** Add to either only when something is truly user-facing.
+- **Runtime values live in the same file as their types** when natural (e.g. `EventBus<Cat>` type and `createEventBus()` value both in `src/events.ts`).
+- **`src/index.ts` is the public surface** — it re-exports both values and types. The matching `.d.ts` is emitted by `tsc` at build time; there is no hand-written `index.d.ts`. Add an export only when something is truly user-facing.
 
 ## Tests
 

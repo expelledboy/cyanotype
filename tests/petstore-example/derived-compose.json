@@ -1,0 +1,56 @@
+{
+  "redis.primary": {
+    "compose": {
+      "attach": {
+        "service": "cache-leader",
+        "port": 6379,
+        "allowChaos": true
+      }
+    }
+  },
+  "redis.replica": {
+    "compose": {
+      "attach": {
+        "service": "cache-follower",
+        "port": 6379,
+        "allowChaos": true
+      }
+    }
+  },
+  "petstore.one": {
+    "compose": {
+      "attach": {
+        "service": "pet-svc-1",
+        "port": 8080,
+        "allowChaos": true
+      }
+    }
+  },
+  "petstore.two": {
+    "compose": {
+      "attach": {
+        "service": "pet-svc-2",
+        "port": 8080,
+        "allowChaos": true
+      }
+    }
+  },
+  "petstore.three": {
+    "compose": {
+      "attach": {
+        "service": "pet-svc-3",
+        "port": 8080,
+        "allowChaos": true
+      }
+    }
+  },
+  "nginx": {
+    "compose": {
+      "attach": {
+        "service": "front-door",
+        "port": 8080,
+        "allowChaos": true
+      }
+    }
+  }
+}

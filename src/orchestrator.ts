@@ -32,11 +32,30 @@ import { createHelpers } from "./helpers.js";
 import { createHttpClient } from "./protocol.js";
 import { runProbe } from "./probe.js";
 import type { EnvironmentMetadata, SlotSnapshot, ComponentSnapshot } from "./metadata.js";
+import type { Observer } from "./observer.js";
+import { createEmitter } from "./observer.js";
 
 export type OrchestratorOptions = {
   readonly adapter: Adapter;
   readonly sessionId: string;
   readonly envKey: string;
+  /**
+   * Framework-lifecycle observer (`observer.ts`). Receives substrate /
+   * image-pull / container / probe / environment / chaos telemetry. Opt-in:
+   * omitted = zero cost, silent (today's behaviour).
+   */
+  readonly observer?: Observer;
+};
+
+type Emitter = ReturnType<typeof createEmitter>;
+
+const countBindings = (env: Environment): number => {
+  let n = 0;
+  for (const slot of Object.values(env)) {
+    if (isSingleBinding(slot)) n += 1;
+    else n += Object.keys(slot as Record<string, unknown>).length;
+  }
+  return n;
 };
 
 export type AttachSnapshot = {
@@ -172,8 +191,25 @@ export const startEnvironment = async <E extends Environment>(
   env: E,
   opts: OrchestratorOptions,
 ): Promise<Runtime<E>> => {
-  await opts.adapter.connect();
+  const emitter = createEmitter(opts.observer);
+  const rootEmit = emitter.scope({ adapter: opts.adapter.name, envKey: opts.envKey });
+  const envStart = Date.now();
+  rootEmit({ type: "environment.starting", componentCount: countBindings(env) });
+
+  const connectStart = Date.now();
+  rootEmit({ type: "substrate.connecting" });
+  try {
+    await opts.adapter.connect();
+  } catch (e) {
+    rootEmit({ type: "substrate.connect_failed", error: e });
+    rootEmit({ type: "environment.failed", phase: "connect", error: e });
+    throw e;
+  }
+  rootEmit({ type: "substrate.connected", latencyMs: Date.now() - connectStart });
+
   const components = new Map<string, ComponentState>();
+  const total = countBindings(env);
+  let done = 0;
 
   const buildSpec = (componentName: string, instanceId: string | undefined, binding: AnyBinding): StartSpec => ({
     image: binding.image,
@@ -197,23 +233,40 @@ export const startEnvironment = async <E extends Environment>(
     instanceId: string | undefined,
     binding: AnyBinding,
   ): Promise<ComponentState> => {
+    const compEmit = emitter.scope({
+      adapter: opts.adapter.name, envKey: opts.envKey,
+      component: componentName, instance: instanceId,
+    });
+    const compStart = Date.now();
     const spec = buildSpec(componentName, instanceId, binding);
-    const { containerId, ports } = await opts.adapter.start(spec);
+    const { containerId, ports } = await opts.adapter.start(spec, compEmit);
     const state = buildComponentRuntime(opts.adapter, componentName, instanceId, binding, containerId, ports);
-    if (binding.blueprint.readiness) await runProbe(binding.blueprint.readiness, state.interface);
+    if (binding.blueprint.readiness) {
+      await runProbe(binding.blueprint.readiness, state.interface, undefined, compEmit);
+    }
     finalizeApi(state);
     components.set(stateKey(componentName, instanceId), state);
+    compEmit({
+      type: "environment.component_ready",
+      done: (done += 1), total, durationMs: Date.now() - compStart,
+    });
     return state;
   };
 
-  for (const [name, slot] of Object.entries(env)) {
-    if (isSingleBinding(slot)) {
-      await startOne(name, undefined, slot);
-    } else {
-      const entries = Object.entries(slot as Record<string, AnyBinding>);
-      await Promise.all(entries.map(([instanceId, binding]) => startOne(name, instanceId, binding)));
+  try {
+    for (const [name, slot] of Object.entries(env)) {
+      if (isSingleBinding(slot)) {
+        await startOne(name, undefined, slot);
+      } else {
+        const entries = Object.entries(slot as Record<string, AnyBinding>);
+        await Promise.all(entries.map(([instanceId, binding]) => startOne(name, instanceId, binding)));
+      }
     }
+  } catch (e) {
+    rootEmit({ type: "environment.failed", phase: "start", error: e });
+    throw e;
   }
+  rootEmit({ type: "environment.ready", durationMs: Date.now() - envStart });
 
   const resolveState = (name: string, instance?: string): ComponentState => {
     const key = stateKey(name, instance);
@@ -222,12 +275,19 @@ export const startEnvironment = async <E extends Environment>(
     return s;
   };
 
+  const chaosScope = (name: string, instance?: string) =>
+    emitter.scope({ adapter: opts.adapter.name, envKey: opts.envKey, component: name, instance });
+
   const chaosStop = async (name: string, instance?: string): Promise<void> => {
     const s = resolveState(name, instance);
     if (s.status === "stopped") return;
+    const chaosEmit = chaosScope(name, instance);
+    chaosEmit({ type: "chaos.stopping" });
     s.signal.abort();
     const id = s.containerId;
+    chaosEmit({ type: "container.stopping", containerId: id });
     try { await opts.adapter.stop(id); } catch (e) { console.error(e); }
+    chaosEmit({ type: "container.stopped", containerId: id });
     s.containerId = "";
     s.status = "stopped";
 
@@ -235,7 +295,10 @@ export const startEnvironment = async <E extends Environment>(
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
       try {
-        if (!(await opts.adapter.exists(id))) return;
+        if (!(await opts.adapter.exists(id))) {
+          chaosEmit({ type: "chaos.stopped" });
+          return;
+        }
       } catch { /* transient — keep polling */ }
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -245,8 +308,10 @@ export const startEnvironment = async <E extends Environment>(
   const chaosStart = async (name: string, instance?: string): Promise<void> => {
     const s = resolveState(name, instance);
     if (s.status !== "stopped") throw { kind: "invalid_chaos", reason: "not_stopped" };
+    const chaosEmit = chaosScope(name, instance);
+    chaosEmit({ type: "chaos.starting" });
     const spec = buildSpec(s.componentName, s.instanceId, s.binding);
-    const { containerId, ports } = await opts.adapter.start(spec);
+    const { containerId, ports } = await opts.adapter.start(spec, chaosEmit);
     s.containerId = containerId;
     s.ports = ports;
     s.interface = buildIface(s.binding, ports);
@@ -262,13 +327,16 @@ export const startEnvironment = async <E extends Environment>(
         console.error(`[orchestrator] log task failed for ${s.componentName}:`, e);
       }
     })();
-    if (s.binding.blueprint.readiness) await runProbe(s.binding.blueprint.readiness, s.interface);
+    if (s.binding.blueprint.readiness) {
+      await runProbe(s.binding.blueprint.readiness, s.interface, undefined, chaosEmit);
+    }
     s.api = buildApi(s.binding, s.interface);
     const live = s.running as unknown as Record<string, unknown>;
     live.ports = ports;
     live.interface = s.interface;
     live.api = s.api;
     s.status = "running";
+    chaosEmit({ type: "chaos.started" });
   };
 
   const chaosRestart = async (name: string, instance?: string): Promise<void> => {
@@ -276,7 +344,7 @@ export const startEnvironment = async <E extends Environment>(
     await chaosStart(name, instance);
   };
 
-  return finalizeRuntime(env, components, opts, chaosStop, chaosStart, chaosRestart, false);
+  return finalizeRuntime(env, components, opts, emitter, chaosStop, chaosStart, chaosRestart, false);
 };
 
 export const attachEnvironment = async <E extends Environment>(
@@ -284,7 +352,21 @@ export const attachEnvironment = async <E extends Environment>(
   opts: OrchestratorOptions,
   snapshot: AttachSnapshot,
 ): Promise<Runtime<E>> => {
-  await opts.adapter.connect();
+  const emitter = createEmitter(opts.observer);
+  const rootEmit = emitter.scope({ adapter: opts.adapter.name, envKey: opts.envKey });
+  const envStart = Date.now();
+  rootEmit({ type: "environment.starting", componentCount: countBindings(env) });
+
+  const connectStart = Date.now();
+  rootEmit({ type: "substrate.connecting" });
+  try {
+    await opts.adapter.connect();
+  } catch (e) {
+    rootEmit({ type: "substrate.connect_failed", error: e });
+    rootEmit({ type: "environment.failed", phase: "connect", error: e });
+    throw e;
+  }
+  rootEmit({ type: "substrate.connected", latencyMs: Date.now() - connectStart });
   const components = new Map<string, ComponentState>();
 
   const attachOne = async (
@@ -303,33 +385,40 @@ export const attachEnvironment = async <E extends Environment>(
     components.set(stateKey(componentName, instanceId), state);
   };
 
-  for (const [componentName, slotSnap] of Object.entries(snapshot.components)) {
-    const slot = env[componentName];
-    if (slot === undefined) throw { kind: "snapshot_unknown_component", componentName };
-    if (slotSnap.kind === "single") {
-      if (!isSingleBinding(slot)) throw { kind: "snapshot_shape_mismatch", componentName };
-      await attachOne(componentName, undefined, slot, slotSnap.snapshot);
-    } else {
-      if (isSingleBinding(slot)) throw { kind: "snapshot_shape_mismatch", componentName };
-      const map = slot as Record<string, AnyBinding>;
-      for (const [instanceId, compSnap] of Object.entries(slotSnap.instances)) {
-        const binding = map[instanceId];
-        if (!binding) throw { kind: "snapshot_unknown_instance", componentName, instanceId };
-        await attachOne(componentName, instanceId, binding, compSnap);
+  try {
+    for (const [componentName, slotSnap] of Object.entries(snapshot.components)) {
+      const slot = env[componentName];
+      if (slot === undefined) throw { kind: "snapshot_unknown_component", componentName };
+      if (slotSnap.kind === "single") {
+        if (!isSingleBinding(slot)) throw { kind: "snapshot_shape_mismatch", componentName };
+        await attachOne(componentName, undefined, slot, slotSnap.snapshot);
+      } else {
+        if (isSingleBinding(slot)) throw { kind: "snapshot_shape_mismatch", componentName };
+        const map = slot as Record<string, AnyBinding>;
+        for (const [instanceId, compSnap] of Object.entries(slotSnap.instances)) {
+          const binding = map[instanceId];
+          if (!binding) throw { kind: "snapshot_unknown_instance", componentName, instanceId };
+          await attachOne(componentName, instanceId, binding, compSnap);
+        }
       }
     }
+  } catch (e) {
+    rootEmit({ type: "environment.failed", phase: "attach", error: e });
+    throw e;
   }
+  rootEmit({ type: "environment.ready", durationMs: Date.now() - envStart });
 
   const notSupported = async (): Promise<void> => {
     throw { kind: "chaos_not_supported_in_attach" };
   };
-  return finalizeRuntime(env, components, opts, notSupported, notSupported, notSupported, true);
+  return finalizeRuntime(env, components, opts, emitter, notSupported, notSupported, notSupported, true);
 };
 
 const finalizeRuntime = <E extends Environment>(
   env: E,
   components: Map<string, ComponentState>,
   opts: OrchestratorOptions,
+  emitter: Emitter,
   chaosStop: (name: string, instance?: string) => Promise<void>,
   chaosStart: (name: string, instance?: string) => Promise<void>,
   chaosRestart: (name: string, instance?: string) => Promise<void>,
@@ -379,8 +468,14 @@ const finalizeRuntime = <E extends Environment>(
     for (const c of components.values()) {
       if (c.status === "stopped") continue;
       c.signal.abort();
-      if (!detachOnly) {
-        try { if (c.containerId) await opts.adapter.stop(c.containerId); } catch (e) { console.error(e); }
+      if (!detachOnly && c.containerId) {
+        const stopEmit = emitter.scope({
+          adapter: opts.adapter.name, envKey: opts.envKey,
+          component: c.componentName, instance: c.instanceId,
+        });
+        stopEmit({ type: "container.stopping", containerId: c.containerId });
+        try { await opts.adapter.stop(c.containerId); } catch (e) { console.error(e); }
+        stopEmit({ type: "container.stopped", containerId: c.containerId });
       }
       c.status = "stopped";
     }

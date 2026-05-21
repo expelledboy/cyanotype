@@ -22,8 +22,9 @@ export { runProbe } from "./probe.js";
 export { createHelpers } from "./helpers.js";
 export { startEnvironment, attachEnvironment } from "./orchestrator.js";
 export { createInMemoryAdapter } from "./adapters/memory.js";
-export { createDockerAdapter } from "./adapters/docker.js";
+export { createDockerAdapter, ComposeAdapterConfigSchema } from "./adapters/docker.js";
 export { createK8sAdapter, K8sAdapterConfigSchema } from "./adapters/kubernetes.js";
+export { createConsoleReporter } from "./reporter.js";
 
 // Re-export types so direct `import { type Blueprint } from "speculum"` works
 // without going through index.d.ts. The canonical type contract is in
@@ -49,6 +50,9 @@ export type { EnvironmentMetadata, SlotSnapshot, ComponentSnapshot } from "./met
 export type { Runtime, Running, ComponentRuntime, ChaosControls, RuntimeSnapshot } from "./runtime.js";
 export type { SharedMode, SharedOptions, SharedHarness } from "./shared.js";
 export type { OrchestratorOptions, AttachSnapshot } from "./orchestrator.js";
+export type { Observer, ObserverEvent, ObserverEventData, ObserverEnvelope } from "./observer.js";
+export type { ConsoleReporterOptions } from "./reporter.js";
 export type { FakeFactory, FakeHandle, InMemoryAdapterOptions } from "./adapters/memory.js";
 export type { K8sAdapterOptions } from "./adapters/kubernetes.js";
 export type { KubectlMode } from "./adapters/kubectl.js";
+export type { DockerAdapterOptions, DockerMode } from "./adapters/docker.js";
