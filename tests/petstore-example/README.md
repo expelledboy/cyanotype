@@ -24,10 +24,22 @@ Each suite header maps explicitly to entries in [`docs/axioms.md`](../../docs/ax
 
 ## Running
 
-The suites use the real Docker adapter. Build the container images once before running:
+The suites use the real Docker adapter by default. Build the container images once before running:
 
 ```sh
 just build-test-images
 ```
 
 Then `bun test tests/petstore-example/` (Mac/Windows Docker Desktop only — petstore reaches the host-bound redis via `host.docker.internal`).
+
+## Substrates
+
+All five `SPECULUM_ADAPTER` values are supported. Prerequisites per substrate:
+
+| Adapter | Prerequisite |
+|---|---|
+| `docker` | Docker running; images built (`just build-test-images`). |
+| `docker-attach` | Compose stack up and `derived-compose.json` generated — `just test-petstore-docker-attach` handles both. |
+| `memory` | None — runs entirely in-process with no Docker images required. |
+| `k8s` | OrbStack (or another cluster) — `just test-petstore-k8s` builds, loads images, and deploys automatically. |
+| `k8s-attach` | Pre-deployed cluster with the fixture stack; `just test-petstore-k8s-attach` deploys, derives, and tears down automatically. |

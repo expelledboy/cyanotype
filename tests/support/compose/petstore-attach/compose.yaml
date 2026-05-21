@@ -1,0 +1,119 @@
+# Docker Compose — petstore-attach demo stack.
+#
+# Service names are deliberately OFF-CONVENTION (cache-leader, cache-follower,
+# pet-svc-1/2/3, front-door) to exercise the compose.attach.service override
+# path in env.ts/derived-compose.json — mirroring the intent of the K8s demo.
+#
+# All services publish their ports to the host so the Speculum test runner
+# (which runs outside the Docker network) can reach them via 127.0.0.1.
+#
+# Project name: speculum-petstore-attach
+# Bring up with:
+#   docker compose -p speculum-petstore-attach \
+#     -f tests/support/compose/petstore-attach/compose.yaml up -d
+
+name: speculum-petstore-attach
+
+services:
+  cache-leader:
+    image: speculum/redis-configurable:latest
+    labels:
+      speculum.component: redis
+      speculum.instance: primary
+    command: ["redis-server", "/etc/redis/redis.conf"]
+    volumes:
+      - type: bind
+        source: ./cache-leader.conf
+        target: /etc/redis/redis.conf
+        read_only: true
+    ports:
+      - "36379:6379"
+
+  cache-follower:
+    image: speculum/redis-configurable:latest
+    labels:
+      speculum.component: redis
+      speculum.instance: replica
+    command: ["redis-server", "/etc/redis/redis.conf"]
+    volumes:
+      - type: bind
+        source: ./cache-follower.conf
+        target: /etc/redis/redis.conf
+        read_only: true
+    ports:
+      - "36380:6379"
+    depends_on:
+      - cache-leader
+
+  pet-svc-1:
+    image: speculum/petstore-sla:latest
+    labels:
+      speculum.component: petstore
+      speculum.instance: one
+    environment:
+      INSTANCE_ID: one
+      PORT: "8080"
+      BASE_PATH: /v1
+      REDIS_PRIMARY_HOST: cache-leader
+      REDIS_PRIMARY_PORT: "6379"
+      REDIS_REPLICA_HOST: cache-follower
+      REDIS_REPLICA_PORT: "6379"
+    ports:
+      - "38081:8080"
+    depends_on:
+      - cache-leader
+      - cache-follower
+
+  pet-svc-2:
+    image: speculum/petstore-sla:latest
+    labels:
+      speculum.component: petstore
+      speculum.instance: two
+    environment:
+      INSTANCE_ID: two
+      PORT: "8080"
+      BASE_PATH: /v1
+      REDIS_PRIMARY_HOST: cache-leader
+      REDIS_PRIMARY_PORT: "6379"
+      REDIS_REPLICA_HOST: cache-follower
+      REDIS_REPLICA_PORT: "6379"
+    ports:
+      - "38082:8080"
+    depends_on:
+      - cache-leader
+      - cache-follower
+
+  pet-svc-3:
+    image: speculum/petstore-sla:latest
+    labels:
+      speculum.component: petstore
+      speculum.instance: three
+    environment:
+      INSTANCE_ID: three
+      PORT: "8080"
+      BASE_PATH: /v1
+      REDIS_PRIMARY_HOST: cache-leader
+      REDIS_PRIMARY_PORT: "6379"
+      REDIS_REPLICA_HOST: cache-follower
+      REDIS_REPLICA_PORT: "6379"
+    ports:
+      - "38083:8080"
+    depends_on:
+      - cache-leader
+      - cache-follower
+
+  front-door:
+    image: nginx:alpine
+    labels:
+      speculum.component: nginx
+    volumes:
+      - type: bind
+        source: ./front-door.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+    ports:
+      - "38080:8080"
+    depends_on:
+      - pet-svc-1
+      - pet-svc-2
+      - pet-svc-3

@@ -30,6 +30,7 @@
                        │    Adapter    │   (substrate seam — B1)
                        │  Docker / K8s │
                        │  / in-memory  │
+                       │  / Compose    │
                        └───────────────┘
 ```
 
@@ -104,12 +105,12 @@ Six user-facing entities. Each maps to a TypeScript type. Inference helpers (`de
 │  decided. Bindings declare image strings; adapters interpret.   │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
-       ┌──────────────────┼──────────────────┐
-       ▼                  ▼                  ▼
-   Docker             Kubernetes         In-memory
-   (dockerode)        (kubectl,          (factory registry,
-                       D-019;             real ports)
-                       deploy +
+       ┌──────────────────┼──────────────────┬───────────────────┐
+       ▼                  ▼                  ▼                   ▼
+   Docker             Kubernetes         In-memory          Docker Compose
+   (dockerode,        (kubectl,          (factory registry, (dockerode,
+    deploy mode)       D-019;             real ports)        attach mode;
+                       deploy +                              D-025, D-026)
                        attach modes)
 ```
 
@@ -149,26 +150,44 @@ declare module "../adapter" {
                        allowChaos?: boolean; deployment?: string } };
   }
 }
+
+// src/adapters/docker.ts (Docker Compose attach — D-025)
+declare module "../adapter" {
+  interface AdapterConfig {
+    compose?: { attach?: { project?: string; service?: string;
+                           containerNumber?: number; port?: number;
+                           allowChaos?: boolean } };
+  }
+}
 ```
 
-Use site:
+Use sites:
 
 ```ts
+// K8s attach — override Service name + opt in to real cluster chaos
 bind(petstoreBlueprint, {
   image: "...", version: "...", config: {...}, env: {...}, ports: {...},
   adapter: { k8s: { attach: { service: "pet-svc-1", deployment: "pet-svc-1", allowChaos: true } } },
 });
+
+// Docker Compose attach — override compose project + service name, opt in to chaos
+bind(petstoreBlueprint, {
+  image: "...", version: "...", config: {...}, env: {...}, ports: {...},
+  adapter: { compose: { attach: { project: "my-stack", service: "api", allowChaos: true } } },
+});
 ```
+
+Each adapter reads its own top-level key (`spec.adapterConfig?.k8s?.attach`, `spec.adapterConfig?.compose?.attach`) and ignores the rest. The two slots never collide.
 
 Properties:
 - The core stays generic-free — `Binding<B>` already carries one variance-sensitive type parameter and adding a second was a non-starter under `strictFunctionTypes`.
 - Adapter additions are zero-cost on the core: a new adapter contributes a `declare module` block in its own file. No central registry, no enum, no switch.
 - Users importing a Binding from an adapter-aware module get the merged interface automatically.
-- The orchestrator's `buildSpec` forwards `binding.adapter` into `StartSpec.adapterConfig`; each adapter reads its own top-level key (`spec.adapterConfig?.k8s?.attach`) and ignores the rest.
+- The orchestrator's `buildSpec` forwards `binding.adapter` into `StartSpec.adapterConfig`; each adapter reads its own top-level key and ignores the rest.
 
-Adapters that consume overrides honour them per-field, falling back to convention for any unset field. The K8s attach mode demonstrates this: omit `service` to fall back to label-derived discovery, omit `namespace` to use the adapter default, set `allowChaos: true` to opt in to real cluster chaos (which then requires `deployment` — see D-023). The walkthrough is in [`attach-mode.md`](attach-mode.md).
+Adapters that consume overrides honour them per-field, falling back to convention for any unset field. The K8s attach mode demonstrates this: omit `service` to fall back to label-derived discovery, omit `namespace` to use the adapter default, set `allowChaos: true` to opt in to real cluster chaos (which then requires `deployment` — see D-023). The Docker Compose attach mode is simpler: `allowChaos: true` alone is sufficient, because the container is the chaos unit and no controller name is needed (see D-026). The K8s walkthrough is in [`attach-mode.md`](attach-mode.md).
 
-See [D-022](decisions.md#d-022-adapter-specific-binding-config-via-typescript-declaration-merging).
+See [D-022](decisions.md#d-022-adapter-specific-binding-config-via-typescript-declaration-merging), [D-025](decisions.md#d-025-docker-compose-attach-adapter--discovery-via-compose-labels--non-destructive-guard), [D-026](decisions.md#d-026-docker-compose-attach-mode-chaos--containerstopstart-as-the-lifted-verbs).
 
 ## The lifecycle
 
@@ -187,7 +206,7 @@ See [D-022](decisions.md#d-022-adapter-specific-binding-config-via-typescript-de
    ─ reserved component names (start, stop, snapshot, metadata, chaos) are rejected at construction
 
 4. User wires the harness
-   ─ pick the Adapter — Docker, Kubernetes (deploy or attach), or in-memory — this is the real-vs-fake seam
+   ─ pick the Adapter — Docker (deploy), Docker Compose (attach), Kubernetes (deploy or attach), or in-memory — this is the real-vs-fake seam
    ─ `const shared = createSharedEnvs({ "petstore-sla": env }, { adapter, stateDir, mode, getTargetEnv })`
 
 5. Test calls shared.ensure(envKey)
@@ -210,6 +229,50 @@ See [D-022](decisions.md#d-022-adapter-specific-binding-config-via-typescript-de
    ─ adapter.teardown() — label-scan stragglers from any crashed runs
    ─ adapter.disconnect() — release session resources
 ```
+
+## The observer stream (D-024)
+
+Two unrelated things are both called "events" in Speculum — keep them apart:
+
+| | `EventBus<Cat>` (D-006) | Observer stream (D-024) |
+|---|---|---|
+| Models | domain events of the system under test | framework's own lifecycle |
+| Typed by | the Blueprint's event catalog | a fixed `ObserverEvent` union |
+| Scope | per component | cross-cutting (substrate + every component) |
+| Source | container logs → `logParser` | orchestrator + adapters |
+| Consumer | tests (`events.waitFor(...)`) | a reporter (progress / CI / timing) |
+| Exists | only once a container streams logs | from `environment.starting` onward |
+
+The observer stream answers "why is provisioning slow / where did the time go".
+It is **opt-in** — pass `observer` on `OrchestratorOptions`, or on
+`SharedOptions` (`createSharedEnvs` forwards it); omitted = zero cost, silent.
+`createEmitter` stamps the envelope (`seq`, `at`, `adapter`, and the
+`component`/`instance`/`envKey` scope) centrally, so a reporter receives one
+stable total order even across concurrent component starts.
+
+```
+environment.starting
+  substrate.connecting → substrate.connected
+  per component:
+    image.resolving → (image.cache_hit | image.pull_started
+                       → image.pull_progress* → image.pulled)
+    container.creating → container.created → container.starting → container.started
+    probe.started → probe.attempt* → (probe.ready | probe.timed_out)
+    environment.component_ready
+environment.ready          (or environment.failed at any phase)
+chaos.stopping/stopped/starting/started   — on runtime.chaos.*
+```
+
+Substrate-internal events (`image.*`, `container.creating/created/starting/started`)
+flow through an optional `emit` parameter on `Adapter.start`; everything else
+the orchestrator emits directly. The SPI stays at seven methods (D-004) — `emit`
+is a trailing optional argument.
+
+A throwing reporter is isolated inside `createEmitter` — telemetry never breaks
+the thing it observes. Speculum ships one reference consumer,
+`createConsoleReporter()` (`src/reporter.ts`), which renders the stream as
+readable stderr lines (live per-layer pull bar on a TTY); pass it — or any
+`(e: ObserverEvent) => void` — as `observer`.
 
 ## How types flow
 
@@ -301,7 +364,7 @@ The `ChaosArgs<E, K>` conditional discriminates single-instance from multi-insta
 - Chaos primitives at the container level
 - Mount-as-content config injection
 - Per-Binding adapter-specific configuration via TypeScript declaration merging (D-022)
-- Attach to pre-deployed substrates with verified non-destructive guarantees, plus an opt-in for real chaos (D-018, D-022, D-023)
+- Attach to pre-deployed substrates with verified non-destructive guarantees, plus an opt-in for real chaos — Kubernetes (D-018, D-022, D-023) and Docker Compose (D-025, D-026)
 
 **What's out of scope (would require a new ADR to add):**
 

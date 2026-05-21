@@ -15,6 +15,7 @@ import type { Environment } from "./environment.js";
 import type { Runtime } from "./runtime.js";
 import type { EnvironmentMetadata } from "./metadata.js";
 import { startEnvironment, attachEnvironment, type AttachSnapshot } from "./orchestrator.js";
+import type { Observer } from "./observer.js";
 
 export type SharedMode = "start" | "attach" | "startOrAttach";
 
@@ -23,6 +24,8 @@ export type SharedOptions = {
   readonly stateDir: string;
   readonly mode?: SharedMode;
   readonly getTargetEnv?: () => string;
+  /** Framework-lifecycle observer, forwarded to the orchestrator. See `observer.ts`. */
+  readonly observer?: Observer;
 };
 
 export type SharedHarness<R extends Record<string, Environment>> = {
@@ -118,7 +121,12 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
     return null;
   };
 
-  const orchOpts = (envKey: string) => ({ adapter: options.adapter, sessionId: `${process.pid}-${Date.now()}`, envKey });
+  const orchOpts = (envKey: string) => ({
+    adapter: options.adapter,
+    sessionId: `${process.pid}-${Date.now()}`,
+    envKey,
+    ...(options.observer !== undefined ? { observer: options.observer } : {}),
+  });
 
   const doStart = async <K extends keyof R & string>(envKey: K): Promise<Runtime<R[K]>> => {
     const runtime = await startEnvironment(getEnv(envKey), orchOpts(envKey));

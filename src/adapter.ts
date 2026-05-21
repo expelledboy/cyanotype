@@ -9,7 +9,9 @@
  * Substrate seam: the Adapter is the single point in the system where
  * real-vs-fake (and Docker-vs-Kubernetes-vs-in-memory) is decided. Bindings
  * declare what to run via `image: string`; adapters interpret that string
- * against the substrate they own. The Docker adapter pulls and runs; the
+ * against the substrate they own. The Docker adapter pulls and runs in deploy
+ * mode; in attach mode it discovers and observes an already-running
+ * docker-compose project without creating or removing anything. The
  * in-memory adapter resolves the image against its factory registry.
  * Test code, Blueprints, and Bindings stay substrate-agnostic by
  * construction.
@@ -27,7 +29,14 @@
  *   - probes (declared on the Blueprint)
  *   - log parsing into typed events (the Binding's `logParser` is run by
  *     the orchestrator; the Adapter only emits raw lines via `logs()`)
+ *
+ * `start` takes an optional `emit` — the framework-lifecycle observer stream
+ * (`observer.ts`). It is the channel for substrate-internal telemetry that
+ * only the adapter can see: image pull progress, container create/start
+ * sub-steps. Absent `emit` = no observability, zero cost.
  */
+
+import type { Emit } from "./observer.js";
 
 export type Adapter = {
   readonly name: string;
@@ -44,8 +53,12 @@ export type Adapter = {
    */
   teardown(): Promise<void>;
 
-  /** Start one container. Returns the assigned container ID and resolved port map. */
-  start(spec: StartSpec): Promise<Started>;
+  /**
+   * Start one container. Returns the assigned container ID and resolved port
+   * map. `emit`, when supplied, receives substrate-internal lifecycle events
+   * (image pull progress, container provisioning sub-steps).
+   */
+  start(spec: StartSpec, emit?: Emit): Promise<Started>;
 
   /** Stop and remove one container. Idempotent: should not throw if already gone. */
   stop(containerId: string): Promise<void>;

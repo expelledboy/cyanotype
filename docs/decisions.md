@@ -27,6 +27,9 @@
 - [D-021 — Attach-mode port stability via local-port-claim + Watch-driven respawn](#d-021-attach-mode-port-stability-via-local-port-claim--watch-driven-respawn)
 - [D-022 — Adapter-specific Binding config via TypeScript declaration merging](#d-022-adapter-specific-binding-config-via-typescript-declaration-merging)
 - [D-023 — Attach-mode chaos via `kubectl scale` against a named Deployment (opt-in)](#d-023-attach-mode-chaos-via-kubectl-scale-against-a-named-deployment-opt-in)
+- [D-024 — Framework lifecycle telemetry via an opt-in observer stream](#d-024-framework-lifecycle-telemetry-via-an-opt-in-observer-stream)
+- [D-025 — Docker Compose attach adapter — discovery via compose labels + non-destructive guard](#d-025-docker-compose-attach-adapter--discovery-via-compose-labels--non-destructive-guard)
+- [D-026 — Docker Compose attach-mode chaos — `container.stop`/`start` as the lifted verbs](#d-026-docker-compose-attach-mode-chaos--containerstopstart-as-the-lifted-verbs)
 
 ---
 
@@ -419,3 +422,94 @@ The kubectl denylist (D-018) is lifted *only* for the `scale` verb, and only on 
 - `just test-petstore-k8s-attach` chains `deploy → derive → test → teardown` so cluster state is never leaked even when the suite fails. Teardown deletes the entire `speculum-petstore-attach` namespace.
 - Cross-namespace attach (D-022) still composes: the paused-attaches registry remains keyed by `${namespace}/${serviceName}` and now also carries the Deployment name and the per-binding kubectl client.
 
+
+---
+
+## D-024. Framework lifecycle telemetry via an opt-in observer stream
+
+**Context:** Speculum had exactly one notion of "event" — `EventBus<Cat>` / `logParser` (D-006): the *domain events of the system under test*, parsed from container logs, typed against a Blueprint catalog, asserted on by tests. They only exist *after* a container is up and streaming logs.
+
+There was no event layer for the framework's *own* lifecycle. Walk `startEnvironment` → `adapter.start` → `runProbe` and every slow operation is silent: `adapter.connect()` (daemon ping), `ensureImage()` (image pull — 10s–minutes), `createContainer` / `start`, `runProbe` (readiness polling — 0–30s), the per-component loop. When Docker is slow the two real culprits — **image pull** and **readiness polling** — are precisely the operations that produce zero feedback. The Docker adapter even *consumed* dockerode's layer-by-layer pull progress (`followProgress`) and discarded it. A test author provisioning a Docker environment saw a multi-minute hang with no indication of what was happening or whether it had stalled.
+
+**Decision:** Add a second, separate event channel — the **observer stream** (`src/observer.ts`) — distinct from `EventBus`:
+
+- `EventBus<Cat>` is typed per Blueprint, owned by a component, asserted on by tests. Unchanged.
+- The observer stream is cross-cutting *framework telemetry* — substrate connection, image pull, container provisioning, readiness polling, teardown, chaos — owned by the orchestrator + adapters, consumed by a *reporter* (terminal progress, CI annotations, timing dumps).
+
+Shape:
+
+- `ObserverEventData` — a discriminated union (on `type`) covering six phases: `substrate.*`, `image.*`, `container.*`, `probe.*`, `environment.*`, `chaos.*`.
+- `ObserverEvent` = `ObserverEventData` + an envelope (`seq`, `at`, `adapter`, `envKey?`, `component?`, `instance?`).
+- `Observer = (e: ObserverEvent) => void` — the consumer-facing sink, passed on `OrchestratorOptions.observer`.
+- `createEmitter(observer)` wraps a sink into scoped `Emit` functions; the envelope (including a monotonic `seq` shared across all scopes) is stamped centrally so a reporter gets one stable total order even across concurrent component starts.
+
+Threading:
+
+- The orchestrator owns the `Observer`. It emits `substrate.*`, `probe.*` (via a new optional 4th arg to `runProbe`), `environment.*`, and `chaos.*`/`container.stop*` itself.
+- Substrate-internal events that only an adapter can see — `image.*`, `container.creating/created/starting/started` — flow through a new optional `emit?: Emit` parameter on `Adapter.start`. The Docker adapter emits the full set, including throttled `image.pull_progress` lifted from dockerode's previously-discarded `followProgress` callback. The in-memory adapter emits `container.created/started` so the simulator path also renders in a reporter.
+
+**Consequences:**
+
+- **Opt-in and additive — zero cost when off.** No `observer` ⇒ `createEmitter` returns a shared no-op `Emit`. The `Adapter.start` and `runProbe` signature changes are optional trailing parameters, so every existing adapter, caller, and test compiles and behaves identically. The `Adapter` SPI stays at seven methods (D-004).
+- **The Blueprint contract is untouched.** `EventBus<Cat>` / `logParser` / the event catalog are unchanged. This is a strictly separate channel.
+- **Configuration-aware by construction.** The in-memory adapter skips `image.*` and jumps to `container.started`; Docker emits the full pull stream; K8s will add `portforward.*`. The same reporter renders all substrates, and the event vocabulary self-describes where the time went — answering "this framework runs in various stages / configurations alongside test suites".
+- **Reuses existing error shapes.** `*.failed` / `*.timed_out` events carry the same structured tagged objects already thrown (`docker_connect_failed`, `image_pull_failed`, `container_start_failed`, `probe_timeout`); near-zero new modelling.
+- **Presentation is not Speculum's job (yet).** This decision ships the *stream*, not a reporter. A default terminal progress reporter, a GitHub Actions `::group::` reporter, and a `--timing` phase-breakdown reporter are natural follow-ups that consume `ObserverEvent` without further core changes.
+- **Follow-up:** the K8s adapter currently threads the `emit` parameter (signature-compatible) but does not yet emit; wiring `image.*`, `container.*`, and K8s-specific `portforward.*` / `endpoints.*` events is a bounded next step.
+
+---
+
+## D-025. Docker Compose attach adapter — discovery via compose labels + non-destructive guard
+
+**Context:** The Docker adapter (D-013) has always owned a single deploy mode: pull an image, create a container, manage its full lifecycle. After the Kubernetes adapter gained an attach mode (D-018) — point an existing test suite at already-running cluster workloads without provisioning anything — the same pattern became desirable for Docker Compose. A user runs `docker compose up` to stand up their stack, then points the same SLA test suite at those containers without Speculum creating, pulling, or removing anything. The thesis is "same suite, five substrates": in-memory simulator, Docker deploy, Docker Compose attach, Kubernetes deploy, Kubernetes attach.
+
+**Decision:**
+
+- **Mode selection at factory time:** `createDockerAdapter({ mode: "deploy" | "attach", project?: string, ... })`. `mode` mirrors the K8s adapter's `createK8sAdapter` option. Mode is a structural property of the adapter instance — matches D-003. `Adapter.start` dispatches to a private `startAttach` path; the 7-method SPI (D-004) is unchanged.
+- **Discovery via Compose labels.** Containers are found via `dockerode.listContainers` filtered on two labels: `com.docker.compose.project=<project>` (the compose project name, defaulting to the directory name) and `com.docker.compose.service=<service>`. By convention the compose service name maps to the Speculum component by name (`speculum.component` label, with optional `--scale` suffix `<service>-<n>`). The `containerNumber` field (default 1) targets a specific scaled instance. A Binding may override any of these via `adapter: { compose: { attach: { project, service, containerNumber, port } } }` — per the D-022 declaration-merging slot.
+- **Port resolution without port-forward.** Docker Compose publishes host ports directly: the adapter reads `container.inspect().NetworkSettings.Ports["<containerPort>/tcp"][].HostPort`. No `kubectl port-forward` subprocess, no local-port-claim loop. This is stable by construction: a `docker stop`/`start` reuses the same container and its host port mapping is re-inspected on `chaos.start`.
+- **Non-destructive guard.** In attach mode the dockerode client is wrapped at one chokepoint that denies mutations. Blocked unconditionally: `createContainer`, `pull`, container `remove`. Blocked unless `allowChaos: true` (per-Binding, see D-026): `stop`, `start`, `restart`, `kill`. The wrapper also wraps container handles returned by `getContainer` — violations throw `{ kind: "attach_mode_violation", op }`. This mirrors the kubectl denylist chokepoint in D-018; the loud guarantee is enforced in the adapter, not at call sites.
+- **`logs()` and `exists()`** follow the existing Docker deploy implementation verbatim — `container.logs({ follow: true, stdout: true, stderr: true })` with demux, and `container.inspect()` exit-code check. The SPI contract is identical regardless of mode.
+- **Must-publish-ports constraint.** Services under test must declare `ports:` in their `docker-compose.yml` (not just `expose:`). `expose` makes ports reachable only within the compose network; without a host-port mapping the adapter has nothing to connect to from the test process. This is a hard requirement — `startAttach` throws `{ kind: "compose_attach_no_host_port", service, containerPort }` when no `HostPort` is found.
+- **Type machinery.** `AdapterConfig` gains a `compose?.attach?.{ project, service, containerNumber, port, allowChaos }` slot via the D-022 declaration-merging pattern. An exported `ComposeAdapterConfigSchema` Zod schema mirrors `K8sAdapterConfigSchema` for validation tooling.
+
+Three things are explicitly simpler than K8s attach (D-018, D-021):
+
+1. **No port-forward layer.** Compose publishes host ports natively; the adapter reads `HostPort` directly from the inspect result. No subprocess, no reconnect loop, no local-port-claim window.
+2. **Stable ports across stop/start.** `docker stop`/`start` reuses the same container and its port binding — no pod rescheduling, no new container ID, no need for the D-021 reconnection wrapper. `chaos.start` re-inspects `HostPort` and updates the record, but the value is typically identical.
+3. **No deployment-equivalent field.** The container itself is the chaos unit; there is no K8s `Deployment` controller to reason about. `chaos.stop` calls `container.stop`; `chaos.start` calls `container.start`. No `scale` verb, no `deployment` config field, no endpoint polling. See D-026.
+
+**Consequences:**
+- The petstore example gains a 5th mode (`SPECULUM_ADAPTER=docker-attach`) running the same 15-test SLA suite. The thesis "same suite, five substrates" holds.
+- Attach mode reads only: `listContainers` (list) + `getContainer` + `inspect` (read). No image pulls, no container creation, no network creation. Safe to run against shared dev stacks.
+- The must-publish-ports constraint is a user-facing documentation requirement, not a Speculum limitation. Stacks intended for Speculum attach mode need `ports:` on each service under test; the adapter surfaces the missing mapping as a typed error at `start` time.
+- The denylist chokepoint is unit-tested: `createContainer`, `pull`, `remove` are exercised in attach mode and asserted to throw; chaos verbs are exercised with and without `allowChaos`.
+- K8s and Docker Compose attach modes now share the same user-facing pattern (mode flag, per-Binding `adapter` override slot, non-destructive guard, `allowChaos` gate) while each adapter's internal mechanics remain appropriate to its substrate.
+
+---
+
+## D-026. Docker Compose attach-mode chaos — `container.stop`/`start` as the lifted verbs
+
+**Context:** D-018 made attach mode refuse every cluster-mutating verb by default. D-023 added an opt-in chaos path for K8s attach using `kubectl scale deployment/<name>` — a two-field opt-in (`allowChaos: true` + `deployment: "<name>"`) because the K8s controller layer separates the scale knob from the running pod. For Docker Compose the equivalent question is: what is the right chaos unit and what is the right verb?
+
+In Compose, `docker compose stop <service>` / `docker compose start <service>` are the natural verbs. But they require the compose CLI, which is a shellout. The adapter already talks to the daemon via dockerode. The container itself is the unit of disruption: `container.stop()` takes it off the network; `container.start()` brings it back. No Deployment controller exists — the container *is* the service replica. There is nothing analogous to `scale --replicas=0` because there is no controller to hold the outage; stop is the correct hold mechanism.
+
+**Decision:** Attach-mode chaos for Docker Compose is opt-in per Binding via a single field — `adapter: { compose: { attach: { allowChaos: true } } }`. No second field is required (contrast D-023's `deployment` requirement).
+
+Mechanism:
+
+- `chaos.stop(component, instance?)` calls `container.stop()` on the discovered container, then marks the attach record as stopped. The D-025 guard's `stop` verb is lifted when `allowChaos: true` for that specific container handle.
+- `chaos.start(...)` calls `container.start()` then re-inspects `NetworkSettings.Ports` to refresh the `HostPort` in the live record (the port value is expected to be stable — see D-025 — but re-inspection is correct regardless). Marks the record as started.
+- `chaos.restart(...)` is stop + start sequenced.
+- `chaos.stop(...)` with `allowChaos: false` (the default) throws `{ kind: "chaos_unsupported_in_attach_mode" }` — unchanged from the non-chaos-capable guard baseline.
+
+The guard chokepoint from D-025 is lifted selectively: the per-Binding dockerode client (the wrapped client that would normally block `stop`/`start`/`restart`/`kill`) permits those four verbs on the specific container when `allowChaos: true`. `createContainer`, `pull`, and `remove` remain blocked unconditionally regardless of `allowChaos`.
+
+Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respawned by the ReplicaSet controller in milliseconds, making bare pod deletion useless for holding an outage — hence the requirement to name the Deployment and scale it. In Docker Compose, `container.stop()` is absolute: there is no controller that will restart it. The outage holds until `container.start()` is called explicitly. The two-field requirement of D-023 was structural, not conservative; the Docker Compose substrate does not have the structure that necessitated it.
+
+**Consequences:**
+- The opt-in surface is simpler than D-023: one field (`allowChaos: true`) instead of two. The simpler surface is correct for the substrate, not a cut corner.
+- From inside the compose network, other services see the stopped container as gone — connections time out or are refused. This is real disruption, not a network-seam pause. Backend-to-backend resilience tests exercise actual failure.
+- RBAC has no equivalent for Docker Compose, but the principle holds: with `allowChaos: false` (the default), Speculum touches only read operations against the Docker daemon when in attach mode. Safe to use against shared stacks.
+- `chaos.start` re-inspects `HostPort` after `container.start()`. If the compose file maps a fixed host port the value is identical; if it maps an ephemeral range (`"8080"` without a host side) the remapped port is picked up correctly.
+- All 15 petstore-example tests pass under `SPECULUM_ADAPTER=docker-attach`, including chaos-stop+start resilience tests that exercise real container outage.

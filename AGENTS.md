@@ -25,17 +25,19 @@ just clean-containers          # manual reset; not needed on the normal path
 | Binding instantiation | `src/binding.ts` |
 | Environment composition | `src/environment.ts` |
 | Adapter SPI | `src/adapter.ts` |
+| Framework lifecycle observer stream (D-024) | `src/observer.ts` |
+| Built-in console reporter for the observer stream | `src/reporter.ts` |
 | Orchestrator (start/attach/chaos) | `src/orchestrator.ts` |
 | Multi-env registry | `src/shared.ts` |
-| Docker adapter | `src/adapters/docker.ts` |
+| Docker adapter (deploy + Compose attach modes) | `src/adapters/docker.ts` |
 | In-process simulator adapter | `src/adapters/memory.ts` |
 | K8s adapter (deploy + attach modes, reconnection layer) | `src/adapters/kubernetes.ts` |
 | kubectl subprocess wrapper (D-019) | `src/adapters/kubectl.ts` |
-| Public surface | `src/index.ts`, `src/index.d.ts` |
-| End-to-end smoke (runs across all four adapters) | `tests/petstore-example/` |
+| Public surface | `src/index.ts` (`.d.ts` is tsc-emitted at build) |
+| End-to-end smoke (runs across all five adapters) | `tests/petstore-example/` |
 | Harness self-tests | `tests/core/` |
 | Test setup/teardown hooks | `tests/preload.ts` (registered in `bunfig.toml`) |
-| K8s attach walkthrough | `docs/attach-mode.md` |
+| K8s + Docker Compose attach walkthrough | `docs/attach-mode.md` |
 | K8s RBAC + cluster setup | `docs/k8s-rbac.md` |
 
 ## Hard rules

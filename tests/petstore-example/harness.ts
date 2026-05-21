@@ -75,6 +75,12 @@ const adapter = adapterType === "docker"
       context: process.env.SPECULUM_K8S_CONTEXT ?? "orbstack",
       namespace: process.env.SPECULUM_K8S_NAMESPACE ?? "speculum-petstore-attach",
     })
+  : adapterType === "docker-attach"
+  ? createDockerAdapter({
+      mode: "attach",
+      project: "speculum-petstore-attach",
+      sessionId,
+    })
   : (() => { throw { kind: "unknown_adapter", value: adapterType }; })();
 
 export const shared = createSharedEnvs(

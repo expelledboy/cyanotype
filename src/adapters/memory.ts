@@ -16,6 +16,7 @@
  */
 
 import type { Adapter, StartSpec, Started } from "../adapter.js";
+import type { Emit } from "../observer.js";
 
 // WHY: the adapter owns the line buffer + pub/sub for logs(). The factory only
 // supplies ports + close. `emit` is provided BY the adapter to the factory so
@@ -46,20 +47,23 @@ const randomId = () => `mem-${Math.random().toString(36).slice(2, 10)}`;
 export const createInMemoryAdapter = (opts: InMemoryAdapterOptions): Adapter => {
   const containers = new Map<string, Entry>();
 
-  const start = async (spec: StartSpec): Promise<Started> => {
+  const start = async (spec: StartSpec, observe?: Emit): Promise<Started> => {
     const factory = opts.factories[spec.image];
     if (!factory) throw { kind: "image_not_registered", image: spec.image };
     const containerId = randomId();
+    observe?.({ type: "container.creating", image: spec.image });
     const entry: Entry = { handle: null as unknown as FakeHandle, lines: [], waiters: [], closed: false };
-    const emit = (line: string) => {
+    const emitLine = (line: string) => {
       if (entry.closed) return;
       entry.lines.push(line);
       const w = entry.waiters.shift();
       if (w) w(line);
     };
-    const handle = await factory(spec, emit);
+    const handle = await factory(spec, emitLine);
     entry.handle = handle;
     containers.set(containerId, entry);
+    observe?.({ type: "container.created", containerId });
+    observe?.({ type: "container.started", containerId, ports: handle.ports });
     return { containerId, ports: handle.ports };
   };
 
