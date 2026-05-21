@@ -41,5 +41,5 @@ All five `SPECULUM_ADAPTER` values are supported. Prerequisites per substrate:
 | `docker` | Docker running; images built (`just build-test-images`). |
 | `docker-attach` | Compose stack up and `derived-compose.json` generated — `just test-petstore-docker-attach` handles both. |
 | `memory` | None — runs entirely in-process with no Docker images required. |
-| `k8s` | OrbStack (or another cluster); images loaded (`just load-k8s-images`). |
+| `k8s` | OrbStack (or another cluster) — `just test-petstore-k8s` builds, loads images, and deploys automatically. |
 | `k8s-attach` | Pre-deployed cluster with the fixture stack; `just test-petstore-k8s-attach` deploys, derives, and tears down automatically. |

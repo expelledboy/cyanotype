@@ -322,8 +322,8 @@ just test-petstore-k8s-attach
 just test-core
 
 # K8s adapter self-tests (deploy + attach)
-just test-k8s
-just test-k8s-attach
+just test-adapter-k8s
+just test-adapter-k8s-attach
 
 # Type-check
 just typecheck
