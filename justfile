@@ -23,12 +23,12 @@ typecheck:
 test:
     bun test
 
-# ─── memory substrate ────────────────────────────────────────────────────
-
-# Harness self-tests — the tests/core/ suite (in-memory adapter; fast, no Docker).
-[group('memory')]
+# Harness functionality tests — exercises adapters/orchestrator directly, not via the example; Docker/K8s tests self-skip when unavailable.
+[group('general')]
 test-core:
     bun test tests/core/
+
+# ─── memory substrate ────────────────────────────────────────────────────
 
 # Petstore example suite on in-process fakes — no Docker, no cluster.
 [group('memory')]

@@ -46,6 +46,11 @@ on:
     tags:
       - "v*.*.*"
 
+# One publish at a time per tag; never cancel a publish mid-flight.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: publish to npm
@@ -55,14 +60,23 @@ jobs:
       id-token: write   # for npm Trusted Publishers OIDC
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned, not `latest`, so release and CI run the same Bun.
+          bun-version: "1.3.14"
+
+      - name: Cache Bun packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -71,16 +85,34 @@ jobs:
         run: bun run prepublishOnly
 
       - name: Setup Node (npm >= 11.5 for Trusted Publishers OIDC)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      # --ignore-scripts: the Verify step already ran prepublishOnly. Without
+      # it, `npm publish` would re-run typecheck + build + tests a second time.
       - name: Publish to npm
-        run: npm publish --access public
+        run: npm publish --access public --ignore-scripts
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { insec=1; next }
+            insec && /^## \[/ { exit }
+            insec { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::no CHANGELOG.md section found for version $version"
+            exit 1
+          fi
+          cat RELEASE_NOTES.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2.0.8
+        uses: softprops/action-gh-release@v3
         with:
+          # CHANGELOG section as the body; auto-generated commit/PR list appended.
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
           fail_on_unmatched_files: false
