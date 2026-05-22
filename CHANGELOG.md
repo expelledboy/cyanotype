@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-22
+
+Maintenance release — no changes to the published library code; CI/release
+pipeline hardening and a contributor-docs fix.
+
+### Changed
+- CI and release workflows hardened: Bun package caching, a pinned Bun
+  version, Node-24 action versions, a single verification pass per release
+  (publish was re-running typecheck + build + tests a redundant second
+  time), a concurrency guard on publish, and CHANGELOG-driven GitHub
+  Release notes. CI no longer runs on push to `master` — the pre-merge
+  pull-request run already covers it.
+- `test-core` is now correctly documented as exercising the harness
+  functionality directly (adapters, orchestrator); it was wrongly
+  described as "in-memory adapter only".
+
 ## [0.2.0] - 2026-05-21
 
 Docker Compose attach adapter, framework lifecycle observer stream, and built-in console reporter.
@@ -63,6 +79,7 @@ Initial public release. Developer preview — pre-1.0, expect minor-version brea
 - Only HTTP and Opaque protocols implemented; TCP/gRPC/SOAP deferred
 - OrbStack K8s degrades under prolonged port-forward + rollout-restart load (kind/remote recommended for sustained CI)
 
-[Unreleased]: https://github.com/expelledboy/speculum/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/expelledboy/speculum/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/expelledboy/speculum/releases/tag/v0.2.1
 [0.2.0]: https://github.com/expelledboy/speculum/releases/tag/v0.2.0
 [0.1.0]: https://github.com/expelledboy/speculum/releases/tag/v0.1.0

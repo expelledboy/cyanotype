@@ -1,8 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: [master]
+  # PR-only — the pre-merge run already validates the merge result, so a
+  # second run on push to master would be redundant.
   pull_request:
     branches: [master]
 
