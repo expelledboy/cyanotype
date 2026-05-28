@@ -29,7 +29,7 @@ export {
   reconcileComposeStack, computeFingerprint, changedFingerprintFields,
   readStoredFingerprint, writeStoredFingerprint,
 } from "./compose.js";
-export { loadDerivedCompose } from "./cli/derive.js";
+export { deriveCompose, deriveK8s, loadDerivedCompose } from "./cli/derive.js";
 export type {
   DerivedComposeMissingError, DerivedComposeInvalidError, DerivedComposeMissingKeysError,
 } from "./cli/derive.js";

@@ -278,3 +278,109 @@ describe("loadDerivedCompose", () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CLI dispatch — spawn the bin entry so argv parsing breakage cannot ship
+// green. The library tests above exercise the pure functions; these spawn
+// `bun src/cli/index.ts` and assert the subcommand router actually routes.
+// ---------------------------------------------------------------------------
+
+describe("speculum derive (CLI dispatch)", () => {
+  const cli = join(import.meta.dir, "..", "..", "src", "cli", "index.ts");
+
+  const COMPOSE_YAML = [
+    "services:",
+    "  redis:",
+    "    image: redis:7",
+    "    ports: ['6379:6379']",
+    "    labels:",
+    "      speculum.component: redis",
+    "      speculum.instance: primary",
+    "  petstore:",
+    "    image: petstore:latest",
+    "    ports: ['8080:8080']",
+    "    labels:",
+    "      speculum.component: petstore",
+    "",
+  ].join("\n");
+
+  test("derive compose --out - dispatches to the compose handler and writes JSON to stdout", async () => {
+    const composePath = tmpFile("dispatch-compose.yaml", COMPOSE_YAML);
+    const proc = Bun.spawn(
+      ["bun", cli, "derive", "compose", "--compose", composePath, "--out", "-", "--project", "demo"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(code).toBe(0);
+    expect(stderr).toBe("");
+    const parsed = JSON.parse(stdout) as Record<string, unknown>;
+    expect(parsed["redis.primary"]).toBeDefined();
+    expect(parsed["petstore"]).toBeDefined();
+  });
+
+  test("derive k8s --out - dispatches to the k8s handler", async () => {
+    const k8sYaml = [
+      "apiVersion: v1",
+      "kind: Service",
+      "metadata: { name: svc, namespace: default }",
+      "spec:",
+      "  selector: { app: demo }",
+      "  ports: [{ port: 8080, targetPort: 8080 }]",
+      "---",
+      "apiVersion: apps/v1",
+      "kind: Deployment",
+      "metadata: { name: dep, namespace: default }",
+      "spec:",
+      "  selector: { matchLabels: { app: demo } }",
+      "  template:",
+      "    metadata:",
+      "      labels:",
+      "        app: demo",
+      "        speculum.component: demo",
+      "    spec:",
+      "      containers: [{ name: c, image: demo:1, ports: [{ containerPort: 8080 }] }]",
+      "",
+    ].join("\n");
+    const k8sPath = tmpFile("dispatch-k8s.yaml", k8sYaml);
+    const proc = Bun.spawn(
+      ["bun", cli, "derive", "k8s", "--k8s", k8sPath, "--out", "-"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, _stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(stdout) as Record<string, unknown>;
+    expect(parsed["demo"]).toBeDefined();
+  });
+
+  test("unknown subcommand exits 2 with usage", async () => {
+    const proc = Bun.spawn(["bun", cli, "derive", "nope", "--out", "-"], {
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [stderr, code] = await Promise.all([
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(code).toBe(2);
+    expect(stderr).toContain("Usage:");
+  });
+
+  test("compose subcommand without --compose exits 2", async () => {
+    const proc = Bun.spawn(["bun", cli, "derive", "compose", "--out", "-"], {
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [stderr, code] = await Promise.all([
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(code).toBe(2);
+    expect(stderr).toContain("--compose is required");
+  });
+});

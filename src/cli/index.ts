@@ -29,9 +29,9 @@ const usage = (): never => {
   process.exit(2);
 };
 
-const [cmd, sub, mode] = argv;
+const [cmd, sub] = argv;
 
-if (cmd !== "derive" || sub !== "compose" && sub !== "k8s") {
+if (cmd !== "derive" || (sub !== "compose" && sub !== "k8s")) {
   usage();
 }
 
@@ -43,7 +43,7 @@ if (!out) {
 
 let derived: Record<string, unknown>;
 
-if (mode === "compose") {
+if (sub === "compose") {
   const composePath = flag("--compose");
   if (!composePath) {
     process.stderr.write("error: --compose is required\n");
@@ -52,7 +52,7 @@ if (mode === "compose") {
   const project = flag("--project");
   derived = deriveCompose(composePath!, project);
 } else {
-  // mode === "k8s"
+  // sub === "k8s"
   const k8sPath = flag("--k8s");
   if (!k8sPath) {
     process.stderr.write("error: --k8s is required\n");

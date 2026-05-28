@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-28
+
+Bugfix for the 0.3.0 `speculum derive` CLI and package-root re-exports.
+Reported by the first consumer to adopt 0.3.0 against a real
+`docker compose` stack; no library-API changes.
+
+### Fixed
+- `src/cli/index.ts` dispatched on the wrong argv token: after
+  `const [cmd, sub, mode] = argv`, the third token of
+  `derive compose --compose <path>` is `--compose`, not `compose`, so
+  `if (mode === "compose")` was never true and every invocation fell
+  through to "error: --k8s is required". Now branches on `sub`; the
+  unused `mode` token is removed. A new test suite spawns the bin entry
+  end-to-end (`tests/core/cli-derive.test.ts`) so future argv-parsing
+  breakage at the dispatch level cannot ship green.
+- `deriveCompose` and `deriveK8s` are now exported from
+  `@expelledboy/speculum`. In 0.3.0 they were only reachable through
+  the deep path `@expelledboy/speculum/dist/cli/derive.js` — not in the
+  package's `exports` map and a typecheck hazard. The package-root
+  import path documented in the 0.3.0 ADR is now actually what works.
+
+### Changed
+- All documentation that invoked the CLI as `bunx speculum …` now reads
+  `bunx @expelledboy/speculum …`. The package is scoped, so the short
+  form fails to resolve. Affects `docs/attach-mode.md`, the D-030 ADR
+  consequences in `docs/decisions.md`.
+
 ## [0.3.0] - 2026-05-28
 
 Consumer-driven feature batch — six additions that absorb glue Docker-attach

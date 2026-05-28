@@ -583,7 +583,7 @@ Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respa
 - The petstore reference script is reduced to a thin wrapper over `src/cli/derive.ts` — one implementation, identical CLI behaviour, petstore tests unaffected.
 
 **Consequences:**
-- Consumers run `bunx speculum derive compose ...` or import `deriveCompose` directly — no copied script to drift.
+- Consumers run `bunx @expelledboy/speculum derive compose ...` or import `deriveCompose` directly — no copied script to drift.
 - `src/cli/` is inside the existing `tsconfig.build.json` `rootDir`, so it compiles to `dist/cli/` with no build-config change.
 - This is Speculum's first `bin` entry; the package is now a library *and* a CLI. The CLI surface is intentionally minimal (derive only) — future subcommands are additive.
 
