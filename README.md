@@ -222,6 +222,9 @@ Engineering teams that:
 | Smoke-test against a pre-deployed staging/UAT cluster | Maintain a parallel test-only env, or run e2e tests by hand | `SPECULUM_ADAPTER=k8s-attach` + a developer-owned derive script over your Helm/Terraform output ([walkthrough](docs/attach-mode.md)) |
 | Smoke-test against an already-running Docker Compose stack | Separate test stack, or duplicate compose files | `SPECULUM_ADAPTER=docker-attach` — discovers containers by label; non-destructive by default ([D-025](docs/decisions.md#d-025), [D-026](docs/decisions.md#d-026)) |
 | See where slow provisioning time goes | A silent multi-minute hang during image pull / readiness wait | Opt-in observer stream — typed `image.pull_progress`, `probe.attempt`, per-phase `environment.*` timing ([D-024](docs/decisions.md#d-024-framework-lifecycle-telemetry-via-an-opt-in-observer-stream)) |
+| Bring a Docker Compose stack up to date before the suite runs | A bash preflight that fingerprints inputs, runs `compose up --build` on drift, and regenerates per-binding adapter config | `reconcileComposeStack({ project, composeFile, fingerprint, onStale })` + the `speculum derive compose` CLI + `loadDerivedCompose(...)` ([D-030](docs/decisions.md#d-030), [D-031](docs/decisions.md#d-031), [D-032](docs/decisions.md#d-032)) |
+| Force a rebuild when the image or config changed | Delete `.speculum-env/` from outside the library and pray nothing leaks | Bump `Binding.version` — re-ensure stops the live containers, deletes metadata, and re-races the start path ([D-027](docs/decisions.md#d-027)) |
+| Catch an attached container running the wrong image | Hand-rolled `docker inspect` comparison in a preflight | `createDockerAdapter({ onImageDrift: "fail" })` — throws `attach_image_drift` with `expected` and `actual` ([D-028](docs/decisions.md#d-028)) |
 
 ## Adapters
 
@@ -287,9 +290,9 @@ See [D-024](docs/decisions.md#d-024-framework-lifecycle-telemetry-via-an-opt-in-
 
 ## Status
 
-**0.1.0 — developer preview.** Semver below 1.0 means minor versions may include breaking changes. The Blueprint / Binding / Adapter shape is stable; specific adapter configs may evolve.
+**Developer preview.** Semver below 1.0 means minor versions may include breaking changes. The Blueprint / Binding / Adapter shape is stable; specific adapter configs may evolve. The current published version lives in [`package.json`](./package.json) and on [npm](https://www.npmjs.com/package/@expelledboy/speculum).
 
-Same 15-test SLA suite green across five adapter modes (in-memory, Docker, Docker Compose attach, K8s deploy, K8s attach against a pre-deployed cluster). 15/15 in each. Plus 106/106 core harness self-tests; 13/13 K8s attach tests (denylist + integration including rolling-restart survivability and override-rescues-non-convention-name). Bun-native development; library code is portable to Node consumers. ~3k LoC src, ~2.5k LoC tests. Runtime deps: `zod`, `dockerode`. The K8s adapter uses `kubectl` as a subprocess (D-019) — no Kubernetes client library is taken as a dependency.
+Same 15-test SLA suite green across five adapter modes (in-memory, Docker, Docker Compose attach, K8s deploy, K8s attach against a pre-deployed cluster). 15/15 in each. Plus 178/178 core harness self-tests; 13/13 K8s attach tests (denylist + integration including rolling-restart survivability and override-rescues-non-convention-name). Bun-native development; library code is portable to Node consumers. ~5k LoC src, ~4.4k LoC tests. Runtime deps: `zod`, `yaml`, `dockerode`. The K8s adapter uses `kubectl` as a subprocess (D-019) — no Kubernetes client library is taken as a dependency.
 
 ## Prerequisites
 

@@ -73,7 +73,7 @@ Use **deploy** mode instead (`createDockerAdapter({ mode: "deploy" })`) when:
 Five things to notice:
 
 1. **Speculum doesn't deploy.** The substrate state pre-exists.
-2. **The derive script is yours.** Speculum ships one example (`tests/petstore-example/scripts/derive-speculum.ts`) that handles both K8s and Compose; your project writes one for its actual source of truth.
+2. **The derive step is yours, but Speculum ships the common case.** For Docker Compose stacks and Kubernetes manifests that follow the `speculum.component` / `speculum.instance` label convention, `bunx speculum derive compose|k8s` (D-030) does the work. For an arbitrary source of truth — Helm values, Terraform output, a custom registry — your project writes the derive step against that input. The petstore reference script (`tests/petstore-example/scripts/derive-speculum.ts`) is a thin wrapper over the library's `deriveCompose` / `deriveK8s` functions, also available as direct imports.
 3. **The JSON shape is `AdapterConfig` itself.** No envelope, no wrapper. `derived[key]` is what `bind()` accepts on its `adapter` field, verbatim.
 4. **env.ts validates at startup.** Missing keys throw before any test runs, with the missing names listed — no silent fallback to convention discovery.
 5. **The test file is unchanged.** Same Blueprint surface, same assertions, same chaos calls. Only the adapter wiring differs.
@@ -222,13 +222,15 @@ This convention is not load-bearing on Speculum itself: the framework only sees 
 
 ## Example: deriving from Kubernetes YAML
 
-The reference script at `tests/petstore-example/scripts/derive-speculum.ts` accepts `--k8s <dir-or-file>` and walks K8s manifests:
+The shipped CLI (`speculum derive k8s`, D-030) walks K8s manifests directly:
 
 ```sh
-bun tests/petstore-example/scripts/derive-speculum.ts \
+bunx speculum derive k8s \
   --k8s tests/support/k8s/petstore-attach/all.yaml \
   --out tests/petstore-example/derived.json
 ```
+
+The same logic is importable as `deriveK8s(path)` from the package, and the petstore reference script (`tests/petstore-example/scripts/derive-speculum.ts`) is a thin wrapper over it for cases where you want to call the same code from your test setup directly.
 
 The matching logic is the load-bearing part:
 
@@ -261,13 +263,16 @@ Failure here halts the derive — a malformed entry would otherwise pass into en
 
 ## Example: deriving from a Docker Compose file
 
-The same reference script accepts `--compose <file>` and walks a Compose YAML:
+The shipped CLI also handles the Compose case (`speculum derive compose`):
 
 ```sh
-bun tests/petstore-example/scripts/derive-speculum.ts \
+bunx speculum derive compose \
   --compose tests/support/compose/petstore-attach/compose.yaml \
-  --out tests/petstore-example/derived-compose.json
+  --out tests/petstore-example/derived-compose.json \
+  --project petstore-attach
 ```
+
+Importable as `deriveCompose(path, project?)` from the package.
 
 The matching logic reads `speculum.component` / `speculum.instance` labels from each service:
 
@@ -359,36 +364,34 @@ const loadDerived = (): Record<string, AdapterConfig> => {
 const derived = IS_K8S_ATTACH ? loadDerived() : {};
 ```
 
-### Docker Compose — `loadDerivedCompose()` / `IS_DOCKER_ATTACH`
+### Docker Compose — `loadDerivedCompose` (library helper, D-032)
 
-Load:
+For the Compose case Speculum ships a synchronous library helper that does the read, parse, schema-validate, and missing-key assertion. Call it from your ensure-time setup — not from module top level, so a missing file does not throw at import time:
 
 ```ts
-import { ComposeAdapterConfigSchema } from "../../src/adapters/docker";
+import { loadDerivedCompose } from "@expelledboy/speculum";
+import type { AdapterConfig } from "@expelledboy/speculum";
 
-const loadDerivedCompose = (): Record<string, AdapterConfig> => {
-  const p = join(import.meta.dir, "derived-compose.json");
-  if (!existsSync(p)) throw { kind: "derived_json_missing", path: p };
-  const parsed = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
-  const out: Record<string, AdapterConfig> = {};
-  const missing: string[] = [];
-  for (const k of EXPECTED_KEYS) {
-    const entry = parsed[k];
-    if (!entry) { missing.push(k); continue; }
-    out[k] = ComposeAdapterConfigSchema.parse(entry) as AdapterConfig;
-  }
-  if (missing.length > 0) throw { kind: "derived_json_missing_keys", missing };
-  return out;
-};
+const composeDerived = (): Record<string, AdapterConfig> =>
+  loadDerivedCompose(
+    join(import.meta.dir, "derived-compose.json"),
+    EXPECTED_KEYS,
+  );
+```
 
+Three discriminated errors surface a precise reason: `derived_compose_missing` (the file is not on disk — run the derive step first), `derived_compose_invalid` (parse or schema failure, with `cause`), and `derived_compose_missing_keys` (lists the expected keys that were absent).
+
+```ts
 const derived: Record<string, AdapterConfig> = IS_K8S_ATTACH
   ? loadDerived()
   : IS_DOCKER_ATTACH
-  ? loadDerivedCompose()
+  ? composeDerived()
   : {};
 const adapterFor = (key: string): AdapterConfig | undefined =>
   (IS_K8S_ATTACH || IS_DOCKER_ATTACH) ? derived[key] : undefined;
 ```
+
+A symmetric `loadDerivedK8s` is not currently shipped — the K8s-side example above is the recommended pattern until a consumer asks for the library version.
 
 ### Threading (both substrates)
 
@@ -489,10 +492,11 @@ For your own project, the equivalent is: ensure your cluster has the workloads r
 # Bring up the Compose stack (once).
 docker compose -f tests/support/compose/petstore-attach/compose.yaml up -d
 
-# Derive the override config.
-bun tests/petstore-example/scripts/derive-speculum.ts \
+# Derive the override config (CLI; importable as `deriveCompose` too).
+bunx speculum derive compose \
   --compose tests/support/compose/petstore-attach/compose.yaml \
-  --out tests/petstore-example/derived-compose.json
+  --out tests/petstore-example/derived-compose.json \
+  --project petstore-attach
 
 # Run the suite.
 SPECULUM_ADAPTER=docker-attach bun test tests/petstore-example/
@@ -511,9 +515,14 @@ Errors are thrown as discriminated objects with a `kind` field. The common ones:
 
 | Kind | Where | Cause + fix |
 |---|---|---|
-| `derived_json_missing` | env.ts load | `derived.json` / `derived-compose.json` not found at the expected path. Run your derive step first. |
-| `derived_json_missing_keys` | env.ts load | The derive script didn't produce one or more expected Binding keys. Check that services carry the right `speculum.component` / `speculum.instance` labels, or update `EXPECTED_KEYS` if your topology has changed. |
+| `derived_json_missing` | env.ts load (K8s inline loader) | `derived.json` not found at the expected path. Run your derive step first. The Compose-side equivalent thrown by `loadDerivedCompose` is `derived_compose_missing` (D-032). |
+| `derived_json_missing_keys` | env.ts load (K8s inline loader) | The derive script didn't produce one or more expected Binding keys. Check that services carry the right `speculum.component` / `speculum.instance` labels, or update `EXPECTED_KEYS` if your topology has changed. The Compose-side equivalent thrown by `loadDerivedCompose` is `derived_compose_missing_keys` with `missing: string[]`. |
+| `derived_compose_missing` | `loadDerivedCompose` (D-032) | The derived JSON file is not on disk. Run `bunx speculum derive compose` (or your derive step) first. |
+| `derived_compose_invalid` | `loadDerivedCompose` (D-032) | JSON parse failure, or an entry that does not validate against `ComposeAdapterConfigSchema`. The `cause` field carries the underlying error. |
+| `derived_compose_missing_keys` | `loadDerivedCompose` (D-032) | The derived JSON is missing one or more keys passed in `expectedKeys`. The `missing: string[]` field lists them. |
 | `attach_mode_violation` | adapter chokepoint | A destructive operation was attempted in attach mode without `allowChaos`. Either set `allowChaos: true` on the Binding, or switch to deploy mode for that test. |
+| `attach_version_stale` | `freshAttach` (D-027) | Pure-attach mode (`mode: "attach"`) detected that the persisted environment's stored `Binding.version` differs from the current one. There is nothing to rebuild in pure-attach — switch to `startOrAttach` mode, or align the binding version with the running environment. |
+| `attach_image_drift` | docker adapter `startAttach` (D-028, D-032) | `onImageDrift: "fail"` was set and the attached container's image does not match the `Binding`'s expected image. The error carries `expected`, `actual`, and `component`. The comparison tolerates an exact match or an `@sha256:` digest suffix — anything else is treated as drift. |
 
 ### Kubernetes-specific (`k8s_attach_*`)
 
@@ -541,7 +550,7 @@ Errors are thrown as discriminated objects with a `kind` field. The common ones:
 - [`README.md`](../README.md#adapters) — adapter matrix and the Worked Example.
 - [`design.md`](design.md#adapter-specific-binding-config-d-022) — the type story behind `AdapterConfig` and declaration merging.
 - [`k8s-rbac.md`](k8s-rbac.md) — base attach Role + chaos-opt-in addendum.
-- [`decisions.md`](decisions.md) — D-018 (K8s denylist), D-019 (kubectl shellout), D-021 (reconnection layer), D-022 (adapter-specific Binding config), D-023 (K8s chaos via scale), D-025 (Compose adapter + discovery + guard), D-026 (Compose chaos via docker stop/start).
-- `tests/petstore-example/scripts/derive-speculum.ts` — the reference derive script (handles both `--k8s` and `--compose`).
+- [`decisions.md`](decisions.md) — D-018 (K8s denylist), D-019 (kubectl shellout), D-021 (reconnection layer), D-022 (adapter-specific Binding config), D-023 (K8s chaos via scale), D-025 (Compose adapter + discovery + guard), D-026 (Compose chaos via docker stop/start), D-027 (`Binding.version` cache key), D-028 (attach-mode `onImageDrift` policy), D-029 (`stack.*` observer phase), D-030 (`speculum derive` CLI), D-031 (`reconcileComposeStack`), D-032 (`loadDerivedCompose` + `force` flag + drift-compare boundary).
+- `bunx speculum derive compose|k8s` — the shipped CLI (D-030). The petstore reference script (`tests/petstore-example/scripts/derive-speculum.ts`) is a thin wrapper over the same library functions (`deriveCompose`, `deriveK8s`).
 - `tests/support/k8s/petstore-attach/all.yaml` — the K8s fixture topology (6 workloads, deliberately non-convention names).
 - `tests/support/compose/petstore-attach/compose.yaml` — the Docker Compose fixture topology (6 services).

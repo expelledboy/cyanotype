@@ -85,6 +85,13 @@ export interface AdapterConfig {}
 
 export type StartSpec = {
   readonly image: string;
+  /**
+   * The `Binding.version` string. Carried through so attach-mode adapters
+   * can compare the expected image identity against a discovered container.
+   * Optional: the orchestrator always sets it from the Binding, but a
+   * hand-built `StartSpec` (e.g. in adapter unit tests) may omit it.
+   */
+  readonly version?: string;
   readonly env: Record<string, string>;
   /** Container port name → host port binding ("auto" or a specific number). */
   readonly ports: Record<string, "auto" | number>;

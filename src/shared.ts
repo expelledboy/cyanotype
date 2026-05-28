@@ -112,6 +112,35 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
     fs.renameSync(tmp, filePath);
   };
 
+  /**
+   * Compare each component's stored `version` against the live registry
+   * `Binding.version`. If any component's stored `version` is present AND
+   * differs from the binding, the environment is stale: the caller
+   * invalidates and re-races, exactly like the dead-container path. An
+   * absent stored `version` skips the check — metadata written before the
+   * field existed never false-invalidates.
+   */
+  const isVersionStale = <K extends keyof R & string>(envKey: K, meta: EnvironmentMetadata): boolean => {
+    const env = registry[envKey] as Environment;
+    for (const [componentName, slot] of Object.entries(meta.components)) {
+      const binding = env[componentName];
+      if (binding === undefined) continue;
+      if (slot.kind === "single") {
+        const stored = slot.snapshot.version;
+        const current = (binding as { version?: string }).version;
+        if (stored !== undefined && current !== undefined && stored !== current) return true;
+      } else {
+        const map = binding as Record<string, { version?: string }>;
+        for (const [instanceId, compSnap] of Object.entries(slot.instances)) {
+          const stored = compSnap.version;
+          const current = map[instanceId]?.version;
+          if (stored !== undefined && current !== undefined && stored !== current) return true;
+        }
+      }
+    }
+    return false;
+  };
+
   const pickSampleContainerId = (meta: EnvironmentMetadata): string | null => {
     for (const slot of Object.values(meta.components)) {
       if (slot.kind === "single") return slot.snapshot.containerId;
@@ -119,6 +148,24 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
       if (first) return first.containerId;
     }
     return null;
+  };
+
+  /**
+   * Stop every container referenced by a metadata snapshot, swallowing
+   * per-container errors. Used when invalidating a still-running environment
+   * (e.g. version drift) so the host ports it bound are released before the
+   * next loop iteration tries to rebind them.
+   */
+  const stopAllInMeta = async (meta: EnvironmentMetadata): Promise<void> => {
+    const ids: string[] = [];
+    for (const slot of Object.values(meta.components)) {
+      if (slot.kind === "single") ids.push(slot.snapshot.containerId);
+      else for (const c of Object.values(slot.instances)) ids.push(c.containerId);
+    }
+    for (const id of ids) {
+      if (!id) continue;
+      try { await options.adapter.stop(id); } catch { /* best-effort */ }
+    }
   };
 
   const orchOpts = (envKey: string) => ({
@@ -162,6 +209,11 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
     if (sample && !(await options.adapter.exists(sample))) {
       throw { kind: "attach_dead_container", envKey };
     }
+    // In pure attach mode there is nothing to rebuild — surface the version
+    // drift instead of silently attaching to a stale environment.
+    if (isVersionStale(envKey, meta)) {
+      throw { kind: "attach_version_stale", envKey };
+    }
     return doAttach(envKey, meta);
   };
 
@@ -187,6 +239,15 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
       }
       const sample = pickSampleContainerId(meta);
       if (sample && !(await options.adapter.exists(sample))) {
+        deleteFile(envKey);
+        continue;
+      }
+      // A binding-version bump invalidates the stored environment. The
+      // containers are still alive (sample.exists() passed above), so stop
+      // them first to release host ports before the next iteration rebuilds
+      // from scratch — otherwise doStart races into "port already allocated".
+      if (isVersionStale(envKey, meta)) {
+        await stopAllInMeta(meta);
         deleteFile(envKey);
         continue;
       }

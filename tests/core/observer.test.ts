@@ -105,3 +105,59 @@ describe("observer/startEnvironment", () => {
     expect(runtime.petstore.interface.http.uri).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   });
 });
+
+describe("observer/stack events", () => {
+  test("stack.* events type-check and carry payloads", () => {
+    const seen: ObserverEvent[] = [];
+    const emit = createEmitter((e) => seen.push(e)).scope({ adapter: "docker" });
+
+    emit({ type: "stack.checking", stackName: "mystack" });
+    emit({ type: "stack.fresh", stackName: "mystack" });
+    emit({ type: "stack.stale", stackName: "mystack", changedFields: ["image", "env"] });
+    emit({ type: "stack.rebuilding", stackName: "mystack" });
+    emit({ type: "stack.rebuilt", stackName: "mystack", durationMs: 4200 });
+    emit({ type: "stack.attached", stackName: "mystack", serviceCount: 3 });
+    emit({ type: "stack.failed", stackName: "mystack", error: new Error("compose error") });
+
+    expect(seen.map((e) => e.type)).toEqual([
+      "stack.checking",
+      "stack.fresh",
+      "stack.stale",
+      "stack.rebuilding",
+      "stack.rebuilt",
+      "stack.attached",
+      "stack.failed",
+    ]);
+
+    const checking = seen[0] as Extract<ObserverEvent, { type: "stack.checking" }>;
+    expect(checking.stackName).toBe("mystack");
+
+    const stale = seen[2] as Extract<ObserverEvent, { type: "stack.stale" }>;
+    expect(stale.changedFields).toEqual(["image", "env"]);
+
+    const rebuilt = seen[4] as Extract<ObserverEvent, { type: "stack.rebuilt" }>;
+    expect(rebuilt.durationMs).toBe(4200);
+
+    const attached = seen[5] as Extract<ObserverEvent, { type: "stack.attached" }>;
+    expect(attached.serviceCount).toBe(3);
+
+    const failed = seen[6] as Extract<ObserverEvent, { type: "stack.failed" }>;
+    expect((failed.error as Error).message).toBe("compose error");
+  });
+
+  test("stack.* events flow through createEmitter with monotonic seq", () => {
+    const seen: ObserverEvent[] = [];
+    const emitter = createEmitter((e) => seen.push(e));
+    const a = emitter.scope({ adapter: "docker", component: "app" });
+    const b = emitter.scope({ adapter: "docker", component: "db" });
+
+    a({ type: "stack.checking", stackName: "app-stack" });
+    b({ type: "stack.checking", stackName: "db-stack" });
+    a({ type: "stack.stale", stackName: "app-stack", changedFields: ["image"] });
+    b({ type: "stack.fresh", stackName: "db-stack" });
+    a({ type: "stack.attached", stackName: "app-stack", serviceCount: 2 });
+
+    expect(seen.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4]);
+    expect(seen.map((e) => e.component)).toEqual(["app", "db", "app", "db", "app"]);
+  });
+});

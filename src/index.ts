@@ -25,6 +25,14 @@ export { createInMemoryAdapter } from "./adapters/memory.js";
 export { createDockerAdapter, ComposeAdapterConfigSchema } from "./adapters/docker.js";
 export { createK8sAdapter, K8sAdapterConfigSchema } from "./adapters/kubernetes.js";
 export { createConsoleReporter } from "./reporter.js";
+export {
+  reconcileComposeStack, computeFingerprint, changedFingerprintFields,
+  readStoredFingerprint, writeStoredFingerprint,
+} from "./compose.js";
+export { loadDerivedCompose } from "./cli/derive.js";
+export type {
+  DerivedComposeMissingError, DerivedComposeInvalidError, DerivedComposeMissingKeysError,
+} from "./cli/derive.js";
 
 // Re-export types so direct `import { type Blueprint } from "speculum"` works
 // without going through index.d.ts. The canonical type contract is in
@@ -52,7 +60,13 @@ export type { SharedMode, SharedOptions, SharedHarness } from "./shared.js";
 export type { OrchestratorOptions, AttachSnapshot } from "./orchestrator.js";
 export type { Observer, ObserverEvent, ObserverEventData, ObserverEnvelope } from "./observer.js";
 export type { ConsoleReporterOptions } from "./reporter.js";
+export type {
+  FingerprintInput, FingerprintSpec, Fingerprint,
+  ReconcileComposeOptions, ReconcileComposeResult,
+} from "./compose.js";
 export type { FakeFactory, FakeHandle, InMemoryAdapterOptions } from "./adapters/memory.js";
 export type { K8sAdapterOptions } from "./adapters/kubernetes.js";
 export type { KubectlMode } from "./adapters/kubectl.js";
-export type { DockerAdapterOptions, DockerMode } from "./adapters/docker.js";
+export type {
+  DockerAdapterOptions, DockerMode, ImageDriftPolicy, AttachImageDriftError,
+} from "./adapters/docker.js";

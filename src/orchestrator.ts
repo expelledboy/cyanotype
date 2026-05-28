@@ -213,6 +213,7 @@ export const startEnvironment = async <E extends Environment>(
 
   const buildSpec = (componentName: string, instanceId: string | undefined, binding: AnyBinding): StartSpec => ({
     image: binding.image,
+    version: binding.version,
     env: binding.env ?? {},
     ports: binding.ports ?? {},
     mounts: binding.mounts ?? {},
@@ -441,7 +442,11 @@ const finalizeRuntime = <E extends Environment>(
     const out: Record<string, SlotSnapshot> = {};
     const multiBuckets = new Map<string, Record<string, ComponentSnapshot>>();
     for (const c of components.values()) {
-      const snap: ComponentSnapshot = { containerId: c.containerId, ports: { ...c.ports } };
+      const snap: ComponentSnapshot = {
+        containerId: c.containerId,
+        ports: { ...c.ports },
+        ...(c.binding.version !== undefined ? { version: c.binding.version } : {}),
+      };
       if (c.instanceId === undefined) {
         out[c.componentName] = { kind: "single", snapshot: snap };
       } else {

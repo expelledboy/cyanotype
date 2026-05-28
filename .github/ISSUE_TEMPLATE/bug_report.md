@@ -28,7 +28,7 @@ What actually happened.
 
 - Bun version (`bun --version`):
 - OS:
-- Adapter mode (`memory` / `docker` / `k8s` / `k8s-attach`):
+- Adapter mode (`memory` / `docker` / `docker-attach` / `k8s` / `k8s-attach`):
 
 ## Logs / relevant output
 

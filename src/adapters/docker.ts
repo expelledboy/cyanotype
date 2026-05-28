@@ -27,6 +27,27 @@ import { z } from "zod";
 import type { Adapter, StartSpec, Started } from "../adapter.js";
 import type { Emit, ObserverEventData } from "../observer.js";
 
+/**
+ * Policy for attach-mode image drift — what to do when the discovered
+ * container's image does not match the `Binding`'s expectation.
+ *
+ *  - `"warn"` (default): log the mismatch to stderr and continue attaching.
+ *  - `"fail"`: throw `{ kind: "attach_image_drift", ... }`.
+ *  - `"ignore"`: skip the check entirely.
+ */
+export type ImageDriftPolicy = "warn" | "fail" | "ignore";
+
+/**
+ * Structured error thrown when `onImageDrift: "fail"` and the discovered
+ * attach-mode container's image does not match the `Binding`'s expectation.
+ */
+export type AttachImageDriftError = {
+  readonly kind: "attach_image_drift";
+  readonly expected: string;
+  readonly actual: string;
+  readonly component: string;
+};
+
 declare module "../adapter.js" {
   interface AdapterConfig {
     compose?: {
@@ -36,6 +57,8 @@ declare module "../adapter.js" {
         containerNumber?: number;
         port?: number;
         allowChaos?: boolean;
+        /** Per-binding override of the adapter-level `onImageDrift` policy. */
+        onImageDrift?: ImageDriftPolicy;
       };
     };
   }
@@ -49,6 +72,7 @@ export const ComposeAdapterConfigSchema = z.object({
       containerNumber: z.number().optional(),
       port: z.number().optional(),
       allowChaos: z.boolean().optional(),
+      onImageDrift: z.enum(["warn", "fail", "ignore"]).optional(),
     }).optional(),
   }).optional(),
 });
@@ -67,6 +91,8 @@ type DockerContainer = {
   kill(opts?: { signal?: string }): Promise<void>;
   remove(opts?: { force?: boolean }): Promise<void>;
   inspect(): Promise<{
+    /** Top-level image digest (`sha256:...`) the container was created from. */
+    Image?: string;
     NetworkSettings: { Ports: Record<string, Array<{ HostPort: string }> | null> };
     HostConfig: { Binds: string[] | null };
     Config?: { Labels?: Record<string, string> | null; Image?: string };
@@ -101,6 +127,12 @@ export type DockerAdapterOptions = {
   readonly sessionId: string;
   readonly mode?: DockerMode;
   readonly project?: string;
+  /**
+   * Default policy when the attached container's image differs from the
+   * `Binding`'s expectation. Defaults to `"warn"`. A per-binding
+   * `adapter.compose.attach.onImageDrift` override beats this value.
+   */
+  readonly onImageDrift?: ImageDriftPolicy;
 };
 
 /**
@@ -430,12 +462,18 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         ],
       },
     });
-    let match: { id: string; status: string } | null = null;
+    let match: { id: string; status: string; image: string } | null = null;
     for (const entry of list) {
       const inspected = await c.getContainer(entry.Id).inspect();
       const labels = inspected.Config?.Labels ?? {};
       if (labels["com.docker.compose.container-number"] === String(containerNumber)) {
-        match = { id: entry.Id, status: inspected.State?.Status ?? "unknown" };
+        match = {
+          id: entry.Id,
+          status: inspected.State?.Status ?? "unknown",
+          // Prefer the human-readable tag (`Config.Image`); fall back to the
+          // top-level digest when the tag is unavailable.
+          image: inspected.Config?.Image ?? inspected.Image ?? "",
+        };
         break;
       }
     }
@@ -443,6 +481,39 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       throw { kind: "compose_attach_service_not_found", service, project, containerNumber };
     }
     const containerId = `attach:${project}/${match.id}`;
+
+    // Compare the discovered container's image against what the `Binding`
+    // expects (`spec.image`). Per-binding override beats the adapter-level
+    // default; the resolved default is `"warn"`.
+    const driftPolicy: ImageDriftPolicy = attach?.onImageDrift ?? opts.onImageDrift ?? "warn";
+    if (driftPolicy !== "ignore" && match.image !== "") {
+      const expected = spec.image;
+      const actual = match.image;
+      // Tolerant compare bounded to the digest-suffix shape only: an exact
+      // match, or one ref equals the other plus an `@sha256:...` digest.
+      // A loose prefix check would false-negative drift (e.g. `redis` vs
+      // `redis-evil:latest`); the digest boundary is the only ambiguity
+      // worth tolerating.
+      const SHA = "@sha256:";
+      const aligned = expected === actual
+        || actual.startsWith(expected + SHA)
+        || expected.startsWith(actual + SHA);
+      if (!aligned) {
+        if (driftPolicy === "fail") {
+          throw {
+            kind: "attach_image_drift",
+            expected,
+            actual,
+            component: component ?? service,
+          } satisfies AttachImageDriftError;
+        }
+        // "warn": surface and continue.
+        console.warn(
+          `[speculum] attach_image_drift: component "${component ?? service}" `
+          + `expected image "${expected}" but the running container uses "${actual}".`,
+        );
+      }
+    }
 
     // Resume path: a re-`start` of a chaos-paused binding restarts the real
     // container and refreshes ports. A stopped container is valid here.

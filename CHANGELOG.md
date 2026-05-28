@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Consumer-driven feature batch — six additions that absorb glue Docker-attach
+consumers were hand-rolling.
+
+### Added
+- `Binding.version` is now a cache key for the persisted environment. On
+  re-ensure, a changed `Binding.version` stops the live containers via a
+  new internal `stopAllInMeta` walk of the snapshot, deletes the metadata
+  file, and re-races the start path — mirroring the dead-container
+  invalidation. Pure-attach mode (no rebuild path) throws
+  `{ kind: "attach_version_stale", envKey }` instead. The new
+  `ComponentSnapshot.version` field is optional; absent stored versions
+  skip the check, so metadata written by an older Speculum never
+  false-invalidates (ADR D-027).
+- Attach-mode image-drift detection. The Docker adapter compares the
+  discovered container's image against the `Binding`'s expectation during
+  `startAttach`, governed by `onImageDrift?: "warn" | "fail" | "ignore"`
+  on `DockerAdapterOptions` and per-Binding via
+  `AdapterConfig.compose.attach.onImageDrift` (default `"warn"`).
+  `"fail"` throws `AttachImageDriftError`
+  (`{ kind: "attach_image_drift", expected, actual, component }`). The
+  comparison tolerates an exact match or an `@sha256:` digest suffix only
+  — no looser prefix relationship (ADR D-028, D-032).
+- `stack.*` observer phase covering compose-stack reconciliation:
+  `stack.checking`, `stack.fresh`, `stack.stale` (carries `changedFields`),
+  `stack.rebuilding`, `stack.rebuilt` (carries `durationMs`),
+  `stack.attached` (carries `serviceCount`), `stack.failed` (carries
+  `error`). The built-in console reporter renders the new events under a
+  `"stack"` label column, parallel to `"substrate"` (ADR D-029).
+- `speculum derive` CLI — first `bin` entry in the package. Subcommands
+  `speculum derive compose --compose <f> --out <f|-> [--project <name>]`
+  and `speculum derive k8s --k8s <d|f> --out <f|->`. Output is the
+  binding-keyed JSON consumed at attach time. The pure library
+  counterparts `deriveCompose(path, project?)` and `deriveK8s(path)` are
+  also exported for in-process use. The petstore reference script is now
+  a thin wrapper over the library (ADR D-030).
+- `reconcileComposeStack(options) => Promise<ReconcileComposeResult>` —
+  library-owned compose-stack staleness reconciliation. Options
+  `{ project, composeFile, fingerprint, onStale?, observer?, stateDir?,
+  force? }`. `fingerprint` is a `FingerprintSpec` — either a static
+  `Array<{ name, file } | { name, value }>` or an async
+  `() => Record<string, string>` for derived values. Returns
+  `{ rebuilt, changedFields, durationMs }`. Emits the `stack.*` phase
+  when an observer is supplied. `force: true` skips the fingerprint
+  compare and goes straight to the rebuild path, emitting a `stack.stale`
+  event with the synthetic marker `["<forced>"]` (ADR D-031, D-032).
+- `loadDerivedCompose(path, expectedKeys)` — synchronous helper that
+  reads the JSON emitted by `speculum derive compose`, validates each
+  entry against `ComposeAdapterConfigSchema`, asserts every key in
+  `expectedKeys` is present, and returns `Record<string, AdapterConfig>`.
+  Three discriminated errors: `derived_compose_missing`,
+  `derived_compose_invalid`, `derived_compose_missing_keys`.
+  Synchronous on purpose — consumers invoke it from ensure-time setup,
+  not module top level, so a missing derived file does not throw at
+  import time (ADR D-032).
+- New exports from `src/index.ts`: `reconcileComposeStack`,
+  `loadDerivedCompose`, `deriveCompose`, `deriveK8s`,
+  `computeFingerprint`, `changedFingerprintFields`,
+  `readStoredFingerprint`, `writeStoredFingerprint`. New type exports:
+  `ReconcileComposeOptions`, `ReconcileComposeResult`, `FingerprintSpec`,
+  `FingerprintInput`, `Fingerprint`, `ImageDriftPolicy`,
+  `AttachImageDriftError`, `DerivedComposeMissingError`,
+  `DerivedComposeInvalidError`, `DerivedComposeMissingKeysError`.
+
 ## [0.2.1] - 2026-05-22
 
 Maintenance release — no changes to the published library code; CI/release

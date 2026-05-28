@@ -151,12 +151,13 @@ declare module "../adapter" {
   }
 }
 
-// src/adapters/docker.ts (Docker Compose attach — D-025)
+// src/adapters/docker.ts (Docker Compose attach — D-025, D-028)
 declare module "../adapter" {
   interface AdapterConfig {
     compose?: { attach?: { project?: string; service?: string;
                            containerNumber?: number; port?: number;
-                           allowChaos?: boolean } };
+                           allowChaos?: boolean;
+                           onImageDrift?: "warn" | "fail" | "ignore" } };
   }
 }
 ```
@@ -261,6 +262,10 @@ environment.starting
     environment.component_ready
 environment.ready          (or environment.failed at any phase)
 chaos.stopping/stopped/starting/started   — on runtime.chaos.*
+
+stack.checking → (stack.fresh | stack.stale → stack.rebuilding → stack.rebuilt)
+              → stack.attached                                — on reconcileComposeStack
+stack.failed   — on any thrown error during reconciliation
 ```
 
 Substrate-internal events (`image.*`, `container.creating/created/starting/started`)

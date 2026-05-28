@@ -28,4 +28,14 @@ export type SlotSnapshot =
 export type ComponentSnapshot = {
   readonly containerId: string;
   readonly ports: Readonly<Record<string, number>>;
+  /**
+   * The `Binding.version` that produced this component, when known.
+   *
+   * OPTIONAL by design: metadata written by an older Speculum omits it.
+   * On re-ensure, an absent `version` SKIPS the freshness check — it never
+   * false-invalidates a pre-existing environment. When present and it
+   * differs from the current `Binding.version`, the attach path treats the
+   * stored environment as stale and rebuilds from scratch.
+   */
+  readonly version?: string;
 };

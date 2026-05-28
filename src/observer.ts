@@ -107,7 +107,20 @@ export type ObserverEventData =
   | { readonly type: "chaos.stopping" }
   | { readonly type: "chaos.stopped" }
   | { readonly type: "chaos.starting" }
-  | { readonly type: "chaos.started" };
+  | { readonly type: "chaos.started" }
+  // ── Compose stack reconciliation ────────────────────────────────────
+  | { readonly type: "stack.checking"; readonly stackName: string }
+  | { readonly type: "stack.fresh"; readonly stackName: string }
+  | {
+      readonly type: "stack.stale";
+      readonly stackName: string;
+      /** Which fingerprint fields differ (e.g. `["image", "env"]`). */
+      readonly changedFields: readonly string[];
+    }
+  | { readonly type: "stack.rebuilding"; readonly stackName: string }
+  | { readonly type: "stack.rebuilt"; readonly stackName: string; readonly durationMs: number }
+  | { readonly type: "stack.attached"; readonly stackName: string; readonly serviceCount: number }
+  | { readonly type: "stack.failed"; readonly stackName: string; readonly error: unknown };
 
 /** A fully-formed observer event: catalog entry + stamped envelope. */
 export type ObserverEvent = ObserverEventData & ObserverEnvelope;

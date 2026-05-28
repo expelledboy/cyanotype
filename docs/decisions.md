@@ -30,6 +30,12 @@
 - [D-024 — Framework lifecycle telemetry via an opt-in observer stream](#d-024-framework-lifecycle-telemetry-via-an-opt-in-observer-stream)
 - [D-025 — Docker Compose attach adapter — discovery via compose labels + non-destructive guard](#d-025-docker-compose-attach-adapter--discovery-via-compose-labels--non-destructive-guard)
 - [D-026 — Docker Compose attach-mode chaos — `container.stop`/`start` as the lifted verbs](#d-026-docker-compose-attach-mode-chaos--containerstopstart-as-the-lifted-verbs)
+- [D-027 — `Binding.version` as a cache key — re-ensure invalidates a stale environment](#d-027-bindingversion-as-a-cache-key--re-ensure-invalidates-a-stale-environment)
+- [D-028 — Attach-mode image-drift detection via a configurable `onImageDrift` policy](#d-028-attach-mode-image-drift-detection-via-a-configurable-onimagedrift-policy)
+- [D-029 — `stack.*` observer phase for compose-stack reconciliation telemetry](#d-029-stack-observer-phase-for-compose-stack-reconciliation-telemetry)
+- [D-030 — `speculum derive` shipped as a CLI (`bin`) over a copied reference script](#d-030-speculum-derive-shipped-as-a-cli-bin-over-a-copied-reference-script)
+- [D-031 — `reconcileComposeStack` — library-owned compose-stack staleness reconciliation](#d-031-reconcilecomposestack--library-owned-compose-stack-staleness-reconciliation)
+- [D-032 — Closing the derive→bind seam, the rebuild escape hatch, and the image-drift compare boundary](#d-032-closing-the-derivebind-seam-the-rebuild-escape-hatch-and-the-image-drift-compare-boundary)
 
 ---
 
@@ -513,3 +519,107 @@ Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respa
 - RBAC has no equivalent for Docker Compose, but the principle holds: with `allowChaos: false` (the default), Speculum touches only read operations against the Docker daemon when in attach mode. Safe to use against shared stacks.
 - `chaos.start` re-inspects `HostPort` after `container.start()`. If the compose file maps a fixed host port the value is identical; if it maps an ephemeral range (`"8080"` without a host side) the remapped port is picked up correctly.
 - All 15 petstore-example tests pass under `SPECULUM_ADAPTER=docker-attach`, including chaos-stop+start resilience tests that exercise real container outage.
+
+---
+
+## D-027. `Binding.version` as a cache key — re-ensure invalidates a stale environment
+
+**Context:** `createSharedEnvs` persists a `<envKey>.json` metadata file so a second process re-attaches to a running environment instead of starting its own. The freshness check on a running file is structural — `adapter.exists(sampleContainerId)` confirms the container is alive — and does not consider whether the intent (the binding) has changed. `Binding` carries a `version` field, but without an in-library invalidation hook it has no effect on re-ensure: a bumped `version` does not force a rebuild, and the stale environment is reused. External code that wants to force a rebuild has to delete the library's own state file from outside, reaching into library-owned files because the library exposes no equivalent.
+
+**Decision:** `Binding.version` becomes a cache key for the persisted environment.
+
+- `ComponentSnapshot` gains an optional `version?: string`. `EnvironmentMetadata.schemaVersion` stays `1` — the field is additive and optional.
+- The orchestrator threads `version` into `StartSpec` and includes it in the `metadata()` snapshot; `writeMetadataRunning` persists it per component.
+- On re-ensure, `startOrAttach`'s attach branch compares each stored snapshot `version` against the live `Binding.version` (`isVersionStale` in `shared.ts`, handling single and multi slots). If both are present and differ, the metadata file is deleted and the ensure loop re-races — exactly the existing dead-container invalidation path.
+- In pure `"attach"` mode (`freshAttach`) there is nothing to rebuild, so a version mismatch throws `{ kind: "attach_version_stale", envKey }`, mirroring how that path throws `attach_dead_container`.
+
+**Consequences:**
+- If the stored snapshot lacks `version`, the check is skipped. Metadata written before this field existed never false-invalidates a healthy environment. Backward compatibility without a `schemaVersion` bump.
+- Consumers stop reaching into `.speculum-env/` to force a rebuild; bumping `version` is the supported, in-library invalidation hook.
+- `StartSpec.version` is optional, not required: making it required would break adapter unit tests that hand-build a `StartSpec`. The orchestrator always populates it.
+
+---
+
+## D-028. Attach-mode image-drift detection via a configurable `onImageDrift` policy
+
+**Context:** D-027 covers cases where Speculum owns the environment and can rebuild it. The orthogonal case is attach mode: another process (a `docker compose` stack) owns the container, and Speculum only observes. If that container is running an image other than what the `Binding` declares — a locally rebuilt image, a moved tag — the test silently runs against the wrong substrate. `startAttach` calls `.inspect()` on the discovered container but does not look at its image. Detecting this outside the library means each consumer reaches for `docker image inspect` and stores the expected digest somewhere of its own — work the library is better placed to do once.
+
+**Decision:** The Docker adapter compares the discovered container's image against the `Binding`'s expectation during attach discovery, governed by an `onImageDrift` policy.
+
+- The `DockerContainer.inspect()` return type gains the top-level `Image?` digest field (the Docker daemon already returns it; it was simply untyped).
+- `startAttach`'s discovery loop captures the matched container's image (`Config.Image` tag, falling back to the top-level digest) and compares it against `spec.image`/`spec.version`. The comparison is prefix-tolerant — it accepts `repo:tag` vs `repo:tag@sha256:...` so benign ref-shape differences are not flagged.
+- `onImageDrift?: "warn" | "fail" | "ignore"` is added to both `DockerAdapterOptions` and the per-Binding `AdapterConfig.compose.attach` slot (with a matching `ComposeAdapterConfigSchema` enum). Resolution is `attach?.onImageDrift ?? opts.onImageDrift ?? "warn"` — per-Binding beats adapter default, mirroring the `allowChaos` precedence from D-025/D-026.
+- `"fail"` throws `{ kind: "attach_image_drift", expected, actual, component }` (`AttachImageDriftError`, exported from `src/index.ts`). `"warn"` logs and continues. `"ignore"` skips the check.
+
+**Consequences:**
+- The default is `"warn"`, not `"fail"`: attach mode is inherently advisory, and a hard default failure would make Speculum brittle against harmless ref differences. `"fail"` is opt-in for CI that demands exact reproducibility.
+- `ImageDriftPolicy` and `AttachImageDriftError` are exported alongside the sibling docker types. `attach_version_stale` (D-027) stays an inline discriminated kind — consistent with how the other `attach_*` kinds are not exported as named types.
+- Only the Docker adapter implements this; the SPI is unchanged. A K8s-attach equivalent is left for a future ADR.
+
+---
+
+## D-029. `stack.*` observer phase for compose-stack reconciliation telemetry
+
+**Context:** D-024 established the opt-in observer stream — a discriminated union over lifecycle phases (`substrate.* / image.* / container.* / probe.* / environment.* / chaos.*`). The compose-stack reconciliation helper (D-031) performs a multi-step flow — fingerprint check, conditional rebuild, attach — that runs as a silent preflight. Without a dedicated event phase the reconciliation produces no structured signal: there is no record of whether a rebuild happened or how long it took, only whatever the underlying `docker compose` invocation prints.
+
+**Decision:** Add a seventh observer phase, `stack.*`, covering the reconciliation lifecycle: `stack.checking` → either `stack.fresh` or (`stack.stale` → `stack.rebuilding` → `stack.rebuilt`) → `stack.attached`, with `stack.failed` as the failure terminal. Each event carries a `stackName`; `stack.stale` carries `changedFields: readonly string[]` (which fingerprint keys differed), `stack.rebuilt` carries `durationMs`, `stack.attached` carries `serviceCount`, `stack.failed` carries `error: unknown`. The built-in console reporter routes `stack.*` to a `"stack"` label column, parallel to `"substrate"`, using the standard glyph convention.
+
+**Consequences:**
+- Purely additive — the discriminated union, `createEmitter`, and every existing reporter pick up the new members for free. No SPI change, zero cost when no observer is attached.
+- `stack.stale.changedFields` lets a consumer emit a structured CI annotation without re-computing a fingerprint diff.
+- D-031's `reconcileComposeStack` is the first emitter of this phase.
+
+---
+
+## D-030. `speculum derive` shipped as a CLI (`bin`) over a copied reference script
+
+**Context:** Attach mode needs a `derived.json` mapping each component to its `compose.attach` / `k8s.attach` adapter override. Shipping the derivation only as a reference script under `tests/petstore-example/scripts/` forces every consumer to copy it verbatim. Copied scripts drift from the library's adapter-config schemas and never receive fixes.
+
+**Decision:** Ship the derive logic in the package.
+
+- The logic moves to `src/cli/derive.ts` as pure, path-in → validated-record-out functions `deriveCompose(path, project?)` and `deriveK8s(path)` — importable by consumers building their own tooling without shelling out.
+- `src/cli/index.ts` is a thin dispatch entrypoint (shebang `#!/usr/bin/env bun`): `speculum derive compose --compose <f> --out <f|->` and `speculum derive k8s --k8s <d|f> --out <f|->`, exit 2 on bad args.
+- `package.json` gains `"bin": { "speculum": "./dist/cli/index.js" }`. `yaml` moves from `devDependencies` to `dependencies` — the derive library parses YAML at consumer runtime.
+- The petstore reference script is reduced to a thin wrapper over `src/cli/derive.ts` — one implementation, identical CLI behaviour, petstore tests unaffected.
+
+**Consequences:**
+- Consumers run `bunx speculum derive compose ...` or import `deriveCompose` directly — no copied script to drift.
+- `src/cli/` is inside the existing `tsconfig.build.json` `rootDir`, so it compiles to `dist/cli/` with no build-config change.
+- This is Speculum's first `bin` entry; the package is now a library *and* a CLI. The CLI surface is intentionally minimal (derive only) — future subcommands are additive.
+
+---
+
+## D-031. `reconcileComposeStack` — library-owned compose-stack staleness reconciliation
+
+**Context:** Docker-attach consumers run a preflight before tests: is the `docker compose` stack up to date with its inputs (image tags, the compose file, the stack topology, derived artifacts)? If not, rebuild it. Implemented outside the library this is a few hundred lines per consumer — fingerprint inputs, compare against a stored file, run `docker compose up -d --build` when stale, re-derive adapter config, invalidate the library's metadata. Replicated across consumers it drifts, and the invalidation step has no supported library hook (see D-027).
+
+**Decision:** Ship `reconcileComposeStack(options) => Promise<ReconcileComposeResult>` in `src/compose.ts`.
+
+- `options`: `{ project, composeFile, fingerprint, onStale?, observer?, stateDir? }`. Returns `{ rebuilt, changedFields, durationMs }`.
+- **Single job — reconcile, not attach.** The helper brings the compose stack up to date; it does *not* attach an `Environment`. `createSharedEnvs` + `attachEnvironment` remain the caller's untouched next step. No duplication of the orchestrator.
+- **`FingerprintSpec` is a named-field record, not an opaque hash** — staleness can report *which* inputs changed, feeding `stack.stale.changedFields`. Two forms: a static list of `{ name, file }` / `{ name, value }` inputs, or an async `() => Record<string,string>` for derived values (e.g. docker image IDs). A missing file hashes to a `"<missing>"` sentinel rather than throwing — an absent derived artifact is a legitimate "must rebuild" state.
+- The stack is stale when there is no stored fingerprint, any field changed, or the compose project is not running. Fingerprints persist to `<stateDir>/<project>-stack-fingerprint.json` as a schema-versioned record, written atomically (tmp + rename) — reusing the `shared.ts` crash-safety pattern; a corrupt file throws `{ kind: "stack_fingerprint_corrupt" }`.
+- `onStale` runs *after* the rebuild but *before* re-fingerprinting, so post-rebuild derivation (e.g. `deriveCompose`, D-030) is captured by the persisted fingerprint and does not immediately re-trigger staleness.
+- Emits the D-029 `stack.*` phase via `createEmitter` verbatim: `stack.checking` → (`stack.fresh` | `stack.stale` + `stack.rebuilding` + `stack.rebuilt`) → `stack.attached`; `stack.failed` on any thrown error. A not-running-but-hash-matched stack reports the synthetic changed field `["<not-running>"]` so the rebuild reason stays visible.
+
+**Consequences:**
+- Consumer preflight collapses to a single `reconcileComposeStack` call plus the caller's `fingerprint` field list.
+- The helper does not invalidate the library's own `<envKey>.json` metadata. `Binding.version` (D-027) is the supported invalidation hook, so out-of-library `unlinkSync` calls against `.speculum-env/` are no longer required.
+
+---
+
+## D-032. Closing the derive→bind seam, the rebuild escape hatch, and the image-drift compare boundary
+
+**Context:** A consumer-repo audit and a code-review pass against D-027..D-031 surfaced three residual seams. (a) `speculum derive compose` (D-030) emits a `derived-compose.json` but offers nothing to load it back — every consumer hand-rolls a read-parse-validate-assert loop between the CLI's output and the `bind({ adapter })` call, and tends to invoke it at module load (a footgun: a stray import then throws before any test-runner gating fires). (b) `reconcileComposeStack` (D-031) has no manual override — a CI flag or local "rebuild even if the fingerprint says fresh" knob requires bypassing the library or salting the fingerprint. (c) The attach-mode image-drift compare (D-028) tolerates any prefix relationship between `expected` and `actual`, so `expected="redis"` aligns with `actual="redis-evil:latest"` and `expected="a"` aligns with everything starting with `"a"` — a false negative on real drift.
+
+**Decision:**
+
+- **`loadDerivedCompose(path, expectedKeys)`** — a synchronous public helper that reads the derive JSON, validates each entry against `ComposeAdapterConfigSchema`, asserts every key in `expectedKeys` is present, and returns the loaded map typed as `Record<string, AdapterConfig>` so the consumer can spread per-binding. Three discriminated errors: `derived_compose_missing` (ENOENT), `derived_compose_invalid` (parse or schema failure, with `cause`), `derived_compose_missing_keys` (lists the missing names). Synchronous on purpose: an async loader would tempt consumers to await it at module top level. A sync function makes the throws land where the consumer's own ensure-time setup runs, not at import time.
+- **`force?: boolean` on `ReconcileComposeOptions`** — when `true`, skip the fingerprint compare and the running-stack probe and go straight to the rebuild path. The emitted `stack.stale` event reports `changedFields: ["<forced>"]`, mirroring the existing `["<not-running>"]` synthetic marker so reporters render coherently. `onStale` still fires; the post-rebuild fingerprint is still persisted (so the next run can short-circuit normally).
+- **Tightened image-drift compare** — replace the bidirectional `startsWith` with exact-or-`@sha256:`-suffix tolerance only: `expected === actual || actual.startsWith(expected + "@sha256:") || expected.startsWith(actual + "@sha256:")`. The only ambiguity worth admitting is the digest suffix shape (`repo:tag` vs `repo:tag@sha256:...`); arbitrary prefix relationships are not.
+
+**Consequences:**
+- The F3 derive story (D-030) is now end-to-end: emit JSON → load JSON → `bind({ adapter })`. The hand-rolled loader the consumer audit caught reduces to a single `loadDerivedCompose` call. The sync signature is a load-bearing constraint, not a stylistic choice — it forbids the import-time-throw pattern.
+- `force` formalises a knob that consumer repos otherwise improvise (an env-var that bypasses the helper, or a salted fingerprint field that always changes). The synthetic `["<forced>"]` marker keeps the observer/reporter contract symmetric with the existing not-running case.
+- The drift compare now flags real drift while still tolerating the digest-suffix shape that motivated the loose check originally. Three test cases pin the boundary: prefix-only refs differ, digest-suffix refs match, single-char prefixes are not absorbed.
+- New exported error-kind types: `DerivedComposeMissingError`, `DerivedComposeInvalidError`, `DerivedComposeMissingKeysError`. `loadDerivedCompose` itself is exported from `src/index.ts`.

@@ -65,6 +65,7 @@ const ENV_LEVEL = new Set(["environment.starting", "environment.ready", "environ
 const labelFor = (e: ObserverEvent): string => {
   const name = ENV_LEVEL.has(e.type) ? "environment"
     : e.type.startsWith("substrate.") ? "substrate"
+    : e.type.startsWith("stack.") ? "stack"
     : e.component;
   return (name ?? INFO).padEnd(12);
 };
@@ -152,6 +153,27 @@ export const createConsoleReporter = (opts: ConsoleReporterOptions = {}): Observ
         break;
       case "chaos.started":
         out(DONE, e, "chaos restarted");
+        break;
+      case "stack.checking":
+        out(INFO, e, `stack checking · ${e.stackName}`);
+        break;
+      case "stack.fresh":
+        out(DONE, e, `stack fresh · ${e.stackName}`);
+        break;
+      case "stack.stale":
+        out(INFO, e, `stack stale · ${e.stackName} · changed: ${e.changedFields.join(", ")}`);
+        break;
+      case "stack.rebuilding":
+        out(INFO, e, `stack rebuilding · ${e.stackName}…`);
+        break;
+      case "stack.rebuilt":
+        out(DONE, e, `stack rebuilt · ${e.stackName} · ${fmtMs(e.durationMs)}`);
+        break;
+      case "stack.attached":
+        out(DONE, e, `stack attached · ${e.stackName} · ${e.serviceCount} service(s)`);
+        break;
+      case "stack.failed":
+        out(FAIL, e, `stack failed · ${e.stackName} · ${errSummary(e.error)}`);
         break;
       default:
         // substrate.connecting, image.resolving, probe.ready, container.*,

@@ -121,11 +121,15 @@ src/                    Library source
   reporter.ts           createConsoleReporter — built-in stream consumer
   runtime.ts            Runtime<E> + ChaosControls<E>
   shared.ts             createSharedEnvs — atomic file claim
+  compose.ts            reconcileComposeStack + FingerprintSpec (D-031)
   adapters/
-    docker.ts           dockerode + SIGINT cleanup
+    docker.ts           dockerode + SIGINT cleanup; onImageDrift policy (D-028)
     memory.ts           Factory-registry in-process adapter
     kubernetes.ts       K8s adapter (deploy + attach modes), reconnection layer
     kubectl.ts          kubectl subprocess wrapper (D-019)
+  cli/
+    index.ts            speculum derive CLI dispatch (bin entry) (D-030)
+    derive.ts           deriveCompose / deriveK8s / loadDerivedCompose (D-030, D-032)
   index.ts              Public surface (.d.ts emitted by tsc at build)
 
 tests/
