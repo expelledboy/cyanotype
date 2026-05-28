@@ -16,6 +16,15 @@ Then:
 bun install
 ```
 
+### Co-developing against a consumer repo via a `file:` pin
+
+If a consumer pins Speculum locally — e.g. `"@expelledboy/speculum": "file:../../expelledboy/speculum"` — then `bunx @expelledboy/speculum derive ...` from the consumer side resolves against the **on-disk `dist/cli/index.js`** of this checkout. The CLI is only emitted by `bun run build` (`tsc -p tsconfig.build.json`). Two consequences:
+
+- After changing anything under `src/cli/`, run `bun run build` in this repo before retrying `bunx` from the consumer side. Otherwise `bunx` invokes a stale (or, if `dist/` is absent, fails outright with "could not determine executable").
+- After switching a consumer from a `file:` pin to a semver pin (e.g. `^0.3.1`), delete the consumer's `node_modules/@expelledboy/speculum` and re-run `bun install` — Bun does not always replace a directory-symlinked dep with a fresh tarball.
+
+Switch to a semver pin once your library change has landed in a published release; that avoids the dist/build coupling entirely.
+
 ## Run the tests
 
 ```sh
@@ -101,6 +110,33 @@ The ADR process:
 - The PR description states the *why*: what problem this solves, what the alternatives were, what's now possible (or impossible). The diff explains the *what*.
 - Tests in the same PR as the change.
 - If you added an ADR, link to it from the PR description.
+
+## Pre-release checklist
+
+Before tagging any `v*.*.*` and triggering `release.yml`:
+
+- `just typecheck && bun run build && just test-core` must all be green.
+- **Exercise the bin entry end-to-end.** Library tests in
+  `tests/core/cli-derive.test.ts` cover `deriveCompose` and `deriveK8s`
+  as pure functions; they do not catch `src/cli/index.ts` argv-parsing
+  or subcommand-routing bugs. The spawn suite in the same file (under
+  `describe("speculum derive (CLI dispatch)", ...)`) does — and 0.3.0
+  shipped with a broken dispatcher because no test ever ran the bin
+  itself. The dispatch suite is the regression bar; do not relax it.
+  Manual smoke before publish:
+  ```sh
+  bun run build
+  bun dist/cli/index.js derive compose \
+    --compose tests/support/compose/petstore-attach/compose.yaml \
+    --out - --project petstore-attach \
+    | jq '.bankingSim, .payswitch' >/dev/null
+  bun dist/cli/index.js derive k8s \
+    --k8s tests/support/k8s/petstore-attach/all.yaml \
+    --out - | jq 'keys | length' >/dev/null
+  ```
+- The CHANGELOG `[Unreleased]` section is non-empty and reads coherently
+  as a release-note. Move it to `[X.Y.Z] - YYYY-MM-DD` in the release
+  commit; `release.yml` feeds it to the GitHub Release body.
 
 ## Project layout
 

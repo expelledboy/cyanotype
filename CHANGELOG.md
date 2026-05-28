@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+- `CONTRIBUTING.md` gains a Pre-release checklist that names the CLI
+  spawn suite as the regression bar for `bin` dispatcher bugs, with a
+  manual smoke-test snippet that exercises both `derive compose` and
+  `derive k8s` from the built `dist/`. Documents the surprise from
+  0.3.0 — library tests passed; the bin entry was broken.
+- `CONTRIBUTING.md` gains a "Co-developing against a consumer repo via
+  a `file:` pin" note: contributors must `bun run build` after any
+  `src/cli/` change for the consumer's `bunx @expelledboy/speculum …`
+  to see it, and a consumer switching from a `file:` to a semver pin
+  should `rm -rf node_modules/@expelledboy/speculum && bun install`.
+- `docs/attach-mode.md` troubleshooting table gains rows for
+  `attach_dead_container` and `container_gone`, plus an "Upgrading
+  from a pre-0.3.0 attach session" subsection that explains why
+  bumping `Binding.version` does not dislodge a legacy snapshot
+  (absent stored version → check is deliberately skipped, see D-027)
+  and prescribes the one-time `rm .speculum-env/<envKey>.json` fix.
+
 ## [0.3.1] - 2026-05-28
 
 Bugfix for the 0.3.0 `speculum derive` CLI and package-root re-exports.

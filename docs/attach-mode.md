@@ -523,6 +523,14 @@ Errors are thrown as discriminated objects with a `kind` field. The common ones:
 | `attach_mode_violation` | adapter chokepoint | A destructive operation was attempted in attach mode without `allowChaos`. Either set `allowChaos: true` on the Binding, or switch to deploy mode for that test. |
 | `attach_version_stale` | `freshAttach` (D-027) | Pure-attach mode (`mode: "attach"`) detected that the persisted environment's stored `Binding.version` differs from the current one. There is nothing to rebuild in pure-attach — switch to `startOrAttach` mode, or align the binding version with the running environment. |
 | `attach_image_drift` | docker adapter `startAttach` (D-028, D-032) | `onImageDrift: "fail"` was set and the attached container's image does not match the `Binding`'s expected image. The error carries `expected`, `actual`, and `component`. The comparison tolerates an exact match or an `@sha256:` digest suffix — anything else is treated as drift. |
+| `attach_dead_container` | `freshAttach` | The persisted `<envKey>.json` references a container that no longer exists. Common after the underlying stack was rebuilt outside Speculum's control. Delete `.speculum-env/<envKey>.json` and re-ensure. See the upgrade note below — this is also the symptom of pre-0.3.0 metadata after a stack rebuild. |
+| `container_gone` | `attachOne` (orchestrator) | A *specific* component's container in the snapshot is missing, even though the sample-container liveness check in `startOrAttach` passed. This means the stack was partially torn down. Same fix as `attach_dead_container`: clear `.speculum-env/<envKey>.json` once. |
+
+### Upgrading from a pre-0.3.0 attach session
+
+Snapshots written by Speculum &lt; 0.3.0 lack the optional `version` field that drives D-027's cache-key invalidation. The library deliberately skips the version check when the stored field is absent (so a newer Speculum never false-invalidates a healthy environment), but that also means an upgraded consumer cannot rely on bumping `Binding.version` to dislodge the legacy snapshot — the check sees `stored: undefined` and skips. If you also rebuild the underlying compose/k8s stack as part of the upgrade (e.g. via `reconcileComposeStack`), the persisted snapshot will reference container IDs that no longer exist, and the next ensure will throw `attach_dead_container` or `container_gone`.
+
+**One-time fix when upgrading:** delete `.speculum-env/<envKey>.json` once. Speculum then writes a fresh snapshot that includes `version`, and from that point forward bumping `Binding.version` triggers the proper stop-and-rebuild path (D-027, with the leak-safe `stopAllInMeta` walk added in 0.3.0).
 
 ### Kubernetes-specific (`k8s_attach_*`)
 
