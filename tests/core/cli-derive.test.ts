@@ -76,6 +76,15 @@ services:
     expect(deriveCompose(path)).toEqual({});
   });
 
+  test("does not emit allowChaos — policy belongs at the bind site", () => {
+    const path = tmpFile("compose.yaml", COMPOSE_YAML);
+    const result = deriveCompose(path);
+    const entry = result["redis"] as { compose: { attach: Record<string, unknown> } };
+    expect(entry.compose.attach["allowChaos"]).toBeUndefined();
+    const entry2 = result["petstore.primary"] as { compose: { attach: Record<string, unknown> } };
+    expect(entry2.compose.attach["allowChaos"]).toBeUndefined();
+  });
+
   test("handles array-style labels", () => {
     const yaml = `
 services:
@@ -181,7 +190,7 @@ spec:
     }
   });
 
-  test("populates namespace, service, port, deployment, allowChaos", () => {
+  test("populates namespace, service, port, deployment", () => {
     const path = tmpFile("k8s.yaml", K8S_YAML);
     const result = deriveK8s(path);
     const entry = result["redis"] as { k8s: { attach: Record<string, unknown> } };
@@ -189,7 +198,15 @@ spec:
     expect(entry.k8s.attach["service"]).toBe("redis-svc");
     expect(entry.k8s.attach["port"]).toBe(6379);
     expect(entry.k8s.attach["deployment"]).toBe("redis-dep");
-    expect(entry.k8s.attach["allowChaos"]).toBe(true);
+  });
+
+  test("does not emit allowChaos — policy belongs at the bind site", () => {
+    const path = tmpFile("k8s.yaml", K8S_YAML);
+    const result = deriveK8s(path);
+    const entry = result["redis"] as { k8s: { attach: Record<string, unknown> } };
+    expect(entry.k8s.attach["allowChaos"]).toBeUndefined();
+    const entry2 = result["petstore.primary"] as { k8s: { attach: Record<string, unknown> } };
+    expect(entry2.k8s.attach["allowChaos"]).toBeUndefined();
   });
 
   test("walks a directory of yaml files", () => {

@@ -89,8 +89,22 @@ const derived: Record<string, AdapterConfig> = IS_K8S_ATTACH
   : IS_DOCKER_ATTACH
   ? loadDerivedCompose()
   : {};
-const adapterFor = (key: string): AdapterConfig | undefined =>
-  (IS_K8S_ATTACH || IS_DOCKER_ATTACH) ? derived[key] : undefined;
+const adapterFor = (key: string): AdapterConfig | undefined => {
+  const base = (IS_K8S_ATTACH || IS_DOCKER_ATTACH) ? derived[key] : undefined;
+  if (!base) return undefined;
+  // Policy field: derived output carries topology only; chaos opt-in is the
+  // bind site's responsibility. Attach modes expose live containers to chaos
+  // tests, so we layer it in here rather than baking it into the derived file.
+  if (IS_DOCKER_ATTACH) {
+    const d = base as { compose: { attach: Record<string, unknown> } };
+    return { compose: { attach: { ...d.compose.attach, allowChaos: true } } } as AdapterConfig;
+  }
+  if (IS_K8S_ATTACH) {
+    const d = base as { k8s: { attach: Record<string, unknown> } };
+    return { k8s: { attach: { ...d.k8s.attach, allowChaos: true } } } as AdapterConfig;
+  }
+  return base;
+};
 const REDIS_PRIMARY_DNS  = IS_K8S ? "redis-primary" : DOCKER_HOST_DNS;
 const REDIS_REPLICA_DNS  = IS_K8S ? "redis-replica" : DOCKER_HOST_DNS;
 const REDIS_PRIMARY_WIRE_PORT = IS_K8S ? 6379 : 36379;

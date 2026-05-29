@@ -192,7 +192,7 @@ describe("docker/adapter/attach denylist", () => {
   });
 
   for (const op of ["stop", "start", "restart", "kill"] as const) {
-    test(`container.${op} is not called when allowChaos is false`, async () => {
+    test(`container.${op} is not called when allowChaos is false (throws instead)`, async () => {
       fakeContainers = [seedContainer({ Id: "api1" })];
       const spy = makeDenylistClient();
       // biome-ignore lint/suspicious/noExplicitAny: spy client satisfies DockerClient surface.
@@ -200,7 +200,8 @@ describe("docker/adapter/attach denylist", () => {
       await a.connect();
       const r = await a.start(mkSpec()); // no allowChaos
       spy._calls.length = 0; // reset after start
-      await a.stop(r.containerId);
+      const e = await catchKind(() => a.stop(r.containerId));
+      expect((e as { kind?: string }).kind).toBe("chaos_unsupported_in_attach_mode");
       expect(spy._calls).not.toContain(`container.${op}`);
       expect(fakeContainers.find((c) => c.Id === "api1")!.status).toBe("running");
       await a.disconnect();
@@ -383,12 +384,13 @@ describe("docker/adapter/attach lifecycle", () => {
     await a.disconnect();
   });
 
-  test("stop is a no-op without allowChaos", async () => {
+  test("stop throws chaos_unsupported_in_attach_mode without allowChaos", async () => {
     fakeContainers = [seedContainer({ Id: "api1" })];
     const a = mkAdapter({ project: "myproj" });
     await a.connect();
     const r = await a.start(mkSpec());
-    await a.stop(r.containerId);
+    const e = await catchKind(() => a.stop(r.containerId));
+    expect((e as { kind?: string }).kind).toBe("chaos_unsupported_in_attach_mode");
     expect(fakeContainers.find((c) => c.Id === "api1")!.status).toBe("running");
     await a.disconnect();
   });

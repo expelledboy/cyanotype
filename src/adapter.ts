@@ -118,4 +118,15 @@ export type Started = {
   readonly containerId: string;
   /** Container port name → resolved host port number. */
   readonly ports: Record<string, number>;
+  /**
+   * Whether the orchestrator owns this container's lifecycle. `true` for
+   * substrates the orchestrator provisions itself (Docker deploy mode, the
+   * in-memory adapter, fresh Kubernetes pods). `false` when the adapter
+   * adopted a pre-existing container the operator owns (Docker attach to a
+   * docker-compose project, Kubernetes attach to a pre-running namespace).
+   * Drives both `runtime.stop()` (per-component) and `stopAllInMeta`
+   * (cross-process invalidation): non-owned containers are detached, not
+   * removed.
+   */
+  readonly owned: boolean;
 };

@@ -116,7 +116,6 @@ export const deriveK8s = (k8sPath: string): Record<string, unknown> => {
           namespace: ns,
           service: svcName,
           port: containerPort,
-          allowChaos: true,
           deployment: depName,
         },
       },
@@ -202,7 +201,6 @@ export const deriveCompose = (
           ...(project !== undefined ? { project } : {}),
           service: serviceName,
           ...(hostPort !== undefined ? { port: hostPort } : {}),
-          allowChaos: true,
         },
       },
     };

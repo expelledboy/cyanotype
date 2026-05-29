@@ -338,9 +338,18 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     if (mode === "attach") {
       const b = attachBindings.get(containerId);
       if (!b) return;
-      // No-op for bindings that did not opt into chaos: never touch the
-      // user's containers.
-      if (!b.allowChaos) return;
+      // Explicit chaos call without opt-in: surface the misconfiguration
+      // rather than silently succeeding — the only remaining caller of
+      // adapter.stop in attach mode is the chaos API, so no opt-in is a
+      // test-author error.
+      if (!b.allowChaos) {
+        const containerId = b.realId;
+        throw {
+          kind: "chaos_unsupported_in_attach_mode",
+          message: "chaos.stop on an attached binding requires adapter.compose.attach.allowChaos: true",
+          containerId,
+        };
+      }
       // Chaos path: real outage via `docker stop`.
       const c = guardAttachClient(requireClient(), true);
       try {
@@ -524,7 +533,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       const ports = resolvePorts(refreshed, existing.portKeys, match.id);
       existing.paused = false;
       emit?.({ type: "container.started", containerId, ports });
-      return { containerId, ports };
+      return { containerId, ports, owned: false };
     }
 
     if (match.status !== "running") {
@@ -540,7 +549,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     attachBindings.set(containerId, { realId: match.id, allowChaos, portKeys, paused: false });
     known.add(containerId);
     emit?.({ type: "container.started", containerId, ports });
-    return { containerId, ports };
+    return { containerId, ports, owned: false };
   };
 
   const start = async (spec: StartSpec, emit?: Emit): Promise<Started> => {
@@ -604,7 +613,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     registerExitHandler();
 
     emit?.({ type: "container.started", containerId: created.id, ports });
-    return { containerId: created.id, ports };
+    return { containerId: created.id, ports, owned: true };
   };
 
   const exists = async (containerId: string): Promise<boolean> => {

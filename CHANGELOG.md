@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+- **`Started` SPI return now requires `owned: boolean`.** External adapter
+  implementers must set it; Speculum uses it to distinguish containers it
+  created from containers it merely attached to. (D-034)
+- **`speculum derive compose|k8s` no longer emits `allowChaos` in derived
+  output.** Derived adapter config carries topology only (project / service /
+  port / namespace / deployment). Policy fields — `allowChaos`, `onImageDrift`
+  — belong at the bind site, where the test author explicitly opts in per
+  binding. Consumers that rely on chaos in attach mode must spread
+  `allowChaos: true` into the adapter config at `bind()` time. (D-033)
+- **Docker adapter `stop()` in attach mode now throws
+  `chaos_unsupported_in_attach_mode` when `allowChaos` is unset**, mirroring
+  the existing K8s adapter behaviour. The previous silent no-op masked
+  misconfigured bindings. (D-034)
+
+### Fixed
+- `runtime.stop()` and `shared.stopAll()` no longer call `adapter.stop()` for
+  containers Speculum did not create (`owned: false`). Closes a defect where
+  attach-mode + `allowChaos: true` caused end-of-session `stopAll` to
+  `docker stop` the operator's running stack. (D-034)
+- Version-drift invalidation (`stopAllInMeta`) skips non-owned containers.
+  Pure-attach mode continues to throw `attach_version_stale` as before. (D-034)
+
+### Added
+- `ComponentSnapshot` gains optional `owned?: boolean`; absent is treated as
+  `true` for backward compatibility with pre-0.4.0 metadata files. (D-034)
+
 ### Docs
 - `CONTRIBUTING.md` gains a Pre-release checklist that names the CLI
   spawn suite as the regression bar for `bin` dispatcher bugs, with a

@@ -64,7 +64,7 @@ export const createInMemoryAdapter = (opts: InMemoryAdapterOptions): Adapter => 
     containers.set(containerId, entry);
     observe?.({ type: "container.created", containerId });
     observe?.({ type: "container.started", containerId, ports: handle.ports });
-    return { containerId, ports: handle.ports };
+    return { containerId, ports: handle.ports, owned: true };
   };
 
   const stop = async (containerId: string): Promise<void> => {

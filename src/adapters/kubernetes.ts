@@ -615,7 +615,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       globalTracked.set(containerId, t);
       known.add(containerId);
       globalKnown.add(containerId);
-      return { containerId, ports };
+      return { containerId, ports, owned: false };
     }
     const svc = await attachK.run(["get", "svc", serviceName, "-o", "json"]);
     if (svc.exit !== 0) {
@@ -644,7 +644,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     globalTracked.set(containerId, t);
     known.add(containerId);
     globalKnown.add(containerId);
-    return { containerId, ports };
+    return { containerId, ports, owned: false };
   };
 
   const start = async (spec: StartSpec): Promise<Started> => {
@@ -732,7 +732,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     known.add(podName);
     globalKnown.add(podName);
 
-    return { containerId: podName, ports };
+    return { containerId: podName, ports, owned: true };
   };
 
   const exists = async (containerId: string): Promise<boolean> => {

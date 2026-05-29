@@ -36,6 +36,8 @@
 - [D-030 — `speculum derive` shipped as a CLI (`bin`) over a copied reference script](#d-030-speculum-derive-shipped-as-a-cli-bin-over-a-copied-reference-script)
 - [D-031 — `reconcileComposeStack` — library-owned compose-stack staleness reconciliation](#d-031-reconcilecomposestack--library-owned-compose-stack-staleness-reconciliation)
 - [D-032 — Closing the derive→bind seam, the rebuild escape hatch, and the image-drift compare boundary](#d-032-closing-the-derivebind-seam-the-rebuild-escape-hatch-and-the-image-drift-compare-boundary)
+- [D-033 — Derived adapter config is topology-only; policy lives at the bind site](#d-033-derived-adapter-config-is-topology-only-policy-lives-at-the-bind-site)
+- [D-034 — Container ownership as a first-class SPI property; teardown is detach-only for non-owned containers](#d-034-container-ownership-as-a-first-class-spi-property-teardown-is-detach-only-for-non-owned-containers)
 
 ---
 
@@ -623,3 +625,60 @@ Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respa
 - `force` formalises a knob that consumer repos otherwise improvise (an env-var that bypasses the helper, or a salted fingerprint field that always changes). The synthetic `["<forced>"]` marker keeps the observer/reporter contract symmetric with the existing not-running case.
 - The drift compare now flags real drift while still tolerating the digest-suffix shape that motivated the loose check originally. Three test cases pin the boundary: prefix-only refs differ, digest-suffix refs match, single-char prefixes are not absorbed.
 - New exported error-kind types: `DerivedComposeMissingError`, `DerivedComposeInvalidError`, `DerivedComposeMissingKeysError`. `loadDerivedCompose` itself is exported from `src/index.ts`.
+
+---
+
+## D-033. Derived adapter config is topology-only; policy lives at the bind site
+
+**Context:** `speculum derive compose|k8s` (D-030) walks an infrastructure manifest — a compose YAML or a directory of K8s resources — and emits a binding-keyed JSON of `AdapterConfig` entries the consumer loads at attach time. Through 0.3.1 the derive output included `allowChaos: true` on every entry. The schemas already correctly omitted `onImageDrift` (added in D-028); `allowChaos` had been smuggled in alongside the topology fields by accident of when the CLI was specified. A consumer who ran `bunx @expelledboy/speculum derive compose` then `loadDerivedCompose` got chaos opt-in baked into every binding without ever typing the words. Combined with the D-034 lifecycle defect — `runtime.stop` reaching `adapter.stop` when `allowChaos: true` — this meant a default-derived attach session would `docker stop` the operator's stack at suite teardown. Even with D-034 in place, the structural issue remains: a *generated* file is not a place for a policy decision.
+
+**Decision:** Derive output is topology only.
+
+- `deriveCompose` emits `{ compose: { attach: { project?, service, port? } } }` per binding — nothing else. (`containerNumber` is similarly topology and stays whenever it applies.)
+- `deriveK8s` emits `{ k8s: { attach: { namespace, service, port, deployment } } }` — nothing else.
+- The Zod schemas (`ComposeAdapterConfigSchema`, `K8sAdapterConfigSchema`) keep `allowChaos: z.boolean().optional()` and `onImageDrift: z.enum([...]).optional()`. The schemas describe the *union* of valid fields a bind site may use; the derive functions emit a *subset* — strictly the topology fields.
+- Policy fields (`allowChaos`, `onImageDrift`) are set per-binding at the `bind()` call site by the test author. The shipped `loadDerivedCompose` (D-032) returns topology-only adapter config; consumers spread it under the policy they want:
+  ```ts
+  const derived = loadDerivedCompose(path, ["bankingSim", "payswitch"]);
+  bind(bp, {
+    adapter: {
+      compose: { attach: { ...derived.bankingSim.compose.attach, allowChaos: true, onImageDrift: "fail" } },
+    },
+  });
+  ```
+- Regression locked by an assertion in `tests/core/cli-derive.test.ts`: `expect(entry.compose.attach.allowChaos).toBeUndefined()` (and the K8s equivalent). Any future regression that re-introduces a policy field to derive output fails the gate.
+
+**Consequences:**
+- **Breaking for consumers who relied on `derive` setting `allowChaos: true`.** Resilience tests that call `chaos.stop`/`chaos.start` against an attach mode must now set `allowChaos: true` explicitly per binding. The petstore reference example (`tests/petstore-example/env.ts`) does this centrally in its `adapterFor` helper, conditional on `IS_DOCKER_ATTACH`/`IS_K8S_ATTACH` — the documented pattern.
+- The category boundary is *generated vs. declared*. Derived JSON is a build artifact: a fingerprint-driven snapshot of the substrate's shape. Bind-site config is source code: the test author's deliberate declaration of what Speculum is allowed to do. Anything that depends on intent — chaos opt-in, image-drift policy, future authentication choices — belongs in source.
+- The schemas remain open to growth. Future policy fields added to `AdapterConfig` are accepted on the bind site without ceremony; derive simply continues to ignore them.
+
+---
+
+## D-034. Container ownership as a first-class SPI property; teardown is detach-only for non-owned containers
+
+**Context:** The Adapter SPI's `start(spec)` returns `Started = { containerId, ports }` — the orchestrator records those into a `ComponentSnapshot` and persists them. In deploy mode the adapter created the container; in attach mode the adapter discovered an existing operator-owned container. The SPI did not distinguish. `finalizeRuntime` carried a `detachOnly: boolean` parameter — `false` from `startEnvironment`, `true` from `attachEnvironment` — that gated whether `runtime.stop()` called `adapter.stop()` on each component. This worked for the pure-attach case (re-attach from snapshot in a second process), but it failed for the common case where a `startOrAttach` runtime is built via `startEnvironment` against a Docker adapter in `mode: "attach"`. Such a runtime has `detachOnly: false` (because it came from `startEnvironment`), so `runtime.stop()` reaches `adapter.stop()`, which in the docker adapter ran a real `docker stop` against the operator's container as soon as `allowChaos: true` was set on the binding. Combined with the D-033 defect (derive shipped `allowChaos: true` by default), a default consumer flow ended every test session with `docker stop` against an attached compose stack.
+
+The lifecycle and chaos concerns were also conflated at the wrong layer. The chaos API (`runtime.chaos.stop/start/restart`) calls `adapter.stop`/`start` directly — that's its job. Suite teardown (`shared.stopAll` → `runtime.stop` → `adapter.stop`) was reusing the same `adapter.stop` path, with `allowChaos` as the only gate. A test author who opted into chaos for one disruption test was implicitly opting into teardown-time destruction for every test in the suite. Two distinct intents — "let one test disrupt this service" and "stop this container when the suite ends" — were ratified by a single flag.
+
+Within the adapters themselves, the inconsistency surfaced: the K8s adapter throws `chaos_unsupported_in_attach_mode` when `adapter.stop` is called on an attach binding without `allowChaos: true`; the Docker adapter silently no-oped. With teardown reaching `adapter.stop`, the silent no-op masked the inconsistency at the cost of leaving misconfigured chaos calls undetected.
+
+**Decision:** Container ownership is declared by the adapter on every `start()` return, propagated through the orchestrator, persisted in the snapshot, and consulted by every teardown path.
+
+- `Started` gains a required `readonly owned: boolean`. The adapter returns `true` when it created the container (Docker deploy, in-memory, K8s deploy) and `false` when it discovered an existing container (Docker attach, K8s attach).
+- `ComponentSnapshot` gains optional `readonly owned?: boolean`. Absent is treated as `true` on read — pre-0.4.0 metadata never carried the field and was always Speculum-created.
+- The orchestrator's `ComponentState` carries `owned: boolean`. `startOne` reads it from the `Started` result of `adapter.start`. `attachOne` (the `attachEnvironment` per-component path) hardcodes `owned: false` regardless of what the snapshot says — the process that called `attachEnvironment` did not start these containers, so its `runtime.stop` must not stop them.
+- `finalizeRuntime`'s `detachOnly: boolean` parameter is removed. The `stop()` closure becomes per-component: `if (c.owned && c.containerId) await adapter.stop(...)`. A single uniform rule replaces the previous bimodal flag.
+- `shared.ts`'s `stopAllInMeta` (the D-027 version-drift cleanup) skips snapshots where `(snap.owned ?? true) === false`. Version drift in attach mode no longer bulk-stops the operator's stack; pure-attach mode (`mode: "attach"`) continues to throw `attach_version_stale`.
+- The chaos API is unchanged. `runtime.chaos.stop/start/restart` continue to call `adapter.stop/start` directly, gated only by `allowChaos` at the adapter. Chaos is the *sole* path that reaches `adapter.stop` for non-owned containers — and only when the bind site explicitly opted in.
+- The Docker adapter's silent no-op on `adapter.stop` in attach mode + `allowChaos: false` (previously `if (!b.allowChaos) return;`) is replaced with a throw of `{ kind: "chaos_unsupported_in_attach_mode", message, containerId }`, mirroring the K8s adapter's existing throw. With teardown no longer reaching `adapter.stop` for non-owned containers, the only remaining callers are the explicit chaos verbs — making "chaos call without `allowChaos`" a test-author error, surfaced loudly.
+- The metadata snapshot writes `owned: false` only when the component is not owned; the field is omitted when owned. This keeps owned-only environments (the entirety of pre-0.4.0 use) byte-stable with pre-0.4.0 readers — a newer Speculum reading older metadata, or vice versa, never trips.
+- New invariant test suite at `tests/core/owned-lifecycle.test.ts` (11 cases) pins the rules: `runtime.stop()` on owned calls `adapter.stop`; non-owned does not; mixed environments stop only the owned half; `attachEnvironment` always produces `owned: false` regardless of snapshot; `metadata()` field-presence rules; `stopAllInMeta` honors `owned` on version drift; pre-0.4.0 snapshots (absent field) are treated as owned.
+
+**Consequences:**
+- **Breaking SPI change** for any external adapter implementation: `Started.owned` is required. No known external adapters exist; the change forces every implementer to declare the substrate's truth.
+- The category boundary is *who created this container?* Not *who attached?*, *what mode is the adapter in?*, *what process is running?* — those are derived. The adapter knows whether it called `createContainer`; only the adapter knows. Surfacing it as `Started.owned` puts the fact at the source of truth.
+- Suite teardown becomes a property of the *container*, not a property of the *runtime construction path*. The previous `detachOnly: true | false` parameter was a proxy for ownership inferred from which orchestrator entry built the runtime. Direct measurement replaces inference; per-component granularity replaces per-runtime granularity. Mixed environments (some owned, some attached) compose correctly without ceremony.
+- Chaos and teardown are now separable concerns. `allowChaos: true` opts into the test using `chaos.stop("svc")` to disrupt; it does not opt suite teardown into destruction. Test authors who want both still get both; test authors who want chaos for one test no longer pay for it across the suite.
+- The docker/K8s asymmetry is closed. Both adapters now throw `chaos_unsupported_in_attach_mode` when chaos is invoked against a non-opted-in attach binding. The silent no-op masked test-author errors; the throw surfaces them.
+- One latent K8s issue is noted and deferred: `kubernetesAdapter.teardown()` does not scale a chaos-paused deployment back to `replicas: 1` before cleanup, so a deployment chaos-stopped mid-suite stays at zero replicas after the suite ends. The lifecycle fix here does not address that — it remains an open ADR item if it bites a consumer.

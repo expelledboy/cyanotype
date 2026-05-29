@@ -3,8 +3,7 @@
     "compose": {
       "attach": {
         "service": "cache-leader",
-        "port": 6379,
-        "allowChaos": true
+        "port": 6379
       }
     }
   },
@@ -12,8 +11,7 @@
     "compose": {
       "attach": {
         "service": "cache-follower",
-        "port": 6379,
-        "allowChaos": true
+        "port": 6379
       }
     }
   },
@@ -21,8 +19,7 @@
     "compose": {
       "attach": {
         "service": "pet-svc-1",
-        "port": 8080,
-        "allowChaos": true
+        "port": 8080
       }
     }
   },
@@ -30,8 +27,7 @@
     "compose": {
       "attach": {
         "service": "pet-svc-2",
-        "port": 8080,
-        "allowChaos": true
+        "port": 8080
       }
     }
   },
@@ -39,8 +35,7 @@
     "compose": {
       "attach": {
         "service": "pet-svc-3",
-        "port": 8080,
-        "allowChaos": true
+        "port": 8080
       }
     }
   },
@@ -48,8 +43,7 @@
     "compose": {
       "attach": {
         "service": "front-door",
-        "port": 8080,
-        "allowChaos": true
+        "port": 8080
       }
     }
   }

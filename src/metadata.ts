@@ -38,4 +38,12 @@ export type ComponentSnapshot = {
    * stored environment as stale and rebuilds from scratch.
    */
   readonly version?: string;
+  /**
+   * Whether the orchestrator owns this container's lifecycle. Optional for
+   * backward compatibility with metadata written by older Speculum: an
+   * absent field is read as `true` (fully owned) — the historical default.
+   * Emitted by the writer ONLY when `false`, so existing metadata stays
+   * byte-stable for owned components.
+   */
+  readonly owned?: boolean;
 };

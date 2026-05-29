@@ -77,6 +77,14 @@ type ComponentState = {
   signal: AbortController;
   running: Running<unknown>;
   status: "starting" | "running" | "stopped";
+  /**
+   * Whether the orchestrator owns this container's lifecycle. `true` =
+   * `runtime.stop()` calls `adapter.stop()`. `false` = `runtime.stop()`
+   * detaches (aborts log streams, marks stopped) without touching the
+   * container. `attachOne` always sets `false`; `startOne` reads it from
+   * `Started.owned` returned by the adapter.
+   */
+  owned: boolean;
 };
 
 const isSingleBinding = (slot: unknown): slot is AnyBinding =>
@@ -151,6 +159,7 @@ const buildComponentRuntime = (
   binding: AnyBinding,
   containerId: string,
   ports: Record<string, number>,
+  owned: boolean,
 ): ComponentState => {
   const ifaceRecord: InterfaceRecord = buildIface(binding, ports);
   const catalog = (binding.blueprint.events ?? {}) as EventCatalog;
@@ -167,6 +176,7 @@ const buildComponentRuntime = (
     containerId, ports, interface: ifaceRecord,
     api: undefined, eventBus, signal, running,
     status: "starting",
+    owned,
   };
   void (async () => {
     try {
@@ -240,8 +250,8 @@ export const startEnvironment = async <E extends Environment>(
     });
     const compStart = Date.now();
     const spec = buildSpec(componentName, instanceId, binding);
-    const { containerId, ports } = await opts.adapter.start(spec, compEmit);
-    const state = buildComponentRuntime(opts.adapter, componentName, instanceId, binding, containerId, ports);
+    const { containerId, ports, owned } = await opts.adapter.start(spec, compEmit);
+    const state = buildComponentRuntime(opts.adapter, componentName, instanceId, binding, containerId, ports, owned);
     if (binding.blueprint.readiness) {
       await runProbe(binding.blueprint.readiness, state.interface, undefined, compEmit);
     }
@@ -345,7 +355,7 @@ export const startEnvironment = async <E extends Environment>(
     await chaosStart(name, instance);
   };
 
-  return finalizeRuntime(env, components, opts, emitter, chaosStop, chaosStart, chaosRestart, false);
+  return finalizeRuntime(env, components, opts, emitter, chaosStop, chaosStart, chaosRestart);
 };
 
 export const attachEnvironment = async <E extends Environment>(
@@ -379,8 +389,11 @@ export const attachEnvironment = async <E extends Environment>(
     if (!(await opts.adapter.exists(snap.containerId))) {
       throw { kind: "container_gone", containerId: snap.containerId, componentName, instanceId };
     }
+    // Attach mode never owns the container: the process that started it
+    // (or the operator, for compose / pre-running pods) holds the lifecycle.
+    // `runtime.stop()` here detaches without removing.
     const state = buildComponentRuntime(
-      opts.adapter, componentName, instanceId, binding, snap.containerId, { ...snap.ports },
+      opts.adapter, componentName, instanceId, binding, snap.containerId, { ...snap.ports }, false,
     );
     finalizeApi(state);
     components.set(stateKey(componentName, instanceId), state);
@@ -412,7 +425,7 @@ export const attachEnvironment = async <E extends Environment>(
   const notSupported = async (): Promise<void> => {
     throw { kind: "chaos_not_supported_in_attach" };
   };
-  return finalizeRuntime(env, components, opts, emitter, notSupported, notSupported, notSupported, true);
+  return finalizeRuntime(env, components, opts, emitter, notSupported, notSupported, notSupported);
 };
 
 const finalizeRuntime = <E extends Environment>(
@@ -423,7 +436,6 @@ const finalizeRuntime = <E extends Environment>(
   chaosStop: (name: string, instance?: string) => Promise<void>,
   chaosStart: (name: string, instance?: string) => Promise<void>,
   chaosRestart: (name: string, instance?: string) => Promise<void>,
-  detachOnly: boolean,
 ): Runtime<E> => {
   const snapshot = (): RuntimeSnapshot => Object.freeze({
     status: "running" as const,
@@ -446,6 +458,10 @@ const finalizeRuntime = <E extends Environment>(
         containerId: c.containerId,
         ports: { ...c.ports },
         ...(c.binding.version !== undefined ? { version: c.binding.version } : {}),
+        // Emit `owned` ONLY when false. Owned components omit the field so
+        // older readers (which treat absent as fully owned) stay correct,
+        // and so existing metadata files remain byte-stable.
+        ...(c.owned === false ? { owned: false } : {}),
       };
       if (c.instanceId === undefined) {
         out[c.componentName] = { kind: "single", snapshot: snap };
@@ -473,7 +489,7 @@ const finalizeRuntime = <E extends Environment>(
     for (const c of components.values()) {
       if (c.status === "stopped") continue;
       c.signal.abort();
-      if (!detachOnly && c.containerId) {
+      if (c.owned && c.containerId) {
         const stopEmit = emitter.scope({
           adapter: opts.adapter.name, envKey: opts.envKey,
           component: c.componentName, instance: c.instanceId,

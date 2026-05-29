@@ -159,8 +159,16 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
   const stopAllInMeta = async (meta: EnvironmentMetadata): Promise<void> => {
     const ids: string[] = [];
     for (const slot of Object.values(meta.components)) {
-      if (slot.kind === "single") ids.push(slot.snapshot.containerId);
-      else for (const c of Object.values(slot.instances)) ids.push(c.containerId);
+      if (slot.kind === "single") {
+        // Absent `owned` = `true` (pre-0.4.0 metadata = fully owned).
+        if ((slot.snapshot.owned ?? true) === false) continue;
+        ids.push(slot.snapshot.containerId);
+      } else {
+        for (const c of Object.values(slot.instances)) {
+          if ((c.owned ?? true) === false) continue;
+          ids.push(c.containerId);
+        }
+      }
     }
     for (const id of ids) {
       if (!id) continue;
