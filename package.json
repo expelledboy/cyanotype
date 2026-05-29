@@ -1,6 +1,6 @@
 {
   "name": "@expelledboy/speculum",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Bun-native blackbox test harness built around the Component Blueprint",
   "license": "MIT",
   "author": "Anthony Jackson <102334+expelledboy@users.noreply.github.com>",

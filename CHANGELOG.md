@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-29
+
+Container ownership becomes a first-class SPI property; derive emits
+topology only. Closes a defect where end-of-session `stopAll` could
+`docker stop` an operator's attached compose stack. Surfaced by the
+first consumer (BRT) adopting 0.3.1 in production.
+
 ### Changed (BREAKING)
 - **`Started` SPI return now requires `owned: boolean`.** External adapter
   implementers must set it; Speculum uses it to distinguish containers it
