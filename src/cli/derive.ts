@@ -106,8 +106,13 @@ export const deriveK8s = (k8sPath: string): Record<string, unknown> => {
       (containers[0]?.["ports"] as
         | Array<{ containerPort: number }>
         | undefined) ?? [];
-    const containerPort = ports[0]?.containerPort;
-    if (containerPort === undefined) continue;
+    // Emit `attach.port` iff the workload declares exactly one container
+    // port. Multi-port workloads omit it — the binding's `spec.ports` drives
+    // full multi-port resolution in the k8s adapter's `startAttach`. A
+    // workload with no declared ports has no useful topology and is skipped.
+    if (ports.length === 0) continue;
+    const singleContainerPort =
+      ports.length === 1 ? ports[0]?.containerPort : undefined;
     const depName = getIn(dep, "metadata", "name") as string | undefined;
     if (!depName) continue;
     const entry = {
@@ -115,7 +120,9 @@ export const deriveK8s = (k8sPath: string): Record<string, unknown> => {
         attach: {
           namespace: ns,
           service: svcName,
-          port: containerPort,
+          ...(singleContainerPort !== undefined
+            ? { port: singleContainerPort }
+            : {}),
           deployment: depName,
         },
       },
@@ -154,10 +161,19 @@ const parseComposeLabels = (
   return raw;
 };
 
+/**
+ * Returns the published container port of a compose service iff the service
+ * exposes exactly one port. Multi-port services return `undefined`, signalling
+ * that `compose.attach.port` should be omitted from derived output — the
+ * binding's own `spec.ports` then drives full multi-port resolution in the
+ * docker adapter's `startAttach`. (`attach.port`, when set, overrides
+ * `spec.ports` to a single key; emitting a guessed first port for a multi-port
+ * service silently truncates resolution to that one port.)
+ */
 const parseComposeContainerPort = (
   ports: ComposeService["ports"],
 ): number | undefined => {
-  if (!ports || ports.length === 0) return undefined;
+  if (!ports || ports.length !== 1) return undefined;
   const first = ports[0]!;
   if (typeof first === "string") {
     const parts = first.split(":");

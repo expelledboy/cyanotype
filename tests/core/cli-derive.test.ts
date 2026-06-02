@@ -100,6 +100,33 @@ services:
     const result = deriveCompose(path);
     expect("cache.a" in result).toBe(true);
   });
+
+  test("emits attach.port for single-port services; omits it for multi-port", () => {
+    const yaml = `
+services:
+  single:
+    image: redis:7
+    labels:
+      speculum.component: cache
+    ports:
+      - "6379:6379"
+  multi:
+    image: simulator:latest
+    labels:
+      speculum.component: simulator
+    ports:
+      - "59220:59220"
+      - "59221:8080"
+`;
+    const path = tmpFile("multi-port.yaml", yaml);
+    const result = deriveCompose(path);
+    const single = result["cache"] as { compose: { attach: Record<string, unknown> } };
+    const multi  = result["simulator"] as { compose: { attach: Record<string, unknown> } };
+    expect(single.compose.attach["port"]).toBe(6379);
+    expect(multi.compose.attach["port"]).toBeUndefined();
+    // Topology is still preserved for the multi-port service.
+    expect(multi.compose.attach["service"]).toBe("multi");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -233,6 +260,74 @@ spec:
 `;
     const path = tmpFile("no-labels.yaml", yaml);
     expect(deriveK8s(path)).toEqual({});
+  });
+
+  test("emits attach.port for single-port workloads; omits it for multi-port", () => {
+    const yaml = `
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: single-dep, namespace: ns }
+spec:
+  selector: { matchLabels: { app: single } }
+  template:
+    metadata:
+      labels:
+        app: single
+        speculum.component: cache
+    spec:
+      containers:
+        - name: c
+          image: redis:7
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata: { name: single-svc, namespace: ns }
+spec:
+  selector: { app: single }
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: multi-dep, namespace: ns }
+spec:
+  selector: { matchLabels: { app: multi } }
+  template:
+    metadata:
+      labels:
+        app: multi
+        speculum.component: simulator
+    spec:
+      containers:
+        - name: c
+          image: simulator:latest
+          ports:
+            - containerPort: 59220
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata: { name: multi-svc, namespace: ns }
+spec:
+  selector: { app: multi }
+  ports:
+    - port: 59220
+      targetPort: 59220
+    - port: 8080
+      targetPort: 8080
+`;
+    const path = tmpFile("multi-port-k8s.yaml", yaml);
+    const result = deriveK8s(path);
+    const single = result["cache"]     as { k8s: { attach: Record<string, unknown> } };
+    const multi  = result["simulator"] as { k8s: { attach: Record<string, unknown> } };
+    expect(single.k8s.attach["port"]).toBe(6379);
+    expect(multi.k8s.attach["port"]).toBeUndefined();
+    // Topology is still preserved for the multi-port workload.
+    expect(multi.k8s.attach["service"]).toBe("multi-svc");
+    expect(multi.k8s.attach["deployment"]).toBe("multi-dep");
   });
 });
 

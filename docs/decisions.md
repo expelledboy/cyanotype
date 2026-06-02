@@ -38,6 +38,7 @@
 - [D-032 — Closing the derive→bind seam, the rebuild escape hatch, and the image-drift compare boundary](#d-032-closing-the-derivebind-seam-the-rebuild-escape-hatch-and-the-image-drift-compare-boundary)
 - [D-033 — Derived adapter config is topology-only; policy lives at the bind site](#d-033-derived-adapter-config-is-topology-only-policy-lives-at-the-bind-site)
 - [D-034 — Container ownership as a first-class SPI property; teardown is detach-only for non-owned containers](#d-034-container-ownership-as-a-first-class-spi-property-teardown-is-detach-only-for-non-owned-containers)
+- [D-035 — `derive` emits `attach.port` only for single-port services; the field is a narrow override, not a default](#d-035-derive-emits-attachport-only-for-single-port-services-the-field-is-a-narrow-override-not-a-default)
 
 ---
 
@@ -682,3 +683,25 @@ Within the adapters themselves, the inconsistency surfaced: the K8s adapter thro
 - Chaos and teardown are now separable concerns. `allowChaos: true` opts into the test using `chaos.stop("svc")` to disrupt; it does not opt suite teardown into destruction. Test authors who want both still get both; test authors who want chaos for one test no longer pay for it across the suite.
 - The docker/K8s asymmetry is closed. Both adapters now throw `chaos_unsupported_in_attach_mode` when chaos is invoked against a non-opted-in attach binding. The silent no-op masked test-author errors; the throw surfaces them.
 - One latent K8s issue is noted and deferred: `kubernetesAdapter.teardown()` does not scale a chaos-paused deployment back to `replicas: 1` before cleanup, so a deployment chaos-stopped mid-suite stays at zero replicas after the suite ends. The lifecycle fix here does not address that — it remains an open ADR item if it bites a consumer.
+
+---
+
+## D-035. `derive` emits `attach.port` only for single-port services; the field is a narrow override, not a default
+
+**Context:** `speculum derive compose|k8s` emits, per binding, a topology object Speculum's attach-mode adapters consume. Both adapters resolve container ports via the same shape: `const portKeys = override?.port !== undefined ? [String(override.port)] : Object.keys(spec.ports)`. Setting `attach.port` therefore *overrides* the binding's `spec.ports` to one key, not *augments* it. Through 0.4.0 the derive functions auto-emitted a single port for every service — picking the first one declared in the compose/k8s manifest. For single-port services the emitted value matched `spec.ports` and the override was a no-op. For multi-port services the emitted value silently disabled resolution for every port except the first. A binding with `spec.ports = { "59220": 59220, "8080": 59221 }` against a network simulator publishing both ports would resolve only `59220` because derive emitted `port: 59220` against the first entry; the binding's `8080` key was silently dropped. The first consumer to wire a multi-port attach stack hit this and worked around it by stripping `port` from derive output for a hand-maintained set of binding keys.
+
+The defect was structural, not a one-off bug. `attach.port` is a *narrow override* — useful when a single binding wants to track only one port of a multi-port service. Emitting it as a default for every service inverted the polarity: the rare override became the implicit default, and the common case (multi-port resolution from `spec.ports`) became impossible without manual stripping.
+
+**Decision:** `deriveCompose` and `deriveK8s` emit `attach.port` only when the underlying compose service / k8s workload publishes exactly one container port. Services with two or more declared ports omit `attach.port` from the derived entry — the binding's `spec.ports` then drives full resolution through the adapter's existing fallback path.
+
+- Compose path (`parseComposeContainerPort`): returns `undefined` when `ports.length !== 1`. Single-port services keep their `port` field; multi-port services omit it.
+- K8s path (`deriveK8s`): emits `port` only when `containers[0].ports.length === 1`. A workload with no declared ports is still skipped (no topology signal); a workload with one port emits it; multi-port workloads emit the rest of the entry (`namespace`, `service`, `deployment`) without `port`.
+- Both adapters' attach paths are unchanged — `override?.port !== undefined ? [...] : Object.keys(spec.ports)` already does the right thing for both branches.
+- Regression locked by two test cases in `tests/core/cli-derive.test.ts`: a fixture with one single-port and one multi-port service asserts `port` is present on the first and `undefined` on the second; the same shape is asserted for K8s.
+
+**Consequences:**
+- The common case (multi-port binding in attach mode) now works without any bind-site stripping. The petstore reference example does not change; consumer repos with multi-port attach bindings drop their `MULTI_PORT_ATTACH_KEYS` workaround sets.
+- The narrow case (a binding that genuinely wants to track only one port of a multi-port service) still works — the consumer spreads the derived entry and adds `port: <n>` at the bind site, just like any other policy field per D-033. Override-by-extension, not override-by-default.
+- `attach-mode.md` makes the polarity explicit in the per-field semantics table: `port` set means "single-port override; ignores `spec.ports`"; `port` absent means "resolve every `spec.ports` key against the running container — correct default for multi-port services". A dedicated "Multi-port attach services" subsection works through the example end-to-end.
+- This is a behavior change in derive output but not in the schema or the adapter SPI. A consumer who had relied on derive's first-port emission was already relying on broken behavior — their multi-port bindings were silently resolving only one port. Such consumers get the correct behavior automatically after upgrade.
+- The fix is parallel to and complements D-033. D-033 said *policy* fields don't belong in derive output. D-035 says even topology fields emitted by derive must be *correct topology*: a single port for a multi-port service is wrong topology, not a useful default.

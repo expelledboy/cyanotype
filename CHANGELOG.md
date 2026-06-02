@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-02
+
+Multi-port attach DX fix. Surfaced by a consumer (BRT) migrating to a
+six-leg compose stack with two multi-port simulator services; their
+hand-rolled `MULTI_PORT_ATTACH_KEYS` workaround stripped `attach.port`
+from derive output so the binding's `spec.ports` could drive
+resolution. The library now does this automatically.
+
+### Fixed
+- `deriveCompose` and `deriveK8s` emit `attach.port` only when the
+  underlying compose service or k8s workload publishes exactly one
+  container port. Multi-port services / workloads omit the field —
+  the binding's `spec.ports` then drives full multi-port resolution
+  via the adapter's existing fallback path
+  (`override?.port !== undefined ? [...] : Object.keys(spec.ports)`).
+  Previously derive auto-emitted the first declared port for every
+  service, which silently disabled resolution for ports 2..N of any
+  multi-port binding. (D-035)
+
+### Docs
+- `docs/attach-mode.md` per-field semantics table for
+  `compose.attach.*` reframes `port`'s polarity — set means "narrow
+  single-port override that ignores `spec.ports`"; absent means
+  "resolve every `spec.ports` key, the correct default for multi-port
+  services". Adds a "Multi-port attach services" subsection working
+  through the override-by-extension pattern at the bind site.
+- The same schema block now lists `onImageDrift` (added in D-028,
+  D-032) alongside `allowChaos` — the previous omission was a
+  documentation oversight, not a missing feature.
+
 ## [0.4.0] - 2026-05-29
 
 Container ownership becomes a first-class SPI property; derive emits

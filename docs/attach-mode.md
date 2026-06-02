@@ -129,6 +129,7 @@ z.object({
       containerNumber: z.number().optional(),
       port: z.number().optional(),
       allowChaos: z.boolean().optional(),
+      onImageDrift: z.enum(["warn", "fail", "ignore"]).optional(),
     }).optional(),
   }).optional(),
 });
@@ -141,10 +142,40 @@ Per-field semantics:
 | `project` | The Compose project name differs from the adapter constructor's `project` option | Falls back to `opts.project` on `createDockerAdapter(...)`. If neither is set, throws `compose_attach_project_required` |
 | `service` | The Compose service name doesn't match `<component>[-<instance>]` | Falls back to the `speculum.component` label (+ optional `speculum.instance`) on the container |
 | `containerNumber` | The target service scales to multiple replicas and you need a specific one | Defaults to `1` (the first replica) |
-| `port` | The container port Speculum should read from `NetworkSettings.Ports` | Falls back to all ports declared in `spec.ports` |
-| `allowChaos` | The Binding's tests need `chaos.stop / start` | Defaults to `false`. Chaos calls throw `attach_mode_violation` |
+| `port` | You want the adapter to resolve **exactly one** specific port from `NetworkSettings.Ports`, ignoring everything else in `spec.ports` (a narrow single-port override of an otherwise multi-port binding) | The adapter resolves **every** port declared in `spec.ports` against the running container — the correct default for multi-port services. See "Multi-port attach services" below |
+| `allowChaos` | The Binding's tests use `runtime.<component>.chaos.stop()` / `chaos.start()` | Defaults to `false`. Chaos calls throw `chaos_unsupported_in_attach_mode` (D-034) |
+| `onImageDrift` | You want the adapter to compare the running container's image against `binding.image` at attach time | Defaults to `"warn"` (logs and continues). `"fail"` throws `attach_image_drift`; `"ignore"` skips the check (D-028) |
 
 There is no `deployment` field for Compose — the container itself is the unit of chaos (`docker stop` / `docker start`).
+
+#### Multi-port attach services
+
+`compose.attach.port` is a **narrow override**, not a default. When set, the docker adapter resolves **only** that one container port from `NetworkSettings.Ports`; every other port declared in the Binding's `spec.ports` is silently ignored. This is correct only when you genuinely want a single-port subset of an otherwise multi-port binding.
+
+For typical multi-port services (a banking simulator on `59222` + `59223`, a network simulator publishing `59220` and `59221:8080`, etc.) you want all of `spec.ports` resolved against the running container. Achieve this by **omitting `compose.attach.port`** at the bind site:
+
+```ts
+const derived = loadDerivedCompose("derived-compose.json", ["bankingSim", "networkSimulator"]);
+
+bind(networkSimulatorBlueprint, {
+  image: "...",
+  version: "...",
+  config: {...},
+  env: {...},
+  ports: { "59220": 59220, "8080": 59221 },     // binding declares all ports it needs
+  adapter: {
+    compose: {
+      attach: {
+        ...derived.networkSimulator.compose.attach,
+        // omit `port` — let spec.ports drive multi-port resolution
+        allowChaos: true,
+      },
+    },
+  },
+});
+```
+
+`speculum derive compose|k8s` (D-030, D-035) emits `attach.port` **only** when the underlying compose service or k8s workload publishes exactly one port. Multi-port services produce derived entries with `port` absent — the binding's `spec.ports` becomes the source of truth automatically. Single-port services keep their `port` field for the narrow case where a `spec.ports` key happens to differ from the published container port.
 
 ## Anatomy of the derived JSON
 
