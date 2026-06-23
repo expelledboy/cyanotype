@@ -60,7 +60,7 @@ jobs:
       id-token: write   # for npm Trusted Publishers OIDC
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
