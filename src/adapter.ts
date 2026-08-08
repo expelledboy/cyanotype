@@ -64,9 +64,11 @@ export type Adapter = {
   stop(containerId: string): Promise<void>;
 
   /**
-   * Follow stdout (and stderr, multiplexed) as an async iterable of lines.
-   * Honours `signal`; the adapter cleans up the underlying process when
-   * the signal aborts OR the consumer breaks out of iteration.
+   * Follow **live** stdout/stderr (multiplexed) as an async iterable of lines.
+   * Does not replay container history — only lines produced after the stream
+   * opens (Docker `tail: 0`, kubectl `--tail=0`). Honours `signal`; the
+   * adapter cleans up the underlying stream when the signal aborts OR the
+   * consumer breaks out of iteration.
    */
   logs(containerId: string, signal?: AbortSignal): AsyncIterable<string>;
 

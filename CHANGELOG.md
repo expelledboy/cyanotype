@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Docker adapter `logs()` now passes `tail: 0` to dockerode so follow
+  streams start at the live end only. Matches Kubernetes
+  (`kubectl logs -f --tail=0`). Previously dockerode replaying full
+  container history on attach could allocate multi‑GiB in the test process
+  when an operator had left a verbose compose stack up. Deploy-mode live
+  lines are unchanged.
+
 ## [0.4.1] - 2026-06-02
 
 Multi-port attach DX fix. Surfaced by a consumer (BRT) migrating to a

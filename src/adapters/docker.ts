@@ -10,9 +10,11 @@
  *     per-binding `allowChaos` flag is set.
  *
  * Uses `dockerode` (pure JS, works on both Bun and Node). `logs()` returns
- * `AsyncIterable<string>` of pre-split lines with `AbortSignal` cleanup.
- * Registers an idempotent SIGINT/SIGTERM handler that stops known
- * containers on Ctrl-C so test runs leave no orphans.
+ * `AsyncIterable<string>` of pre-split lines with `AbortSignal` cleanup —
+ * live lines only (`tail: 0`), matching the K8s adapter's
+ * `kubectl logs -f --tail=0` and avoiding multi‑GiB history replay on
+ * long‑lived attach containers. Registers an idempotent SIGINT/SIGTERM
+ * handler that stops known containers on Ctrl-C so test runs leave no orphans.
  */
 
 import fs from "node:fs";
@@ -98,7 +100,13 @@ type DockerContainer = {
     Config?: { Labels?: Record<string, string> | null; Image?: string };
     State?: { Status?: string };
   }>;
-  logs(opts: { follow: true; stdout: true; stderr: true }): Promise<DockerStream>;
+  logs(opts: {
+    follow: true;
+    stdout: true;
+    stderr: true;
+    /** `0` = follow from now; omit/`"all"` = full history (never used by Speculum). */
+    tail?: number | "all";
+  }): Promise<DockerStream>;
 };
 type DockerClient = {
   ping(): Promise<unknown>;
@@ -650,7 +658,10 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     if (signal?.aborted) return;
     const c = guardedClient(false);
     const cont = c.getContainer(realId(containerId));
-    const raw = await cont.logs({ follow: true, stdout: true, stderr: true });
+    // WHY: without tail:0 dockerode replays the entire log buffer on follow.
+    // Attach stacks (compose up for hours) can hold tens of MB; replaying them
+    // into the event bus has allocated multi‑GiB in consumers. K8s uses --tail=0.
+    const raw = await cont.logs({ follow: true, stdout: true, stderr: true, tail: 0 });
     const out = new PassThrough();
     c.modem.demuxStream(raw, out, out);
     const rl = readline.createInterface({ input: out });
