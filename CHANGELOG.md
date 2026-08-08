@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-08
+
 ### Fixed
 - Docker adapter `logs()` now passes `tail: 0` to dockerode so follow
   streams start at the live end only. Matches Kubernetes
