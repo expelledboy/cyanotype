@@ -57,7 +57,7 @@
   },
   "dependencies": {
     "yaml": "^2.9.0",
-    "zod": "^3.23.0"
+    "zod": "^4.4.3"
   },
   "optionalDependencies": {
     "dockerode": "^5.0.0"
