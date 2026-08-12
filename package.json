@@ -52,7 +52,6 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "test": "bun test tests/core/",
-    "rename-audit": "bun scripts/rename-audit/rename-audit.ts",
     "prepublishOnly": "bun run typecheck && bun run build && bun test tests/core/"
   },
   "dependencies": {
