@@ -1,10 +1,10 @@
 # Axioms
 
-> The load-bearing truths Speculum's design follows. Every decision in `decisions.md` either satisfies these axioms or explicitly retires one. They are not features — they are constraints the problem imposes.
+> The load-bearing truths Cyanotype's design follows. Every decision in `decisions.md` either satisfies these axioms or explicitly retires one. They are not features — they are constraints the problem imposes.
 
-## What Speculum is for
+## What Cyanotype is for
 
-Speculum's central abstraction is the **Component Blueprint** — a typed contract describing what a component exposes (API schemas) and what it observably emits (a log-event catalog). Anything that satisfies the contract — the real production image, a hand-written in-process simulator, a prior version, a vendor-compatible alternative — is a valid **Binding** for that Blueprint.
+Cyanotype's central abstraction is the **Component Blueprint** — a typed contract describing what a component exposes (API schemas) and what it observably emits (a log-event catalog). Anything that satisfies the contract — the real production image, a hand-written in-process simulator, a prior version, a vendor-compatible alternative — is a valid **Binding** for that Blueprint.
 
 A test file consumes the Blueprint surface (`runtime.X.api.method(...)`, `runtime.X.events.waitFor("...")`). It never names a Docker image, a port, a config file, or a substrate. The Adapter is the seam where substrate (Docker / Kubernetes / in-memory) is decided, and it is also where real-vs-simulator is decided: the Adapter interprets the Binding's `image: string` against the substrate it owns. One harness-level line flips a whole suite between real containers and in-process simulators — test code unchanged.
 

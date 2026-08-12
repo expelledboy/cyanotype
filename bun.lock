@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "speculum",
+      "name": "cyanotype",
       "dependencies": {
         "zod": "^3.23.0",
       },

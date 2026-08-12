@@ -33,7 +33,7 @@
 - [D-027 — `Binding.version` as a cache key — re-ensure invalidates a stale environment](#d-027-bindingversion-as-a-cache-key--re-ensure-invalidates-a-stale-environment)
 - [D-028 — Attach-mode image-drift detection via a configurable `onImageDrift` policy](#d-028-attach-mode-image-drift-detection-via-a-configurable-onimagedrift-policy)
 - [D-029 — `stack.*` observer phase for compose-stack reconciliation telemetry](#d-029-stack-observer-phase-for-compose-stack-reconciliation-telemetry)
-- [D-030 — `speculum derive` shipped as a CLI (`bin`) over a copied reference script](#d-030-speculum-derive-shipped-as-a-cli-bin-over-a-copied-reference-script)
+- [D-030 — `cyanotype derive` shipped as a CLI (`bin`) over a copied reference script](#d-030-cyanotype-derive-shipped-as-a-cli-bin-over-a-copied-reference-script)
 - [D-031 — `reconcileComposeStack` — library-owned compose-stack staleness reconciliation](#d-031-reconcilecomposestack--library-owned-compose-stack-staleness-reconciliation)
 - [D-032 — Closing the derive→bind seam, the rebuild escape hatch, and the image-drift compare boundary](#d-032-closing-the-derivebind-seam-the-rebuild-escape-hatch-and-the-image-drift-compare-boundary)
 - [D-033 — Derived adapter config is topology-only; policy lives at the bind site](#d-033-derived-adapter-config-is-topology-only-policy-lives-at-the-bind-site)
@@ -50,7 +50,7 @@
 
 **Consequences:**
 - `package.json` ships ESM with an `exports` map pointing at `src/index.ts`.
-- Consumers on Node can `npm install speculum` and import.
+- Consumers on Node can `npm install cyanotype` and import.
 - We don't ship a pre-bundled `dist/` — TypeScript itself is the artefact, with `tsc --noEmit` for the typecheck gate.
 - No native dependencies. `dockerode` and `zod` are pure JavaScript.
 
@@ -119,7 +119,7 @@ const adapter = useReal
 
 **Context:** Multi-instance Bindings (e.g. `redis.primary` vs `redis.replica`) need to be distinguishable at the substrate level — adapters set labels for teardown discovery, and in-memory factories need to know which instance they're serving.
 
-**Decision:** `StartSpec.instance?: string` is a typed first-class field on the spec the Adapter receives. The orchestrator sets it from the Binding's instance key. Adapters mirror it into `labels["speculum.instance"]` for teardown discovery. In-memory factories read `spec.instance` directly.
+**Decision:** `StartSpec.instance?: string` is a typed first-class field on the spec the Adapter receives. The orchestrator sets it from the Binding's instance key. Adapters mirror it into `labels["cyanotype.instance"]` for teardown discovery. In-memory factories read `spec.instance` directly.
 
 **Consequences:**
 - No reliance on label-string conventions for instance identity in user-written factories.
@@ -277,12 +277,12 @@ The leak is not specific to a misbehaving test: it's structural. `runtime.stop()
 
 **Decision:**
 
-- **Workload:** bare `Pod`, not `Deployment` or `Job`. One Pod per `StartSpec`. Speculum owns the lifecycle; restart-on-crash would mask the very failures tests assert on. `containerId` is the Pod name.
+- **Workload:** bare `Pod`, not `Deployment` or `Job`. One Pod per `StartSpec`. Cyanotype owns the lifecycle; restart-on-crash would mask the very failures tests assert on. `containerId` is the Pod name.
 - **Mount-as-content (D-008):** one `ConfigMap` per Pod, `data[basename] = content`, mounted via `volumeMounts` with `subPath` to preserve the absolute target path. Labelled identically to the Pod so the label-scan teardown sweeps both.
 - **Port exposure:** long-lived `kubectl port-forward pod/<name> :<containerPort>` subprocess. The local port is parsed from kubectl's stdout (`Forwarding from 127.0.0.1:NNNNN -> NNNN`). One subprocess per `StartSpec` port. Avoids NodePort (requires node-IP discovery, breaks on managed clusters) and `hostPort` (requires cluster-side config).
-- **Namespace:** single configurable namespace (default `speculum-tests`). Session scoping via labels, not namespace suffix — per-session namespaces churn RBAC and orphan-cleanup logic.
-- **Labels** (on Pod and ConfigMap): `speculum=1`, `speculum.session=<uuid>`, `speculum.component=<name>`, `speculum.instance=<name>` when present.
-- **Teardown:** `kubectl delete pods,configmaps -n <ns> -l speculum=1,speculum.session=<uuid> --wait=false`. SIGINT/SIGTERM handler (D-014) ported from `src/adapters/docker.ts`, owning the same `globalKnown` / `globalStopFns` discipline plus the set of live port-forward subprocesses.
+- **Namespace:** single configurable namespace (default `cyanotype-tests`). Session scoping via labels, not namespace suffix — per-session namespaces churn RBAC and orphan-cleanup logic.
+- **Labels** (on Pod and ConfigMap): `cyanotype=1`, `cyanotype.session=<uuid>`, `cyanotype.component=<name>`, `cyanotype.instance=<name>` when present.
+- **Teardown:** `kubectl delete pods,configmaps -n <ns> -l cyanotype=1,cyanotype.session=<uuid> --wait=false`. SIGINT/SIGTERM handler (D-014) ported from `src/adapters/docker.ts`, owning the same `globalKnown` / `globalStopFns` discipline plus the set of live port-forward subprocesses.
 
 **Consequences:**
 - Deploy mode requires `create,get,list,watch,delete,deletecollection` on `pods` + `configmaps` in the target namespace, plus `pods/log` (get) and `pods/portforward` (create). Documented in `docs/k8s-rbac.md`.
@@ -294,11 +294,11 @@ The leak is not specific to a misbehaving test: it's structural. `runtime.stop()
 
 ## D-018. Kubernetes adapter — attach mode discovers via Service, refuses cluster mutation
 
-**Context:** Smoke-testing real environments — dev/uat/prod where components are Helm- or Terraform-deployed — needs an adapter that runs the same test suite without provisioning anything. The adapter must be loud-safe: one stray destructive call against prod is catastrophic. Discovery must work zero-config against existing Helm charts; we cannot require chart authors to add speculum-specific labels.
+**Context:** Smoke-testing real environments — dev/uat/prod where components are Helm- or Terraform-deployed — needs an adapter that runs the same test suite without provisioning anything. The adapter must be loud-safe: one stray destructive call against prod is catastrophic. Discovery must work zero-config against existing Helm charts; we cannot require chart authors to add cyanotype-specific labels.
 
 **Decision:**
 
-- **Mode selection at factory time:** `createK8sAdapter({ mode: "deploy" | "attach", ... })`. `SPECULUM_K8S_MODE` env var overrides for CI ergonomics. Mode is a structural property of the adapter instance — matches D-003 (substrate decision is the single seam).
+- **Mode selection at factory time:** `createK8sAdapter({ mode: "deploy" | "attach", ... })`. `CYANOTYPE_K8S_MODE` env var overrides for CI ergonomics. Mode is a structural property of the adapter instance — matches D-003 (substrate decision is the single seam).
 - **Discovery:** convention-based `Service` lookup. The `Service` named `<component>` (or `<component>-<instance>` for multi-instance) in the configured namespace is the resolution target. Helm charts already name Services after components.
 - **Explicit override:** a Binding may declare `attach: { namespace, service, port }` to override the convention.
 - **`start()` is non-creating.** Resolves the Service via `kubectl get svc <name> -o json`, picks a ready Pod from the EndpointSlice (`kubectl get endpointslices -l kubernetes.io/service-name=<name> -o json`), opens a `kubectl port-forward` against that Pod. `containerId = "attach:<namespace>/<podName>"` so dispatch forks on prefix.
@@ -308,7 +308,7 @@ The leak is not specific to a misbehaving test: it's structural. `runtime.stop()
 
 **Consequences:**
 - Attach mode needs only read RBAC + `pods/log` + `pods/portforward`. Safe to grant against prod.
-- Helm chart authors do not need to add speculum-specific labels for discovery to work.
+- Helm chart authors do not need to add cyanotype-specific labels for discovery to work.
 - Mode-dispatch is at the SPI boundary inside one adapter file, not two parallel adapters — keeps D-003 intact.
 - Rolling restarts of the target workload are survivable mid-test.
 - The kubectl-subcommand denylist is unit-tested: each destructive verb is exercised in attach mode and asserted to throw.
@@ -321,13 +321,13 @@ The leak is not specific to a misbehaving test: it's structural. `runtime.stop()
 
 A second spike replaced the library with `Bun.spawn` driving `kubectl` directly. Four capabilities passed first attempt: `kubectl get -o json` + JSON parse; pod-exists via exit code; `kubectl port-forward` + 10 sequential local TCP connections; `kubectl logs -f` line streaming. Subprocess teardown via `proc.kill()` + `await proc.exited` was clean; no zombies; no warmup latency.
 
-`kubectl` is the de facto programmatic interface for Kubernetes — stable JSON output via `-o json`, native streaming for `logs -f`, native port-forward, and identical behaviour against OrbStack, kind, EKS, GKE, anywhere it runs. Its surface is more polished than `@kubernetes/client-node` for the operations Speculum needs.
+`kubectl` is the de facto programmatic interface for Kubernetes — stable JSON output via `-o json`, native streaming for `logs -f`, native port-forward, and identical behaviour against OrbStack, kind, EKS, GKE, anywhere it runs. Its surface is more polished than `@kubernetes/client-node` for the operations Cyanotype needs.
 
 **Decision:** The Kubernetes adapter (`src/adapters/kubernetes.ts`) drives `kubectl` via `Bun.spawn`. All cluster I/O is subprocess I/O — `get -o json` for reads, `apply -f - <<<JSON` for creates, `delete --selector=...` for teardown, `port-forward` for port exposure, `logs -f` for log streaming. No TypeScript Kubernetes client is taken as a dependency.
 
 **Consequences:**
 - This **reverses D-013** for the Kubernetes substrate specifically. D-013 chose `dockerode` over CLI shellout for the Docker adapter because Docker's CLI is awkward for programmatic use (incomplete JSON output, ad-hoc flag conventions). The reverse trade-off holds for Kubernetes: `kubectl` is the canonical programmatic interface; the Bun-compatible library option is broken upstream with no committed fix.
-- Speculum gains zero new TLS / HTTP / auth code. The runtime trust path is owned by `kubectl`. In-cluster auth, kubeconfig auth, exec-plugin auth, OIDC, AWS IAM auth — all are handled by kubectl, free.
+- Cyanotype gains zero new TLS / HTTP / auth code. The runtime trust path is owned by `kubectl`. In-cluster auth, kubeconfig auth, exec-plugin auth, OIDC, AWS IAM auth — all are handled by kubectl, free.
 - `kubectl` becomes a runtime dependency of the K8s adapter — documented in the adapter README and `docs/k8s-rbac.md`. CI images must include it.
 - Subprocess overhead is non-trivial (~50–150ms per `kubectl get` invocation). Acceptable for test-infrastructure use; not a high-throughput path. Logs and port-forward are long-lived subprocesses, so per-call overhead does not stack there.
 - One Bun-specific detail captured for the implementation: `Bun.spawn`'s `proc.stdout` is a web `ReadableStream`. Feed it to `readline` via `Readable.fromWeb(proc.stdout)` — direct use throws `input.on is not a function`. This is a one-line wrapper at every streaming site.
@@ -343,12 +343,12 @@ The K8s-native answer is a `Service` per component instance: a stable in-cluster
 
 **Decision:** The deploy-mode adapter creates one `Service` per Pod that has ports, alongside the Pod + ConfigMap from D-017.
 
-- **Naming:** `sanitiseDnsLabel(<speculum.component>[-<speculum.instance>])`. Stable across the test session — restarts of the same component reuse the same Service name.
-- **Selector:** the unique per-Pod label `speculum.podname=<podName>`. The adapter writes that label onto the Pod alongside the orchestrator-set labels. This makes the Service 1:1 with its Pod (no risk of cross-instance traffic when two Pods share `speculum.component` + `speculum.instance` — e.g. mid-chaos when an old Pod is terminating while the new one is starting).
+- **Naming:** `sanitiseDnsLabel(<cyanotype.component>[-<cyanotype.instance>])`. Stable across the test session — restarts of the same component reuse the same Service name.
+- **Selector:** the unique per-Pod label `cyanotype.podname=<podName>`. The adapter writes that label onto the Pod alongside the orchestrator-set labels. This makes the Service 1:1 with its Pod (no risk of cross-instance traffic when two Pods share `cyanotype.component` + `cyanotype.instance` — e.g. mid-chaos when an old Pod is terminating while the new one is starting).
 - **Ports:** one Service port per `StartSpec.ports` entry, with `port == targetPort == Number(name)`. The K8s adapter's `StartSpec.ports` keys are the container port (D-017).
-- **Labels:** the same `speculum=1`, `speculum.session`, `speculum.component`, `speculum.instance` labels the Pod and ConfigMap carry, so the existing label-scan teardown sweeps Services too.
-- **Lifecycle:** Service is applied after the Pod becomes Ready (Pod-Ready failures don't leak Services). Service deletion is appended to `stop()` and to the bulk session-teardown (`delete pods,configmaps,services -l speculum=1,speculum.session=<uuid>`).
-- **Cross-component env wiring:** `tests/petstore-example/env.ts` switches on `SPECULUM_ADAPTER === "k8s"` and uses the Service DNS names (`redis-primary`, `redis-replica`, `petstore-one|two|three`) on the **container** port (6379, 8080) instead of `host.docker.internal` on the pinned host port. The Docker / in-memory paths are unchanged.
+- **Labels:** the same `cyanotype=1`, `cyanotype.session`, `cyanotype.component`, `cyanotype.instance` labels the Pod and ConfigMap carry, so the existing label-scan teardown sweeps Services too.
+- **Lifecycle:** Service is applied after the Pod becomes Ready (Pod-Ready failures don't leak Services). Service deletion is appended to `stop()` and to the bulk session-teardown (`delete pods,configmaps,services -l cyanotype=1,cyanotype.session=<uuid>`).
+- **Cross-component env wiring:** `tests/petstore-example/env.ts` switches on `CYANOTYPE_ADAPTER === "k8s"` and uses the Service DNS names (`redis-primary`, `redis-replica`, `petstore-one|two|three`) on the **container** port (6379, 8080) instead of `host.docker.internal` on the pinned host port. The Docker / in-memory paths are unchanged.
 - **Port-forward in K8s mode binds to `"auto"`, not the pinned hostPort.** D-017's port-forward is for the dev machine's test runner; that traffic does not flow through the host's well-known port any more. Pinning would only create chaos-test TIME_WAIT hazards on stop+start cycles. The host-side port is reported back via the existing `Started.ports` contract, so user-facing test code is unchanged.
 
 **Consequences:**
@@ -364,7 +364,7 @@ The K8s-native answer is a `Service` per component instance: a stable in-cluster
 
 **Context:** Attach mode (D-018) opens `kubectl port-forward` against a Service-resolved Pod. `kubectl port-forward` does not reconnect: per [kubectl reference](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_port-forward/), "the forwarding session ends when the selected pod terminates." `kubectl port-forward service/X` resolves to one Pod once and does not re-target on rolling restart ([kubectl#686](https://github.com/kubernetes/kubectl/issues/686), closed not-planned). For attach mode against real environments where ops actions (Helm upgrade, autoscaler, rollout) routinely replace pods, the naive shape — one subprocess per port — fails the first time a Pod is rescheduled.
 
-A Speculum test holds a reference to `Started.ports[name]` and connects to `127.0.0.1:<port>` repeatedly. The contract that makes test code portable across substrates is that the local port stays the same for the lifetime of the runtime. If the port flaps on every backend churn, test code has to refresh its references — bleeding substrate concerns up into tests.
+A Cyanotype test holds a reference to `Started.ports[name]` and connects to `127.0.0.1:<port>` repeatedly. The contract that makes test code portable across substrates is that the local port stays the same for the lifetime of the runtime. If the port flaps on every backend churn, test code has to refresh its references — bleeding substrate concerns up into tests.
 
 **Decision:** The K8s adapter's attach mode wraps each `kubectl port-forward` in a reconnection layer (`startReconnectForward` in `src/adapters/kubernetes.ts`):
 
@@ -386,7 +386,7 @@ A Speculum test holds a reference to `Started.ports[name]` and connects to `127.
 
 ## D-022. Adapter-specific Binding config via TypeScript declaration merging
 
-**Context:** Attach mode (D-018) derives the K8s `Service` name from `speculum.component` (+ optional instance) labels. That convention works when the Speculum-internal name matches the real cluster's Service name, but breaks the moment a user attaches to an existing Service whose name was decided by ops (`my-real-prod-nginx`, `payments-api-v2`, etc.). The Binding needs a substrate-specific escape hatch — but stuffing K8s-specific fields onto `Binding` itself bleeds substrate concerns into the substrate-agnostic core, and a generic `Binding<Cfg>` parameter would virally propagate through every helper and test signature.
+**Context:** Attach mode (D-018) derives the K8s `Service` name from `cyanotype.component` (+ optional instance) labels. That convention works when the Cyanotype-internal name matches the real cluster's Service name, but breaks the moment a user attaches to an existing Service whose name was decided by ops (`my-real-prod-nginx`, `payments-api-v2`, etc.). The Binding needs a substrate-specific escape hatch — but stuffing K8s-specific fields onto `Binding` itself bleeds substrate concerns into the substrate-agnostic core, and a generic `Binding<Cfg>` parameter would virally propagate through every helper and test signature.
 
 **Decision:** Adapter-specific Binding overrides flow through an open `AdapterConfig` interface on `src/adapter.ts`, augmented per-adapter via TypeScript declaration merging.
 
@@ -425,10 +425,10 @@ The kubectl denylist (D-018) is lifted *only* for the `scale` verb, and only on 
 
 **Consequences:**
 - This **reverses the original D-023 design** (network-seam pause/resume). The pause/resume scaffolding is kept — it still holds the local port stable across the outage — but the *real* outage now comes from the Deployment having no Ready endpoints, observable to every consumer inside the cluster.
-- The opt-in surface gains one required field. Discovery scripts (e.g. `tests/petstore-example/scripts/derive-speculum.ts`) must emit the Deployment name alongside the Service name; the reference derive script does this by finding the Deployment whose `spec.template.metadata.labels` satisfies the Service's `spec.selector`.
+- The opt-in surface gains one required field. Discovery scripts (e.g. `tests/petstore-example/scripts/derive-cyanotype.ts`) must emit the Deployment name alongside the Service name; the reference derive script does this by finding the Deployment whose `spec.template.metadata.labels` satisfies the Service's `spec.selector`.
 - All 15 petstore-example tests pass under attach mode, including the previously-trivially-green resilience tests (which now exercise real failure) and the previously-failing primary-outage test (which now passes for real because petstore Pods actually observe their redis-primary endpoint disappear).
 - RBAC for attach + chaos: read everything previously listed in D-018, plus `patch` on `deployments/scale` in the target namespace. Without `allowChaos: true` the read-only attach RBAC is unchanged — still safe against prod.
-- `just test-petstore-k8s-attach` chains `deploy → derive → test → teardown` so cluster state is never leaked even when the suite fails. Teardown deletes the entire `speculum-petstore-attach` namespace.
+- `just test-petstore-k8s-attach` chains `deploy → derive → test → teardown` so cluster state is never leaked even when the suite fails. Teardown deletes the entire `cyanotype-petstore-attach` namespace.
 - Cross-namespace attach (D-022) still composes: the paused-attaches registry remains keyed by `${namespace}/${serviceName}` and now also carries the Deployment name and the per-binding kubectl client.
 
 
@@ -436,7 +436,7 @@ The kubectl denylist (D-018) is lifted *only* for the `scale` verb, and only on 
 
 ## D-024. Framework lifecycle telemetry via an opt-in observer stream
 
-**Context:** Speculum had exactly one notion of "event" — `EventBus<Cat>` / `logParser` (D-006): the *domain events of the system under test*, parsed from container logs, typed against a Blueprint catalog, asserted on by tests. They only exist *after* a container is up and streaming logs.
+**Context:** Cyanotype had exactly one notion of "event" — `EventBus<Cat>` / `logParser` (D-006): the *domain events of the system under test*, parsed from container logs, typed against a Blueprint catalog, asserted on by tests. They only exist *after* a container is up and streaming logs.
 
 There was no event layer for the framework's *own* lifecycle. Walk `startEnvironment` → `adapter.start` → `runProbe` and every slow operation is silent: `adapter.connect()` (daemon ping), `ensureImage()` (image pull — 10s–minutes), `createContainer` / `start`, `runProbe` (readiness polling — 0–30s), the per-component loop. When Docker is slow the two real culprits — **image pull** and **readiness polling** — are precisely the operations that produce zero feedback. The Docker adapter even *consumed* dockerode's layer-by-layer pull progress (`followProgress`) and discarded it. A test author provisioning a Docker environment saw a multi-minute hang with no indication of what was happening or whether it had stalled.
 
@@ -463,19 +463,19 @@ Threading:
 - **The Blueprint contract is untouched.** `EventBus<Cat>` / `logParser` / the event catalog are unchanged. This is a strictly separate channel.
 - **Configuration-aware by construction.** The in-memory adapter skips `image.*` and jumps to `container.started`; Docker emits the full pull stream; K8s will add `portforward.*`. The same reporter renders all substrates, and the event vocabulary self-describes where the time went — answering "this framework runs in various stages / configurations alongside test suites".
 - **Reuses existing error shapes.** `*.failed` / `*.timed_out` events carry the same structured tagged objects already thrown (`docker_connect_failed`, `image_pull_failed`, `container_start_failed`, `probe_timeout`); near-zero new modelling.
-- **Presentation is not Speculum's job (yet).** This decision ships the *stream*, not a reporter. A default terminal progress reporter, a GitHub Actions `::group::` reporter, and a `--timing` phase-breakdown reporter are natural follow-ups that consume `ObserverEvent` without further core changes.
+- **Presentation is not Cyanotype's job (yet).** This decision ships the *stream*, not a reporter. A default terminal progress reporter, a GitHub Actions `::group::` reporter, and a `--timing` phase-breakdown reporter are natural follow-ups that consume `ObserverEvent` without further core changes.
 - **Follow-up:** the K8s adapter currently threads the `emit` parameter (signature-compatible) but does not yet emit; wiring `image.*`, `container.*`, and K8s-specific `portforward.*` / `endpoints.*` events is a bounded next step.
 
 ---
 
 ## D-025. Docker Compose attach adapter — discovery via compose labels + non-destructive guard
 
-**Context:** The Docker adapter (D-013) has always owned a single deploy mode: pull an image, create a container, manage its full lifecycle. After the Kubernetes adapter gained an attach mode (D-018) — point an existing test suite at already-running cluster workloads without provisioning anything — the same pattern became desirable for Docker Compose. A user runs `docker compose up` to stand up their stack, then points the same SLA test suite at those containers without Speculum creating, pulling, or removing anything. The thesis is "same suite, five substrates": in-memory simulator, Docker deploy, Docker Compose attach, Kubernetes deploy, Kubernetes attach.
+**Context:** The Docker adapter (D-013) has always owned a single deploy mode: pull an image, create a container, manage its full lifecycle. After the Kubernetes adapter gained an attach mode (D-018) — point an existing test suite at already-running cluster workloads without provisioning anything — the same pattern became desirable for Docker Compose. A user runs `docker compose up` to stand up their stack, then points the same SLA test suite at those containers without Cyanotype creating, pulling, or removing anything. The thesis is "same suite, five substrates": in-memory simulator, Docker deploy, Docker Compose attach, Kubernetes deploy, Kubernetes attach.
 
 **Decision:**
 
 - **Mode selection at factory time:** `createDockerAdapter({ mode: "deploy" | "attach", project?: string, ... })`. `mode` mirrors the K8s adapter's `createK8sAdapter` option. Mode is a structural property of the adapter instance — matches D-003. `Adapter.start` dispatches to a private `startAttach` path; the 7-method SPI (D-004) is unchanged.
-- **Discovery via Compose labels.** Containers are found via `dockerode.listContainers` filtered on two labels: `com.docker.compose.project=<project>` (the compose project name, defaulting to the directory name) and `com.docker.compose.service=<service>`. By convention the compose service name maps to the Speculum component by name (`speculum.component` label, with optional `--scale` suffix `<service>-<n>`). The `containerNumber` field (default 1) targets a specific scaled instance. A Binding may override any of these via `adapter: { compose: { attach: { project, service, containerNumber, port } } }` — per the D-022 declaration-merging slot.
+- **Discovery via Compose labels.** Containers are found via `dockerode.listContainers` filtered on two labels: `com.docker.compose.project=<project>` (the compose project name, defaulting to the directory name) and `com.docker.compose.service=<service>`. By convention the compose service name maps to the Cyanotype component by name (`cyanotype.component` label, with optional `--scale` suffix `<service>-<n>`). The `containerNumber` field (default 1) targets a specific scaled instance. A Binding may override any of these via `adapter: { compose: { attach: { project, service, containerNumber, port } } }` — per the D-022 declaration-merging slot.
 - **Port resolution without port-forward.** Docker Compose publishes host ports directly: the adapter reads `container.inspect().NetworkSettings.Ports["<containerPort>/tcp"][].HostPort`. No `kubectl port-forward` subprocess, no local-port-claim loop. This is stable by construction: a `docker stop`/`start` reuses the same container and its host port mapping is re-inspected on `chaos.start`.
 - **Non-destructive guard.** In attach mode the dockerode client is wrapped at one chokepoint that denies mutations. Blocked unconditionally: `createContainer`, `pull`, container `remove`. Blocked unless `allowChaos: true` (per-Binding, see D-026): `stop`, `start`, `restart`, `kill`. The wrapper also wraps container handles returned by `getContainer` — violations throw `{ kind: "attach_mode_violation", op }`. This mirrors the kubectl denylist chokepoint in D-018; the loud guarantee is enforced in the adapter, not at call sites.
 - **`logs()` and `exists()`** follow the existing Docker deploy implementation verbatim — `container.logs({ follow: true, stdout: true, stderr: true })` with demux, and `container.inspect()` exit-code check. The SPI contract is identical regardless of mode.
@@ -489,9 +489,9 @@ Three things are explicitly simpler than K8s attach (D-018, D-021):
 3. **No deployment-equivalent field.** The container itself is the chaos unit; there is no K8s `Deployment` controller to reason about. `chaos.stop` calls `container.stop`; `chaos.start` calls `container.start`. No `scale` verb, no `deployment` config field, no endpoint polling. See D-026.
 
 **Consequences:**
-- The petstore example gains a 5th mode (`SPECULUM_ADAPTER=docker-attach`) running the same 15-test SLA suite. The thesis "same suite, five substrates" holds.
+- The petstore example gains a 5th mode (`CYANOTYPE_ADAPTER=docker-attach`) running the same 15-test SLA suite. The thesis "same suite, five substrates" holds.
 - Attach mode reads only: `listContainers` (list) + `getContainer` + `inspect` (read). No image pulls, no container creation, no network creation. Safe to run against shared dev stacks.
-- The must-publish-ports constraint is a user-facing documentation requirement, not a Speculum limitation. Stacks intended for Speculum attach mode need `ports:` on each service under test; the adapter surfaces the missing mapping as a typed error at `start` time.
+- The must-publish-ports constraint is a user-facing documentation requirement, not a Cyanotype limitation. Stacks intended for Cyanotype attach mode need `ports:` on each service under test; the adapter surfaces the missing mapping as a typed error at `start` time.
 - The denylist chokepoint is unit-tested: `createContainer`, `pull`, `remove` are exercised in attach mode and asserted to throw; chaos verbs are exercised with and without `allowChaos`.
 - K8s and Docker Compose attach modes now share the same user-facing pattern (mode flag, per-Binding `adapter` override slot, non-destructive guard, `allowChaos` gate) while each adapter's internal mechanics remain appropriate to its substrate.
 
@@ -519,9 +519,9 @@ Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respa
 **Consequences:**
 - The opt-in surface is simpler than D-023: one field (`allowChaos: true`) instead of two. The simpler surface is correct for the substrate, not a cut corner.
 - From inside the compose network, other services see the stopped container as gone — connections time out or are refused. This is real disruption, not a network-seam pause. Backend-to-backend resilience tests exercise actual failure.
-- RBAC has no equivalent for Docker Compose, but the principle holds: with `allowChaos: false` (the default), Speculum touches only read operations against the Docker daemon when in attach mode. Safe to use against shared stacks.
+- RBAC has no equivalent for Docker Compose, but the principle holds: with `allowChaos: false` (the default), Cyanotype touches only read operations against the Docker daemon when in attach mode. Safe to use against shared stacks.
 - `chaos.start` re-inspects `HostPort` after `container.start()`. If the compose file maps a fixed host port the value is identical; if it maps an ephemeral range (`"8080"` without a host side) the remapped port is picked up correctly.
-- All 15 petstore-example tests pass under `SPECULUM_ADAPTER=docker-attach`, including chaos-stop+start resilience tests that exercise real container outage.
+- All 15 petstore-example tests pass under `CYANOTYPE_ADAPTER=docker-attach`, including chaos-stop+start resilience tests that exercise real container outage.
 
 ---
 
@@ -538,14 +538,14 @@ Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respa
 
 **Consequences:**
 - If the stored snapshot lacks `version`, the check is skipped. Metadata written before this field existed never false-invalidates a healthy environment. Backward compatibility without a `schemaVersion` bump.
-- Consumers stop reaching into `.speculum-env/` to force a rebuild; bumping `version` is the supported, in-library invalidation hook.
+- Consumers stop reaching into `.cyanotype-env/` to force a rebuild; bumping `version` is the supported, in-library invalidation hook.
 - `StartSpec.version` is optional, not required: making it required would break adapter unit tests that hand-build a `StartSpec`. The orchestrator always populates it.
 
 ---
 
 ## D-028. Attach-mode image-drift detection via a configurable `onImageDrift` policy
 
-**Context:** D-027 covers cases where Speculum owns the environment and can rebuild it. The orthogonal case is attach mode: another process (a `docker compose` stack) owns the container, and Speculum only observes. If that container is running an image other than what the `Binding` declares — a locally rebuilt image, a moved tag — the test silently runs against the wrong substrate. `startAttach` calls `.inspect()` on the discovered container but does not look at its image. Detecting this outside the library means each consumer reaches for `docker image inspect` and stores the expected digest somewhere of its own — work the library is better placed to do once.
+**Context:** D-027 covers cases where Cyanotype owns the environment and can rebuild it. The orthogonal case is attach mode: another process (a `docker compose` stack) owns the container, and Cyanotype only observes. If that container is running an image other than what the `Binding` declares — a locally rebuilt image, a moved tag — the test silently runs against the wrong substrate. `startAttach` calls `.inspect()` on the discovered container but does not look at its image. Detecting this outside the library means each consumer reaches for `docker image inspect` and stores the expected digest somewhere of its own — work the library is better placed to do once.
 
 **Decision:** The Docker adapter compares the discovered container's image against the `Binding`'s expectation during attach discovery, governed by an `onImageDrift` policy.
 
@@ -555,7 +555,7 @@ Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respa
 - `"fail"` throws `{ kind: "attach_image_drift", expected, actual, component }` (`AttachImageDriftError`, exported from `src/index.ts`). `"warn"` logs and continues. `"ignore"` skips the check.
 
 **Consequences:**
-- The default is `"warn"`, not `"fail"`: attach mode is inherently advisory, and a hard default failure would make Speculum brittle against harmless ref differences. `"fail"` is opt-in for CI that demands exact reproducibility.
+- The default is `"warn"`, not `"fail"`: attach mode is inherently advisory, and a hard default failure would make Cyanotype brittle against harmless ref differences. `"fail"` is opt-in for CI that demands exact reproducibility.
 - `ImageDriftPolicy` and `AttachImageDriftError` are exported alongside the sibling docker types. `attach_version_stale` (D-027) stays an inline discriminated kind — consistent with how the other `attach_*` kinds are not exported as named types.
 - Only the Docker adapter implements this; the SPI is unchanged. A K8s-attach equivalent is left for a future ADR.
 
@@ -574,21 +574,21 @@ Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respa
 
 ---
 
-## D-030. `speculum derive` shipped as a CLI (`bin`) over a copied reference script
+## D-030. `cyanotype derive` shipped as a CLI (`bin`) over a copied reference script
 
 **Context:** Attach mode needs a `derived.json` mapping each component to its `compose.attach` / `k8s.attach` adapter override. Shipping the derivation only as a reference script under `tests/petstore-example/scripts/` forces every consumer to copy it verbatim. Copied scripts drift from the library's adapter-config schemas and never receive fixes.
 
 **Decision:** Ship the derive logic in the package.
 
 - The logic moves to `src/cli/derive.ts` as pure, path-in → validated-record-out functions `deriveCompose(path, project?)` and `deriveK8s(path)` — importable by consumers building their own tooling without shelling out.
-- `src/cli/index.ts` is a thin dispatch entrypoint (shebang `#!/usr/bin/env bun`): `speculum derive compose --compose <f> --out <f|->` and `speculum derive k8s --k8s <d|f> --out <f|->`, exit 2 on bad args.
-- `package.json` gains `"bin": { "speculum": "./dist/cli/index.js" }`. `yaml` moves from `devDependencies` to `dependencies` — the derive library parses YAML at consumer runtime.
+- `src/cli/index.ts` is a thin dispatch entrypoint (shebang `#!/usr/bin/env bun`): `cyanotype derive compose --compose <f> --out <f|->` and `cyanotype derive k8s --k8s <d|f> --out <f|->`, exit 2 on bad args.
+- `package.json` gains `"bin": { "cyanotype": "./dist/cli/index.js" }`. `yaml` moves from `devDependencies` to `dependencies` — the derive library parses YAML at consumer runtime.
 - The petstore reference script is reduced to a thin wrapper over `src/cli/derive.ts` — one implementation, identical CLI behaviour, petstore tests unaffected.
 
 **Consequences:**
-- Consumers run `bunx @expelledboy/speculum derive compose ...` or import `deriveCompose` directly — no copied script to drift.
+- Consumers run `bunx @expelledboy/cyanotype derive compose ...` or import `deriveCompose` directly — no copied script to drift.
 - `src/cli/` is inside the existing `tsconfig.build.json` `rootDir`, so it compiles to `dist/cli/` with no build-config change.
-- This is Speculum's first `bin` entry; the package is now a library *and* a CLI. The CLI surface is intentionally minimal (derive only) — future subcommands are additive.
+- This is Cyanotype's first `bin` entry; the package is now a library *and* a CLI. The CLI surface is intentionally minimal (derive only) — future subcommands are additive.
 
 ---
 
@@ -607,13 +607,13 @@ Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respa
 
 **Consequences:**
 - Consumer preflight collapses to a single `reconcileComposeStack` call plus the caller's `fingerprint` field list.
-- The helper does not invalidate the library's own `<envKey>.json` metadata. `Binding.version` (D-027) is the supported invalidation hook, so out-of-library `unlinkSync` calls against `.speculum-env/` are no longer required.
+- The helper does not invalidate the library's own `<envKey>.json` metadata. `Binding.version` (D-027) is the supported invalidation hook, so out-of-library `unlinkSync` calls against `.cyanotype-env/` are no longer required.
 
 ---
 
 ## D-032. Closing the derive→bind seam, the rebuild escape hatch, and the image-drift compare boundary
 
-**Context:** A consumer-repo audit and a code-review pass against D-027..D-031 surfaced three residual seams. (a) `speculum derive compose` (D-030) emits a `derived-compose.json` but offers nothing to load it back — every consumer hand-rolls a read-parse-validate-assert loop between the CLI's output and the `bind({ adapter })` call, and tends to invoke it at module load (a footgun: a stray import then throws before any test-runner gating fires). (b) `reconcileComposeStack` (D-031) has no manual override — a CI flag or local "rebuild even if the fingerprint says fresh" knob requires bypassing the library or salting the fingerprint. (c) The attach-mode image-drift compare (D-028) tolerates any prefix relationship between `expected` and `actual`, so `expected="redis"` aligns with `actual="redis-evil:latest"` and `expected="a"` aligns with everything starting with `"a"` — a false negative on real drift.
+**Context:** A consumer-repo audit and a code-review pass against D-027..D-031 surfaced three residual seams. (a) `cyanotype derive compose` (D-030) emits a `derived-compose.json` but offers nothing to load it back — every consumer hand-rolls a read-parse-validate-assert loop between the CLI's output and the `bind({ adapter })` call, and tends to invoke it at module load (a footgun: a stray import then throws before any test-runner gating fires). (b) `reconcileComposeStack` (D-031) has no manual override — a CI flag or local "rebuild even if the fingerprint says fresh" knob requires bypassing the library or salting the fingerprint. (c) The attach-mode image-drift compare (D-028) tolerates any prefix relationship between `expected` and `actual`, so `expected="redis"` aligns with `actual="redis-evil:latest"` and `expected="a"` aligns with everything starting with `"a"` — a false negative on real drift.
 
 **Decision:**
 
@@ -631,7 +631,7 @@ Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respa
 
 ## D-033. Derived adapter config is topology-only; policy lives at the bind site
 
-**Context:** `speculum derive compose|k8s` (D-030) walks an infrastructure manifest — a compose YAML or a directory of K8s resources — and emits a binding-keyed JSON of `AdapterConfig` entries the consumer loads at attach time. Through 0.3.1 the derive output included `allowChaos: true` on every entry. The schemas already correctly omitted `onImageDrift` (added in D-028); `allowChaos` had been smuggled in alongside the topology fields by accident of when the CLI was specified. A consumer who ran `bunx @expelledboy/speculum derive compose` then `loadDerivedCompose` got chaos opt-in baked into every binding without ever typing the words. Combined with the D-034 lifecycle defect — `runtime.stop` reaching `adapter.stop` when `allowChaos: true` — this meant a default-derived attach session would `docker stop` the operator's stack at suite teardown. Even with D-034 in place, the structural issue remains: a *generated* file is not a place for a policy decision.
+**Context:** `cyanotype derive compose|k8s` (D-030) walks an infrastructure manifest — a compose YAML or a directory of K8s resources — and emits a binding-keyed JSON of `AdapterConfig` entries the consumer loads at attach time. Through 0.3.1 the derive output included `allowChaos: true` on every entry. The schemas already correctly omitted `onImageDrift` (added in D-028); `allowChaos` had been smuggled in alongside the topology fields by accident of when the CLI was specified. A consumer who ran `bunx @expelledboy/cyanotype derive compose` then `loadDerivedCompose` got chaos opt-in baked into every binding without ever typing the words. Combined with the D-034 lifecycle defect — `runtime.stop` reaching `adapter.stop` when `allowChaos: true` — this meant a default-derived attach session would `docker stop` the operator's stack at suite teardown. Even with D-034 in place, the structural issue remains: a *generated* file is not a place for a policy decision.
 
 **Decision:** Derive output is topology only.
 
@@ -651,7 +651,7 @@ Why no `deployment` analogue: in K8s, `delete pod` against a Deployment is respa
 
 **Consequences:**
 - **Breaking for consumers who relied on `derive` setting `allowChaos: true`.** Resilience tests that call `chaos.stop`/`chaos.start` against an attach mode must now set `allowChaos: true` explicitly per binding. The petstore reference example (`tests/petstore-example/env.ts`) does this centrally in its `adapterFor` helper, conditional on `IS_DOCKER_ATTACH`/`IS_K8S_ATTACH` — the documented pattern.
-- The category boundary is *generated vs. declared*. Derived JSON is a build artifact: a fingerprint-driven snapshot of the substrate's shape. Bind-site config is source code: the test author's deliberate declaration of what Speculum is allowed to do. Anything that depends on intent — chaos opt-in, image-drift policy, future authentication choices — belongs in source.
+- The category boundary is *generated vs. declared*. Derived JSON is a build artifact: a fingerprint-driven snapshot of the substrate's shape. Bind-site config is source code: the test author's deliberate declaration of what Cyanotype is allowed to do. Anything that depends on intent — chaos opt-in, image-drift policy, future authentication choices — belongs in source.
 - The schemas remain open to growth. Future policy fields added to `AdapterConfig` are accepted on the bind site without ceremony; derive simply continues to ignore them.
 
 ---
@@ -667,13 +667,13 @@ Within the adapters themselves, the inconsistency surfaced: the K8s adapter thro
 **Decision:** Container ownership is declared by the adapter on every `start()` return, propagated through the orchestrator, persisted in the snapshot, and consulted by every teardown path.
 
 - `Started` gains a required `readonly owned: boolean`. The adapter returns `true` when it created the container (Docker deploy, in-memory, K8s deploy) and `false` when it discovered an existing container (Docker attach, K8s attach).
-- `ComponentSnapshot` gains optional `readonly owned?: boolean`. Absent is treated as `true` on read — pre-0.4.0 metadata never carried the field and was always Speculum-created.
+- `ComponentSnapshot` gains optional `readonly owned?: boolean`. Absent is treated as `true` on read — pre-0.4.0 metadata never carried the field and was always Cyanotype-created.
 - The orchestrator's `ComponentState` carries `owned: boolean`. `startOne` reads it from the `Started` result of `adapter.start`. `attachOne` (the `attachEnvironment` per-component path) hardcodes `owned: false` regardless of what the snapshot says — the process that called `attachEnvironment` did not start these containers, so its `runtime.stop` must not stop them.
 - `finalizeRuntime`'s `detachOnly: boolean` parameter is removed. The `stop()` closure becomes per-component: `if (c.owned && c.containerId) await adapter.stop(...)`. A single uniform rule replaces the previous bimodal flag.
 - `shared.ts`'s `stopAllInMeta` (the D-027 version-drift cleanup) skips snapshots where `(snap.owned ?? true) === false`. Version drift in attach mode no longer bulk-stops the operator's stack; pure-attach mode (`mode: "attach"`) continues to throw `attach_version_stale`.
 - The chaos API is unchanged. `runtime.chaos.stop/start/restart` continue to call `adapter.stop/start` directly, gated only by `allowChaos` at the adapter. Chaos is the *sole* path that reaches `adapter.stop` for non-owned containers — and only when the bind site explicitly opted in.
 - The Docker adapter's silent no-op on `adapter.stop` in attach mode + `allowChaos: false` (previously `if (!b.allowChaos) return;`) is replaced with a throw of `{ kind: "chaos_unsupported_in_attach_mode", message, containerId }`, mirroring the K8s adapter's existing throw. With teardown no longer reaching `adapter.stop` for non-owned containers, the only remaining callers are the explicit chaos verbs — making "chaos call without `allowChaos`" a test-author error, surfaced loudly.
-- The metadata snapshot writes `owned: false` only when the component is not owned; the field is omitted when owned. This keeps owned-only environments (the entirety of pre-0.4.0 use) byte-stable with pre-0.4.0 readers — a newer Speculum reading older metadata, or vice versa, never trips.
+- The metadata snapshot writes `owned: false` only when the component is not owned; the field is omitted when owned. This keeps owned-only environments (the entirety of pre-0.4.0 use) byte-stable with pre-0.4.0 readers — a newer Cyanotype reading older metadata, or vice versa, never trips.
 - New invariant test suite at `tests/core/owned-lifecycle.test.ts` (11 cases) pins the rules: `runtime.stop()` on owned calls `adapter.stop`; non-owned does not; mixed environments stop only the owned half; `attachEnvironment` always produces `owned: false` regardless of snapshot; `metadata()` field-presence rules; `stopAllInMeta` honors `owned` on version drift; pre-0.4.0 snapshots (absent field) are treated as owned.
 
 **Consequences:**
@@ -688,7 +688,7 @@ Within the adapters themselves, the inconsistency surfaced: the K8s adapter thro
 
 ## D-035. `derive` emits `attach.port` only for single-port services; the field is a narrow override, not a default
 
-**Context:** `speculum derive compose|k8s` emits, per binding, a topology object Speculum's attach-mode adapters consume. Both adapters resolve container ports via the same shape: `const portKeys = override?.port !== undefined ? [String(override.port)] : Object.keys(spec.ports)`. Setting `attach.port` therefore *overrides* the binding's `spec.ports` to one key, not *augments* it. Through 0.4.0 the derive functions auto-emitted a single port for every service — picking the first one declared in the compose/k8s manifest. For single-port services the emitted value matched `spec.ports` and the override was a no-op. For multi-port services the emitted value silently disabled resolution for every port except the first. A binding with `spec.ports = { "59220": 59220, "8080": 59221 }` against a network simulator publishing both ports would resolve only `59220` because derive emitted `port: 59220` against the first entry; the binding's `8080` key was silently dropped. The first consumer to wire a multi-port attach stack hit this and worked around it by stripping `port` from derive output for a hand-maintained set of binding keys.
+**Context:** `cyanotype derive compose|k8s` emits, per binding, a topology object Cyanotype's attach-mode adapters consume. Both adapters resolve container ports via the same shape: `const portKeys = override?.port !== undefined ? [String(override.port)] : Object.keys(spec.ports)`. Setting `attach.port` therefore *overrides* the binding's `spec.ports` to one key, not *augments* it. Through 0.4.0 the derive functions auto-emitted a single port for every service — picking the first one declared in the compose/k8s manifest. For single-port services the emitted value matched `spec.ports` and the override was a no-op. For multi-port services the emitted value silently disabled resolution for every port except the first. A binding with `spec.ports = { "59220": 59220, "8080": 59221 }` against a network simulator publishing both ports would resolve only `59220` because derive emitted `port: 59220` against the first entry; the binding's `8080` key was silently dropped. The first consumer to wire a multi-port attach stack hit this and worked around it by stripping `port` from derive output for a hand-maintained set of binding keys.
 
 The defect was structural, not a one-off bug. `attach.port` is a *narrow override* — useful when a single binding wants to track only one port of a multi-port service. Emitting it as a default for every service inverted the polarity: the rare override became the implicit default, and the common case (multi-port resolution from `spec.ports`) became impossible without manual stripping.
 

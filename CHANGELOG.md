@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-12
+
+### Changed (BREAKING)
+- Package identity is now `@expelledboy/cyanotype` (was published under the
+  previous scoped name through 0.4.x). CLI bin is `cyanotype`. Consumers must
+  re-pin the dependency and invoke the new bin.
+- Runtime wire labels, env vars, and on-disk state use the `cyanotype` /
+  `CYANOTYPE_*` / `.cyanotype-env` vocabulary end-to-end (orchestrator writers,
+  Docker/K8s readers and guards, derive, fixtures). No dual-read of prior
+  label keys — attach targets and teardown filters must carry
+  `cyanotype=1` / `cyanotype.component` / `cyanotype.session` (and related)
+  labels. Test images are tagged under `cyanotype/…`.
+- GitHub repository slug in package metadata points at
+  `expelledboy/cyanotype` (remote rename is a separate ops step).
+
 ## [0.4.2] - 2026-08-08
 
 ### Fixed
@@ -56,9 +71,9 @@ first consumer (BRT) adopting 0.3.1 in production.
 
 ### Changed (BREAKING)
 - **`Started` SPI return now requires `owned: boolean`.** External adapter
-  implementers must set it; Speculum uses it to distinguish containers it
+  implementers must set it; Cyanotype uses it to distinguish containers it
   created from containers it merely attached to. (D-034)
-- **`speculum derive compose|k8s` no longer emits `allowChaos` in derived
+- **`cyanotype derive compose|k8s` no longer emits `allowChaos` in derived
   output.** Derived adapter config carries topology only (project / service /
   port / namespace / deployment). Policy fields — `allowChaos`, `onImageDrift`
   — belong at the bind site, where the test author explicitly opts in per
@@ -71,7 +86,7 @@ first consumer (BRT) adopting 0.3.1 in production.
 
 ### Fixed
 - `runtime.stop()` and `shared.stopAll()` no longer call `adapter.stop()` for
-  containers Speculum did not create (`owned: false`). Closes a defect where
+  containers Cyanotype did not create (`owned: false`). Closes a defect where
   attach-mode + `allowChaos: true` caused end-of-session `stopAll` to
   `docker stop` the operator's running stack. (D-034)
 - Version-drift invalidation (`stopAllInMeta`) skips non-owned containers.
@@ -89,19 +104,19 @@ first consumer (BRT) adopting 0.3.1 in production.
   0.3.0 — library tests passed; the bin entry was broken.
 - `CONTRIBUTING.md` gains a "Co-developing against a consumer repo via
   a `file:` pin" note: contributors must `bun run build` after any
-  `src/cli/` change for the consumer's `bunx @expelledboy/speculum …`
+  `src/cli/` change for the consumer's `bunx @expelledboy/cyanotype …`
   to see it, and a consumer switching from a `file:` to a semver pin
-  should `rm -rf node_modules/@expelledboy/speculum && bun install`.
+  should `rm -rf node_modules/@expelledboy/cyanotype && bun install`.
 - `docs/attach-mode.md` troubleshooting table gains rows for
   `attach_dead_container` and `container_gone`, plus an "Upgrading
   from a pre-0.3.0 attach session" subsection that explains why
   bumping `Binding.version` does not dislodge a legacy snapshot
   (absent stored version → check is deliberately skipped, see D-027)
-  and prescribes the one-time `rm .speculum-env/<envKey>.json` fix.
+  and prescribes the one-time `rm .cyanotype-env/<envKey>.json` fix.
 
 ## [0.3.1] - 2026-05-28
 
-Bugfix for the 0.3.0 `speculum derive` CLI and package-root re-exports.
+Bugfix for the 0.3.0 `cyanotype derive` CLI and package-root re-exports.
 Reported by the first consumer to adopt 0.3.0 against a real
 `docker compose` stack; no library-API changes.
 
@@ -115,14 +130,14 @@ Reported by the first consumer to adopt 0.3.0 against a real
   end-to-end (`tests/core/cli-derive.test.ts`) so future argv-parsing
   breakage at the dispatch level cannot ship green.
 - `deriveCompose` and `deriveK8s` are now exported from
-  `@expelledboy/speculum`. In 0.3.0 they were only reachable through
-  the deep path `@expelledboy/speculum/dist/cli/derive.js` — not in the
+  `@expelledboy/cyanotype`. In 0.3.0 they were only reachable through
+  the deep path `@expelledboy/cyanotype/dist/cli/derive.js` — not in the
   package's `exports` map and a typecheck hazard. The package-root
   import path documented in the 0.3.0 ADR is now actually what works.
 
 ### Changed
-- All documentation that invoked the CLI as `bunx speculum …` now reads
-  `bunx @expelledboy/speculum …`. The package is scoped, so the short
+- All documentation that invoked the CLI as `bunx cyanotype …` now reads
+  `bunx @expelledboy/cyanotype …`. The package is scoped, so the short
   form fails to resolve. Affects `docs/attach-mode.md`, the D-030 ADR
   consequences in `docs/decisions.md`.
 
@@ -139,7 +154,7 @@ consumers were hand-rolling.
   invalidation. Pure-attach mode (no rebuild path) throws
   `{ kind: "attach_version_stale", envKey }` instead. The new
   `ComponentSnapshot.version` field is optional; absent stored versions
-  skip the check, so metadata written by an older Speculum never
+  skip the check, so metadata written by an older Cyanotype never
   false-invalidates (ADR D-027).
 - Attach-mode image-drift detection. The Docker adapter compares the
   discovered container's image against the `Binding`'s expectation during
@@ -156,9 +171,9 @@ consumers were hand-rolling.
   `stack.attached` (carries `serviceCount`), `stack.failed` (carries
   `error`). The built-in console reporter renders the new events under a
   `"stack"` label column, parallel to `"substrate"` (ADR D-029).
-- `speculum derive` CLI — first `bin` entry in the package. Subcommands
-  `speculum derive compose --compose <f> --out <f|-> [--project <name>]`
-  and `speculum derive k8s --k8s <d|f> --out <f|->`. Output is the
+- `cyanotype derive` CLI — first `bin` entry in the package. Subcommands
+  `cyanotype derive compose --compose <f> --out <f|-> [--project <name>]`
+  and `cyanotype derive k8s --k8s <d|f> --out <f|->`. Output is the
   binding-keyed JSON consumed at attach time. The pure library
   counterparts `deriveCompose(path, project?)` and `deriveK8s(path)` are
   also exported for in-process use. The petstore reference script is now
@@ -174,7 +189,7 @@ consumers were hand-rolling.
   compare and goes straight to the rebuild path, emitting a `stack.stale`
   event with the synthetic marker `["<forced>"]` (ADR D-031, D-032).
 - `loadDerivedCompose(path, expectedKeys)` — synchronous helper that
-  reads the JSON emitted by `speculum derive compose`, validates each
+  reads the JSON emitted by `cyanotype derive compose`, validates each
   entry against `ComposeAdapterConfigSchema`, asserts every key in
   `expectedKeys` is present, and returns `Record<string, AdapterConfig>`.
   Three discriminated errors: `derived_compose_missing`,
@@ -214,12 +229,12 @@ Docker Compose attach adapter, framework lifecycle observer stream, and built-in
 ### Added
 - Docker Compose attach adapter mode (`createDockerAdapter({ mode: "attach", project })`):
   containers discovered via `com.docker.compose.project`/`.service` labels; compose service
-  maps to a Speculum component by convention (`speculum.component` label), overridable
+  maps to a Cyanotype component by convention (`cyanotype.component` label), overridable
   per-Binding via the `compose.attach` config slot (`{ project, service, containerNumber,
   port, allowChaos }`). A guard blocks `createContainer`/`pull`/`remove`; `stop`/`start`
   are also blocked unless `allowChaos: true`, which enables real `docker stop`/`start`
   chaos. Services under test must publish ports to the host. The same 15-test petstore SLA
-  suite runs unchanged against this fifth substrate via `SPECULUM_ADAPTER=docker-attach`
+  suite runs unchanged against this fifth substrate via `CYANOTYPE_ADAPTER=docker-attach`
   (ADR D-025, D-026).
 - Framework lifecycle observer stream (ADR D-024): opt-in `observer` on
   `OrchestratorOptions` receives typed `substrate.*` / `image.*` / `container.*`
@@ -229,7 +244,7 @@ Docker Compose attach adapter, framework lifecycle observer stream, and built-in
   Reachable via `OrchestratorOptions.observer` and forwarded from
   `SharedOptions.observer` through `createSharedEnvs`.
 - `createConsoleReporter()` — a built-in reporter that renders the observer
-  stream as `speculum`-prefixed stderr lines (state glyph + component column),
+  stream as `cyanotype`-prefixed stderr lines (state glyph + component column),
   with a live per-layer image-pull progress bar on a TTY. Renders the probe
   phase so a slow custom readiness check is not silent; shortens registry
   image refs. `environment.component_ready` is emitted with component scope so
@@ -263,7 +278,7 @@ Initial public release. Developer preview — pre-1.0, expect minor-version brea
 - Only HTTP and Opaque protocols implemented; TCP/gRPC/SOAP deferred
 - OrbStack K8s degrades under prolonged port-forward + rollout-restart load (kind/remote recommended for sustained CI)
 
-[Unreleased]: https://github.com/expelledboy/speculum/compare/v0.2.1...HEAD
-[0.2.1]: https://github.com/expelledboy/speculum/releases/tag/v0.2.1
-[0.2.0]: https://github.com/expelledboy/speculum/releases/tag/v0.2.0
-[0.1.0]: https://github.com/expelledboy/speculum/releases/tag/v0.1.0
+[Unreleased]: https://github.com/expelledboy/cyanotype/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/expelledboy/cyanotype/releases/tag/v0.2.1
+[0.2.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.2.0
+[0.1.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.1.0

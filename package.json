@@ -1,16 +1,16 @@
 {
-  "name": "@expelledboy/speculum",
-  "version": "0.4.2",
+  "name": "@expelledboy/cyanotype",
+  "version": "0.5.0",
   "description": "Bun-native blackbox test harness built around the Component Blueprint",
   "license": "MIT",
   "author": "Anthony Jackson <102334+expelledboy@users.noreply.github.com>",
-  "homepage": "https://github.com/expelledboy/speculum#readme",
+  "homepage": "https://github.com/expelledboy/cyanotype#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/expelledboy/speculum.git"
+    "url": "git+https://github.com/expelledboy/cyanotype.git"
   },
   "bugs": {
-    "url": "https://github.com/expelledboy/speculum/issues"
+    "url": "https://github.com/expelledboy/cyanotype/issues"
   },
   "keywords": [
     "bun",
@@ -25,7 +25,7 @@
   ],
   "type": "module",
   "bin": {
-    "speculum": "./dist/cli/index.js"
+    "cyanotype": "./dist/cli/index.js"
   },
   "types": "./dist/index.d.ts",
   "exports": {
@@ -52,6 +52,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "test": "bun test tests/core/",
+    "rename-audit": "bun scripts/rename-audit/rename-audit.ts",
     "prepublishOnly": "bun run typecheck && bun run build && bun test tests/core/"
   },
   "dependencies": {

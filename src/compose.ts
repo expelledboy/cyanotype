@@ -18,7 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createEmitter, type Observer } from "./observer.js";
 
-const DEFAULT_STATE_DIR = ".speculum-env";
+const DEFAULT_STATE_DIR = ".cyanotype-env";
 
 /**
  * One fingerprint input. `file` hashes the SHA-256 of a file's contents (a
@@ -55,7 +55,7 @@ export type ReconcileComposeOptions = {
   readonly onStale?: () => Promise<void>;
   /** Framework-lifecycle observer. See `observer.ts`. */
   readonly observer?: Observer;
-  /** Persisted-fingerprint directory. Defaults to `.speculum-env`. */
+  /** Persisted-fingerprint directory. Defaults to `.cyanotype-env`. */
   readonly stateDir?: string;
   /**
    * Manual escape hatch: when `true`, skip the fingerprint compare and the

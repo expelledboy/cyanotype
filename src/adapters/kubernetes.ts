@@ -49,7 +49,7 @@ export type K8sAdapterOptions = {
   readonly namespace?: string;
 };
 
-const DEFAULT_NS = "speculum-tests";
+const DEFAULT_NS = "cyanotype-tests";
 const POD_READY_TIMEOUT_MS = 60_000;
 const PORT_READY_TIMEOUT_MS = 10_000;
 
@@ -168,7 +168,7 @@ const registerExitHandler = () => {
       const argv = ["kubectl"];
       if (s.context) argv.push("--context", s.context);
       argv.push("-n", s.namespace, "delete", "pods,configmaps,services",
-        "-l", `speculum=1,speculum.session=${s.sessionId}`,
+        "-l", `cyanotype=1,cyanotype.session=${s.sessionId}`,
         "--wait=false", "--ignore-not-found=true");
       try { Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" }); } catch { /* ignore */ }
     }
@@ -196,10 +196,10 @@ const buildPodManifest = (
   for (const [containerPath, content] of Object.entries(spec.mounts)) {
     const basename = `file-${i++}`;
     cmData[basename] = content;
-    volumeMounts.push({ name: "speculum-mounts", mountPath: containerPath, subPath: basename, readOnly: true });
+    volumeMounts.push({ name: "cyanotype-mounts", mountPath: containerPath, subPath: basename, readOnly: true });
   }
   const volumes = cmName
-    ? [{ name: "speculum-mounts", configMap: { name: cmName } }]
+    ? [{ name: "cyanotype-mounts", configMap: { name: cmName } }]
     : [];
   return {
     apiVersion: "v1",
@@ -244,9 +244,9 @@ const sanitiseDnsLabel = (s: string): string =>
   s.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 63) || "x";
 
 const buildServiceName = (spec: StartSpec): string | null => {
-  const component = spec.labels["speculum.component"];
+  const component = spec.labels["cyanotype.component"];
   if (!component) return null;
-  const instance = spec.labels["speculum.instance"];
+  const instance = spec.labels["cyanotype.instance"];
   const raw = instance ? `${component}-${instance}` : component;
   return sanitiseDnsLabel(raw);
 };
@@ -269,7 +269,7 @@ const buildServiceManifest = (
     metadata: { name: serviceName, namespace, labels: spec.labels },
     spec: {
       type: "ClusterIP",
-      selector: { "speculum.podname": podName },
+      selector: { "cyanotype.podname": podName },
       ports,
     },
   };
@@ -279,7 +279,7 @@ const sanitisePodName = (sessionId: string): string => {
   const stamp = Date.now().toString(36);
   const rand = Math.random().toString(36).slice(2, 8);
   const sid = sessionId.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 20).replace(/^-+|-+$/g, "") || "s";
-  return `speculum-${sid}-${stamp}-${rand}`;
+  return `cyanotype-${sid}-${stamp}-${rand}`;
 };
 
 const resolveReadyPod = async (
@@ -571,9 +571,9 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     if (allowChaos && !deployment) {
       throw {
         kind: "k8s_attach_deployment_required",
-        message: `adapter.k8s.attach.deployment is required when allowChaos: true (binding=${spec.labels["speculum.component"] ?? "<unknown>"})`,
-        component: spec.labels["speculum.component"],
-        instance: spec.labels["speculum.instance"],
+        message: `adapter.k8s.attach.deployment is required when allowChaos: true (binding=${spec.labels["cyanotype.component"] ?? "<unknown>"})`,
+        component: spec.labels["cyanotype.component"],
+        instance: spec.labels["cyanotype.instance"],
       };
     }
     // D-023 (rewritten): the per-binding attach kubectl client only lifts
@@ -584,7 +584,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     });
     const serviceName = override?.service ?? buildServiceName(spec);
     if (!serviceName) {
-      throw { kind: "k8s_attach_service_not_found", service: null, namespace: attachNamespace, reason: "missing speculum.component label and no adapter.k8s.attach.service override" };
+      throw { kind: "k8s_attach_service_not_found", service: null, namespace: attachNamespace, reason: "missing cyanotype.component label and no adapter.k8s.attach.service override" };
     }
     const pausedKey = `${attachNamespace}/${serviceName}`;
     const paused = pausedAttaches.get(pausedKey);
@@ -648,8 +648,8 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   };
 
   const start = async (spec: StartSpec): Promise<Started> => {
-    if (spec.labels["speculum"] !== "1") {
-      throw { kind: "missing_speculum_label", labels: spec.labels };
+    if (spec.labels["cyanotype"] !== "1") {
+      throw { kind: "missing_cyanotype_label", labels: spec.labels };
     }
     if (mode === "attach") {
       return await startAttach(spec);
@@ -666,7 +666,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       }
     }
 
-    const podManifest = buildPodManifest(podName, cmName, spec, namespace, { "speculum.podname": podName });
+    const podManifest = buildPodManifest(podName, cmName, spec, namespace, { "cyanotype.podname": podName });
     const podRes = await k.run(["apply", "-f", "-"], { stdin: JSON.stringify(podManifest) });
     if (podRes.exit !== 0) {
       if (cmName) {
@@ -796,7 +796,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       try {
         await k.run([
           "delete", "pods,configmaps,services",
-          "-l", `speculum=1,speculum.session=${sessionId}`,
+          "-l", `cyanotype=1,cyanotype.session=${sessionId}`,
           "--wait=false", "--ignore-not-found=true",
         ]);
       } catch { /* ignore */ }

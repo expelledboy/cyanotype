@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: speculum-attach-tests
+  name: cyanotype-attach-tests
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: attach-nginx
-  namespace: speculum-attach-tests
+  namespace: cyanotype-attach-tests
   labels:
     app: attach-nginx
 spec:
@@ -32,7 +32,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: attach-nginx
-  namespace: speculum-attach-tests
+  namespace: cyanotype-attach-tests
 spec:
   type: ClusterIP
   selector:

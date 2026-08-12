@@ -104,7 +104,7 @@ type DockerContainer = {
     follow: true;
     stdout: true;
     stderr: true;
-    /** `0` = follow from now; omit/`"all"` = full history (never used by Speculum). */
+    /** `0` = follow from now; omit/`"all"` = full history (never used by Cyanotype). */
     tail?: number | "all";
   }): Promise<DockerStream>;
 };
@@ -311,7 +311,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
   };
 
   const writeMountFiles = (mounts: Record<string, string>) => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "speculum-mounts-"));
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cyanotype-mounts-"));
     const binds: string[] = [];
     for (const [containerPath, content] of Object.entries(mounts)) {
       const safeRel = containerPath.replace(/^\/+/, "").split("/").join(path.sep);
@@ -455,8 +455,8 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       throw { kind: "compose_attach_project_required" };
     }
     const allowChaos = attach?.allowChaos === true;
-    const component = spec.labels["speculum.component"];
-    const instance = spec.labels["speculum.instance"];
+    const component = spec.labels["cyanotype.component"];
+    const instance = spec.labels["cyanotype.instance"];
     const service = attach?.service
       ?? (component ? (instance ? `${component}-${instance}` : component) : undefined);
     if (!service) {
@@ -464,7 +464,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         kind: "compose_attach_service_not_found",
         service: null,
         project,
-        reason: "missing speculum.component label and no adapter.compose.attach.service override",
+        reason: "missing cyanotype.component label and no adapter.compose.attach.service override",
       };
     }
     const containerNumber = attach?.containerNumber ?? 1;
@@ -526,7 +526,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         }
         // "warn": surface and continue.
         console.warn(
-          `[speculum] attach_image_drift: component "${component ?? service}" `
+          `[cyanotype] attach_image_drift: component "${component ?? service}" `
           + `expected image "${expected}" but the running container uses "${actual}".`,
         );
       }
@@ -561,8 +561,8 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
   };
 
   const start = async (spec: StartSpec, emit?: Emit): Promise<Started> => {
-    if (spec.labels["speculum"] !== "1") {
-      throw { kind: "missing_speculum_label", labels: spec.labels };
+    if (spec.labels["cyanotype"] !== "1") {
+      throw { kind: "missing_cyanotype_label", labels: spec.labels };
     }
     if (mode === "attach") {
       return await startAttach(spec, emit);
@@ -697,7 +697,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     try {
       const list = await client.listContainers({
         all: true,
-        filters: { label: ["speculum=1", `speculum.session=${sessionId}`] },
+        filters: { label: ["cyanotype=1", `cyanotype.session=${sessionId}`] },
       });
       for (const entry of list) {
         const cont = client.getContainer(entry.Id);

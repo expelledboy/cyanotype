@@ -1,5 +1,5 @@
 /**
- * Load-generation helpers used by the SLA suites. Independent of Speculum;
+ * Load-generation helpers used by the SLA suites. Independent of Cyanotype;
  * a real consumer would write their own, or use `autocannon` / `k6`.
  */
 

@@ -18,8 +18,8 @@ Creates Pods, ConfigMaps, and per-Pod Services (D-017 + D-020). Streams logs and
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: speculum-deploy
-  namespace: speculum-tests
+  name: cyanotype-deploy
+  namespace: cyanotype-tests
 rules:
   - apiGroups: [""]
     resources: ["pods", "configmaps", "services"]
@@ -38,15 +38,15 @@ Bind to a `ServiceAccount` in the same namespace:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: speculum-deploy
-  namespace: speculum-tests
+  name: cyanotype-deploy
+  namespace: cyanotype-tests
 subjects:
   - kind: ServiceAccount
-    name: speculum
-    namespace: speculum-tests
+    name: cyanotype
+    namespace: cyanotype-tests
 roleRef:
   kind: Role
-  name: speculum-deploy
+  name: cyanotype-deploy
   apiGroup: rbac.authorization.k8s.io
 ```
 
@@ -66,7 +66,7 @@ Discovers pre-existing workloads via Services and EndpointSlices (D-018). Opens 
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: speculum-attach
+  name: cyanotype-attach
   namespace: <target-namespace>
 rules:
   - apiGroups: [""]
@@ -97,7 +97,7 @@ To grant this, add the following rules **in addition to** the base attach Role f
 | `deployments/scale` (apps) | `get`, `patch` |
 
 ```yaml
-# Append these rules to the speculum-attach Role above for any namespace
+# Append these rules to the cyanotype-attach Role above for any namespace
 # where Bindings may opt in to chaos.
   - apiGroups: ["apps"]
     resources: ["deployments"]

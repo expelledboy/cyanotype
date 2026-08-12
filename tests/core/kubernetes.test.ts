@@ -10,9 +10,9 @@ import net from "node:net";
 import { createK8sAdapter } from "../../src/adapters/kubernetes";
 import type { Adapter, StartSpec } from "../../src/adapter";
 
-const CONTEXT = process.env["SPECULUM_K8S_CONTEXT"] ?? "orbstack";
-const NAMESPACE = "speculum-tests";
-const IMAGE = "speculum/petstore-sla:latest";
+const CONTEXT = process.env["CYANOTYPE_K8S_CONTEXT"] ?? "orbstack";
+const NAMESPACE = "cyanotype-tests";
+const IMAGE = "cyanotype/petstore-sla:latest";
 const CONTAINER_PORT = "8080";
 
 const k8sAvailable = async (): Promise<boolean> => {
@@ -54,7 +54,7 @@ const mkSpec = (sessionId: string, overrides: Partial<StartSpec> = {}): StartSpe
   env: {},
   ports: { [CONTAINER_PORT]: "auto" },
   mounts: {},
-  labels: { speculum: "1", "speculum.session": sessionId, "speculum.component": "petstore" },
+  labels: { cyanotype: "1", "cyanotype.session": sessionId, "cyanotype.component": "petstore" },
   ...overrides,
 });
 
@@ -107,7 +107,7 @@ describe("kubernetes/adapter", () => {
     const r = await adapter.start(mkSpec(sid));
     started.push(r.containerId);
     expect(await adapter.exists(r.containerId)).toBe(true);
-    expect(await adapter.exists("speculum-does-not-exist-xyz")).toBe(false);
+    expect(await adapter.exists("cyanotype-does-not-exist-xyz")).toBe(false);
   }, 120_000);
 
   test("logs yields at least one line", async () => {
@@ -158,7 +158,7 @@ describe("kubernetes/adapter", () => {
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
     const r = await adapter.start(mkSpec(sid, {
-      mounts: { "/etc/speculum/marker.txt": "hello" },
+      mounts: { "/etc/cyanotype/marker.txt": "hello" },
     }));
     // Intentionally do not stop — let teardown sweep it.
     started.length = 0;
@@ -166,7 +166,7 @@ describe("kubernetes/adapter", () => {
     const gone = await waitUntil(async () => {
       const proc = Bun.spawn(
         ["kubectl", "--context", CONTEXT, "-n", NAMESPACE, "get", "pods,configmaps",
-          "-l", `speculum=1,speculum.session=${sid}`, "-o", "name"],
+          "-l", `cyanotype=1,cyanotype.session=${sid}`, "-o", "name"],
         { stdout: "pipe", stderr: "ignore" },
       );
       const out = await new Response(proc.stdout).text();

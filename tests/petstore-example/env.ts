@@ -50,7 +50,7 @@ const DOCKER_HOST_DNS = "host.docker.internal";
 // k8s-attach: pre-deployed workloads, env vars baked into Deployment manifests.
 // docker-attach: pre-deployed compose stack; components reached via published
 //   host ports (same as docker deploy mode).
-const ADAPTER = process.env.SPECULUM_ADAPTER ?? "docker";
+const ADAPTER = process.env.CYANOTYPE_ADAPTER ?? "docker";
 const IS_K8S = ADAPTER === "k8s";
 const IS_K8S_ATTACH = ADAPTER === "k8s-attach";
 const IS_DOCKER_ATTACH = ADAPTER === "docker-attach";
@@ -217,7 +217,7 @@ const petstoreBlueprint = defineBlueprint({
 
 const petstore = (config: PetstoreConfig) =>
   bind(petstoreBlueprint, {
-    image:   "speculum/petstore-sla:latest",
+    image:   "cyanotype/petstore-sla:latest",
     version: "latest",
     config,
     env: {
@@ -288,7 +288,7 @@ const redisBlueprint = defineBlueprint({
 
 const redis = (config: RedisConfig & { adapterKey?: string }) =>
   bind(redisBlueprint, {
-    image:   "speculum/redis-configurable:latest",
+    image:   "cyanotype/redis-configurable:latest",
     version: "latest",
     config,
     env:     {},

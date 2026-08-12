@@ -1,5 +1,5 @@
 /**
- * Speculum — public runtime entry.
+ * Cyanotype — public runtime entry.
  *
  * Three identity factories drive the user-facing API:
  *   - `defineBlueprint(spec)` — declare a Component Blueprint (the contract).
@@ -34,7 +34,7 @@ export type {
   DerivedComposeMissingError, DerivedComposeInvalidError, DerivedComposeMissingKeysError,
 } from "./cli/derive.js";
 
-// Re-export types so direct `import { type Blueprint } from "speculum"` works
+// Re-export types so direct `import { type Blueprint } from "cyanotype"` works
 // without going through index.d.ts. The canonical type contract is in
 // `./index.d.ts`; this list mirrors it.
 export type {

@@ -83,7 +83,7 @@ const mkSpec = (overrides: Partial<StartSpec> = {}): StartSpec => ({
   env: {},
   ports: { "8080": "auto" },
   mounts: {},
-  labels: { speculum: "1", "speculum.session": "s1", "speculum.component": "api" },
+  labels: { cyanotype: "1", "cyanotype.session": "s1", "cyanotype.component": "api" },
   ...overrides,
 });
 
@@ -345,7 +345,7 @@ describe("docker/adapter/attach discovery", () => {
     const a = mkAdapter();
     await a.connect();
     const r = await a.start(mkSpec({
-      labels: { speculum: "1", "speculum.session": "s1", "speculum.component": "does-not-match" },
+      labels: { cyanotype: "1", "cyanotype.session": "s1", "cyanotype.component": "does-not-match" },
       adapterConfig: { compose: { attach: { project: "prod", service: "my-real-api" } } },
     }));
     expect(r.containerId).toBe("attach:prod/real1");

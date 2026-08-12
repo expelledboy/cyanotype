@@ -18,10 +18,10 @@ bun install
 
 ### Co-developing against a consumer repo via a `file:` pin
 
-If a consumer pins Speculum locally — e.g. `"@expelledboy/speculum": "file:../../expelledboy/speculum"` — then `bunx @expelledboy/speculum derive ...` from the consumer side resolves against the **on-disk `dist/cli/index.js`** of this checkout. The CLI is only emitted by `bun run build` (`tsc -p tsconfig.build.json`). Two consequences:
+If a consumer pins Cyanotype locally — e.g. `"@expelledboy/cyanotype": "file:../../path/to/this-checkout"` — then `bunx @expelledboy/cyanotype derive ...` from the consumer side resolves against the **on-disk `dist/cli/index.js`** of this checkout. The CLI is only emitted by `bun run build` (`tsc -p tsconfig.build.json`). Two consequences:
 
 - After changing anything under `src/cli/`, run `bun run build` in this repo before retrying `bunx` from the consumer side. Otherwise `bunx` invokes a stale (or, if `dist/` is absent, fails outright with "could not determine executable").
-- After switching a consumer from a `file:` pin to a semver pin (e.g. `^0.3.1`), delete the consumer's `node_modules/@expelledboy/speculum` and re-run `bun install` — Bun does not always replace a directory-symlinked dep with a fresh tarball.
+- After switching a consumer from a `file:` pin to a semver pin (e.g. `^0.3.1`), delete the consumer's `node_modules/@expelledboy/cyanotype` and re-run `bun install` — Bun does not always replace a directory-symlinked dep with a fresh tarball.
 
 Switch to a semver pin once your library change has landed in a published release; that avoids the dist/build coupling entirely.
 
@@ -50,9 +50,9 @@ just clean-containers
 
 `bun test` runs all files in a single process. `bunfig.toml` registers `tests/preload.ts` as a preload script; that file's top-level `afterAll` (from `bun:test`) fires once after the entire run and calls `shared.stopAll()`. The harness stops cached runtimes, then reconnects briefly to force-clean any session-labelled stragglers, then disconnects. No orphan containers remain between runs.
 
-**Docker Compose attach mode is non-destructive and requires manual teardown.** When running `SPECULUM_ADAPTER=docker-attach`, Speculum never removes the Compose stack's containers — they must be stopped with `docker compose down` when you're done. `just clean-containers` will **not** catch Compose containers because they lack the `speculum=1` label that the cleanup filter targets.
+**Docker Compose attach mode is non-destructive and requires manual teardown.** When running `CYANOTYPE_ADAPTER=docker-attach`, Cyanotype never removes the Compose stack's containers — they must be stopped with `docker compose down` when you're done. `just clean-containers` will **not** catch Compose containers because they lack the `cyanotype=1` label that the cleanup filter targets.
 
-If you wire your own integration suite for a Speculum-based project, you'll need the same pattern:
+If you wire your own integration suite for a Cyanotype-based project, you'll need the same pattern:
 
 ```ts
 // tests/preload.ts
@@ -120,7 +120,7 @@ Before tagging any `v*.*.*` and triggering `release.yml`:
   `tests/core/cli-derive.test.ts` cover `deriveCompose` and `deriveK8s`
   as pure functions; they do not catch `src/cli/index.ts` argv-parsing
   or subcommand-routing bugs. The spawn suite in the same file (under
-  `describe("speculum derive (CLI dispatch)", ...)`) does — and 0.3.0
+  `describe("cyanotype derive (CLI dispatch)", ...)`) does — and 0.3.0
   shipped with a broken dispatcher because no test ever ran the bin
   itself. The dispatch suite is the regression bar; do not relax it.
   Manual smoke before publish:
@@ -164,7 +164,7 @@ src/                    Library source
     kubernetes.ts       K8s adapter (deploy + attach modes), reconnection layer
     kubectl.ts          kubectl subprocess wrapper (D-019)
   cli/
-    index.ts            speculum derive CLI dispatch (bin entry) (D-030)
+    index.ts            cyanotype derive CLI dispatch (bin entry) (D-030)
     derive.ts           deriveCompose / deriveK8s / loadDerivedCompose (D-030, D-032)
   index.ts              Public surface (.d.ts emitted by tsc at build)
 

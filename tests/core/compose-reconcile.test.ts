@@ -19,7 +19,7 @@ import {
 import type { ObserverEvent } from "../../src/observer";
 import { createDockerAdapter } from "../../src/adapters/docker";
 
-const mkTmpDir = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "speculum-compose-"));
+const mkTmpDir = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "cyanotype-compose-"));
 
 const tmpFile = (dir: string, name: string, content: string): string => {
   const p = path.join(dir, name);
@@ -147,7 +147,7 @@ describe("compose/reconcileComposeStack observer sequence", () => {
     // the stale path here; the genuine fresh path needs a live stack.
     const { observer, events } = record();
     await reconcileComposeStack({
-      project: "speculum-compose-test-fresh",
+      project: "cyanotype-compose-test-fresh",
       composeFile,
       fingerprint: [{ name: "compose", file: composeFile }],
       observer,
@@ -161,13 +161,13 @@ describe("compose/reconcileComposeStack observer sequence", () => {
     const composeFile = tmpFile(dir, "compose.yaml", "services: {}\n");
     const { observer, events } = record();
     await reconcileComposeStack({
-      project: "speculum-compose-test-envelope",
+      project: "cyanotype-compose-test-envelope",
       composeFile,
       fingerprint: [{ name: "compose", file: composeFile }],
       observer,
     }).catch(() => { /* ignore up failure */ });
     expect(events[0]?.adapter).toBe("compose");
-    expect(events[0]?.envKey).toBe("speculum-compose-test-envelope");
+    expect(events[0]?.envKey).toBe("cyanotype-compose-test-envelope");
   });
 
   test("force: true emits stack.stale with changedFields ['<forced>'] even when fingerprint matches", async () => {
@@ -176,7 +176,7 @@ describe("compose/reconcileComposeStack observer sequence", () => {
     const composeFile = tmpFile(dir, "compose.yaml", "services: {}\n");
     // Pre-seed a fingerprint matching the current compose-file hash so the
     // non-forced path would otherwise short-circuit as fresh.
-    const project = "speculum-compose-test-forced";
+    const project = "cyanotype-compose-test-forced";
     const current = await computeFingerprint([{ name: "compose", file: composeFile }]);
     writeStoredFingerprint(dir, project, current);
     const { observer, events } = record();
@@ -199,7 +199,7 @@ describe("compose/reconcileComposeStack observer sequence", () => {
     if (!HAS_DOCKER) return;
     const dir = mkTmpDir();
     const composeFile = tmpFile(dir, "compose.yaml", "services: {}\n");
-    const project = "speculum-compose-test-forced-onstale";
+    const project = "cyanotype-compose-test-forced-onstale";
     // Pre-seed with a stale (different) fingerprint to confirm overwrite.
     writeStoredFingerprint(dir, project, { compose: "OLD" });
     let onStaleCalled = false;
@@ -230,7 +230,7 @@ describe("compose/reconcileComposeStack observer sequence", () => {
     let threw = false;
     try {
       await reconcileComposeStack({
-        project: "speculum-compose-test-noobs",
+        project: "cyanotype-compose-test-noobs",
         composeFile,
         fingerprint: [{ name: "compose", file: composeFile }],
       });

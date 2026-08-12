@@ -2,8 +2,10 @@ node_modules/
 .direnv/
 result
 result-*
-.speculum-env/
+.cyanotype-env/
 *.log
 .DS_Store
 .claude/
 dist/
+.rename-audit/
+scripts/rename-audit/config.local.json

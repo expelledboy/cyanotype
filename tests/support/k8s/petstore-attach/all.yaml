@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: speculum-petstore-attach
+  name: cyanotype-petstore-attach
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: front-door-conf
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 data:
   nginx.conf: |
     worker_processes 1;
@@ -33,7 +33,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cache-leader-conf
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 data:
   redis.conf: |
     bind 0.0.0.0
@@ -45,7 +45,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cache-follower-conf
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 data:
   redis.conf: |
     bind 0.0.0.0
@@ -58,7 +58,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cache-leader
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   replicas: 1
   selector:
@@ -68,8 +68,8 @@ spec:
     metadata:
       labels:
         app: cache-leader
-        speculum.component: redis
-        speculum.instance: primary
+        cyanotype.component: redis
+        cyanotype.instance: primary
     spec:
       containers:
         - name: redis
@@ -90,7 +90,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: cache-leader
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   type: ClusterIP
   selector:
@@ -103,7 +103,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cache-follower
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   replicas: 1
   selector:
@@ -113,8 +113,8 @@ spec:
     metadata:
       labels:
         app: cache-follower
-        speculum.component: redis
-        speculum.instance: replica
+        cyanotype.component: redis
+        cyanotype.instance: replica
     spec:
       containers:
         - name: redis
@@ -135,7 +135,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: cache-follower
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   type: ClusterIP
   selector:
@@ -148,7 +148,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: pet-svc-1
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   replicas: 1
   selector:
@@ -158,12 +158,12 @@ spec:
     metadata:
       labels:
         app: pet-svc-1
-        speculum.component: petstore
-        speculum.instance: one
+        cyanotype.component: petstore
+        cyanotype.instance: one
     spec:
       containers:
         - name: petstore
-          image: speculum/petstore-sla:latest
+          image: cyanotype/petstore-sla:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: INSTANCE_ID
@@ -187,7 +187,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: pet-svc-1
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   type: ClusterIP
   selector:
@@ -200,7 +200,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: pet-svc-2
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   replicas: 1
   selector:
@@ -210,12 +210,12 @@ spec:
     metadata:
       labels:
         app: pet-svc-2
-        speculum.component: petstore
-        speculum.instance: two
+        cyanotype.component: petstore
+        cyanotype.instance: two
     spec:
       containers:
         - name: petstore
-          image: speculum/petstore-sla:latest
+          image: cyanotype/petstore-sla:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: INSTANCE_ID
@@ -239,7 +239,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: pet-svc-2
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   type: ClusterIP
   selector:
@@ -252,7 +252,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: pet-svc-3
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   replicas: 1
   selector:
@@ -262,12 +262,12 @@ spec:
     metadata:
       labels:
         app: pet-svc-3
-        speculum.component: petstore
-        speculum.instance: three
+        cyanotype.component: petstore
+        cyanotype.instance: three
     spec:
       containers:
         - name: petstore
-          image: speculum/petstore-sla:latest
+          image: cyanotype/petstore-sla:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: INSTANCE_ID
@@ -291,7 +291,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: pet-svc-3
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   type: ClusterIP
   selector:
@@ -304,7 +304,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: front-door
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   replicas: 1
   selector:
@@ -314,7 +314,7 @@ spec:
     metadata:
       labels:
         app: front-door
-        speculum.component: nginx
+        cyanotype.component: nginx
     spec:
       containers:
         - name: nginx
@@ -335,7 +335,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: front-door
-  namespace: speculum-petstore-attach
+  namespace: cyanotype-petstore-attach
 spec:
   type: ClusterIP
   selector:

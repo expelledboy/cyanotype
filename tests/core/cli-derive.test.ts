@@ -10,7 +10,7 @@ import { ComposeAdapterConfigSchema, K8sAdapterConfigSchema } from "../../src/in
 // ---------------------------------------------------------------------------
 
 const tmpFile = (name: string, content: string): string => {
-  const dir = join(tmpdir(), "speculum-cli-derive-test");
+  const dir = join(tmpdir(), "cyanotype-cli-derive-test");
   mkdirSync(dir, { recursive: true });
   const p = join(dir, name);
   writeFileSync(p, content, "utf8");
@@ -28,14 +28,14 @@ services:
   cache:
     image: redis:7
     labels:
-      speculum.component: redis
+      cyanotype.component: redis
     ports:
       - "6379:6379"
   api:
     image: myapp:latest
     labels:
-      speculum.component: petstore
-      speculum.instance: primary
+      cyanotype.component: petstore
+      cyanotype.instance: primary
     ports:
       - "8080:8080"
   unlabelled:
@@ -91,8 +91,8 @@ services:
   svc:
     image: redis:7
     labels:
-      - "speculum.component=cache"
-      - "speculum.instance=a"
+      - "cyanotype.component=cache"
+      - "cyanotype.instance=a"
     ports:
       - "6379:6379"
 `;
@@ -107,13 +107,13 @@ services:
   single:
     image: redis:7
     labels:
-      speculum.component: cache
+      cyanotype.component: cache
     ports:
       - "6379:6379"
   multi:
     image: simulator:latest
     labels:
-      speculum.component: simulator
+      cyanotype.component: simulator
     ports:
       - "59220:59220"
       - "59221:8080"
@@ -148,7 +148,7 @@ spec:
     metadata:
       labels:
         app: redis
-        speculum.component: redis
+        cyanotype.component: redis
     spec:
       containers:
         - name: redis
@@ -181,8 +181,8 @@ spec:
     metadata:
       labels:
         app: api
-        speculum.component: petstore
-        speculum.instance: primary
+        cyanotype.component: petstore
+        cyanotype.instance: primary
     spec:
       containers:
         - name: api
@@ -237,7 +237,7 @@ spec:
   });
 
   test("walks a directory of yaml files", () => {
-    const dir = join(tmpdir(), "speculum-cli-derive-test", "k8s-dir");
+    const dir = join(tmpdir(), "cyanotype-cli-derive-test", "k8s-dir");
     mkdirSync(dir, { recursive: true });
     // Split the yaml into two files
     const [part1, part2] = K8S_YAML.split("---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api-dep");
@@ -273,7 +273,7 @@ spec:
     metadata:
       labels:
         app: single
-        speculum.component: cache
+        cyanotype.component: cache
     spec:
       containers:
         - name: c
@@ -299,7 +299,7 @@ spec:
     metadata:
       labels:
         app: multi
-        speculum.component: simulator
+        cyanotype.component: simulator
     spec:
       containers:
         - name: c
@@ -397,7 +397,7 @@ describe("loadDerivedCompose", () => {
 // `bun src/cli/index.ts` and assert the subcommand router actually routes.
 // ---------------------------------------------------------------------------
 
-describe("speculum derive (CLI dispatch)", () => {
+describe("cyanotype derive (CLI dispatch)", () => {
   const cli = join(import.meta.dir, "..", "..", "src", "cli", "index.ts");
 
   const COMPOSE_YAML = [
@@ -406,13 +406,13 @@ describe("speculum derive (CLI dispatch)", () => {
     "    image: redis:7",
     "    ports: ['6379:6379']",
     "    labels:",
-    "      speculum.component: redis",
-    "      speculum.instance: primary",
+    "      cyanotype.component: redis",
+    "      cyanotype.instance: primary",
     "  petstore:",
     "    image: petstore:latest",
     "    ports: ['8080:8080']",
     "    labels:",
-    "      speculum.component: petstore",
+    "      cyanotype.component: petstore",
     "",
   ].join("\n");
 
@@ -452,7 +452,7 @@ describe("speculum derive (CLI dispatch)", () => {
       "    metadata:",
       "      labels:",
       "        app: demo",
-      "        speculum.component: demo",
+      "        cyanotype.component: demo",
       "    spec:",
       "      containers: [{ name: c, image: demo:1, ports: [{ containerPort: 8080 }] }]",
       "",

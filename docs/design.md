@@ -62,7 +62,7 @@ Six user-facing entities. Each maps to a TypeScript type. Inference helpers (`de
 └─────────────────────────┬───────────────────────────────────────┘
                           │  Public API (src/index.ts + src/index.d.ts)
 ┌─────────────────────────┴───────────────────────────────────────┐
-│  Speculum types (src/*.ts)                                      │
+│  Cyanotype types (src/*.ts)                                      │
 │  ──────────────                                                 │
 │  Blueprint ◀── Binding ◀── Environment ◀── Runtime<E>           │
 │      │            │           │              │                  │
@@ -131,7 +131,7 @@ Smaller pieces that live in their own files:
 
 ## Adapter-specific Binding config (D-022)
 
-The Binding shape stays substrate-agnostic by construction. But some substrates have legitimate per-Binding configuration that doesn't belong in the core: a K8s attach Binding may need to override the Service name when the real cluster's name doesn't match the Speculum component label; a future Terraform-discovered Binding may need an endpoint hint; a Docker Binding may want to specify a network. Stuffing those onto `Binding` itself bleeds substrate concerns into the core, and a generic `Binding<Cfg>` parameter would virally propagate through every helper signature.
+The Binding shape stays substrate-agnostic by construction. But some substrates have legitimate per-Binding configuration that doesn't belong in the core: a K8s attach Binding may need to override the Service name when the real cluster's name doesn't match the Cyanotype component label; a future Terraform-discovered Binding may need an endpoint hint; a Docker Binding may want to specify a network. Stuffing those onto `Binding` itself bleeds substrate concerns into the core, and a generic `Binding<Cfg>` parameter would virally propagate through every helper signature.
 
 Resolved via TypeScript declaration merging:
 
@@ -233,7 +233,7 @@ See [D-022](decisions.md#d-022-adapter-specific-binding-config-via-typescript-de
 
 ## The observer stream (D-024)
 
-Two unrelated things are both called "events" in Speculum — keep them apart:
+Two unrelated things are both called "events" in Cyanotype — keep them apart:
 
 | | `EventBus<Cat>` (D-006) | Observer stream (D-024) |
 |---|---|---|
@@ -274,7 +274,7 @@ the orchestrator emits directly. The SPI stays at seven methods (D-004) — `emi
 is a trailing optional argument.
 
 A throwing reporter is isolated inside `createEmitter` — telemetry never breaks
-the thing it observes. Speculum ships one reference consumer,
+the thing it observes. Cyanotype ships one reference consumer,
 `createConsoleReporter()` (`src/reporter.ts`), which renders the stream as
 readable stderr lines (live per-layer pull bar on a TTY); pass it — or any
 `(e: ObserverEvent) => void` — as `observer`.
@@ -381,7 +381,7 @@ The `ChaosArgs<E, K>` conditional discriminates single-instance from multi-insta
 
 ## Non-goals worth saying out loud
 
-- Speculum is not a unit-test framework. It runs *inside* Bun/Jest/Vitest.
-- Speculum is not a UI test framework. Playwright owns that.
-- Speculum does not own the schema authoring story. Zod schemas are user-defined. We just consume them.
-- Speculum does not provide pre-packaged service modules. The Blueprint contract makes user-authored definitions cheap.
+- Cyanotype is not a unit-test framework. It runs *inside* Bun/Jest/Vitest.
+- Cyanotype is not a UI test framework. Playwright owns that.
+- Cyanotype does not own the schema authoring story. Zod schemas are user-defined. We just consume them.
+- Cyanotype does not provide pre-packaged service modules. The Blueprint contract makes user-authored definitions cheap.

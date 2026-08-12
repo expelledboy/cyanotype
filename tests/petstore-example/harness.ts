@@ -1,7 +1,7 @@
 /**
  * Petstore-SLA — harness wiring.
  *
- * SPECULUM_ADAPTER selects the substrate at session-start time. The fakes
+ * CYANOTYPE_ADAPTER selects the substrate at session-start time. The fakes
  * route through a shared store (for primary/replica + petstore state) and a
  * shared upstream map (so the in-process nginx can find the petstores).
  */
@@ -19,7 +19,7 @@ import { nginxFake } from "../fakes/nginx";
 import { env } from "./env";
 
 const sessionId = randomUUID();
-const adapterType = process.env.SPECULUM_ADAPTER ?? "docker";
+const adapterType = process.env.CYANOTYPE_ADAPTER ?? "docker";
 
 const buildMemoryAdapter = () => {
   const store = createSharedPetStore();
@@ -50,8 +50,8 @@ const buildMemoryAdapter = () => {
 
   return createInMemoryAdapter({
     factories: {
-      "speculum/petstore-sla:latest":      petstoreFactory,
-      "speculum/redis-configurable:latest": redisFactory,
+      "cyanotype/petstore-sla:latest":      petstoreFactory,
+      "cyanotype/redis-configurable:latest": redisFactory,
       "nginx:alpine":                      nginxFactory,
     },
   });
@@ -65,20 +65,20 @@ const adapter = adapterType === "docker"
   ? createK8sAdapter({
       mode: "deploy",
       sessionId,
-      context: process.env.SPECULUM_K8S_CONTEXT ?? "orbstack",
-      namespace: process.env.SPECULUM_K8S_NAMESPACE ?? "speculum-tests",
+      context: process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack",
+      namespace: process.env.CYANOTYPE_K8S_NAMESPACE ?? "cyanotype-tests",
     })
   : adapterType === "k8s-attach"
   ? createK8sAdapter({
       mode: "attach",
       sessionId,
-      context: process.env.SPECULUM_K8S_CONTEXT ?? "orbstack",
-      namespace: process.env.SPECULUM_K8S_NAMESPACE ?? "speculum-petstore-attach",
+      context: process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack",
+      namespace: process.env.CYANOTYPE_K8S_NAMESPACE ?? "cyanotype-petstore-attach",
     })
   : adapterType === "docker-attach"
   ? createDockerAdapter({
       mode: "attach",
-      project: "speculum-petstore-attach",
+      project: "cyanotype-petstore-attach",
       sessionId,
     })
   : (() => { throw { kind: "unknown_adapter", value: adapterType }; })();
@@ -87,7 +87,7 @@ export const shared = createSharedEnvs(
   { "petstore-sla": env },
   {
     adapter,
-    stateDir: ".speculum-env",
+    stateDir: ".cyanotype-env",
     mode:     "startOrAttach",
     getTargetEnv: () => "petstore-sla",
   },

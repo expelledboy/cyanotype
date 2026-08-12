@@ -1,6 +1,6 @@
 /**
  * Derive — pure functions that walk Docker Compose or Kubernetes manifests
- * and return a validated Speculum adapter-override config object keyed by
+ * and return a validated Cyanotype adapter-override config object keyed by
  * binding name (`component` or `component.instance`).
  *
  * These are re-exported from the shipped CLI and importable directly for
@@ -95,9 +95,9 @@ export const deriveK8s = (k8sPath: string): Record<string, unknown> => {
       (getIn(dep, "spec", "template", "metadata", "labels") as
         | Record<string, string>
         | undefined) ?? {};
-    const component = podLabels["speculum.component"];
+    const component = podLabels["cyanotype.component"];
     if (!component) continue;
-    const instance = podLabels["speculum.instance"];
+    const instance = podLabels["cyanotype.instance"];
     const containers =
       (getIn(dep, "spec", "template", "spec", "containers") as Array<
         Record<string, unknown>
@@ -207,9 +207,9 @@ export const deriveCompose = (
     const labels = parseComposeLabels(
       svc.labels as Record<string, string> | string[] | undefined,
     );
-    const component = labels["speculum.component"];
+    const component = labels["cyanotype.component"];
     if (!component) continue;
-    const instance = labels["speculum.instance"];
+    const instance = labels["cyanotype.instance"];
     const hostPort = parseComposeContainerPort(svc.ports);
     const entry = {
       compose: {
@@ -250,7 +250,7 @@ export type DerivedComposeMissingKeysError = {
 
 /**
  * Load a `derived-compose.json` (the JSON file produced by
- * `speculum derive compose`), validate each entry against
+ * `cyanotype derive compose`), validate each entry against
  * `ComposeAdapterConfigSchema`, and assert that every key in `expectedKeys`
  * is present.
  *

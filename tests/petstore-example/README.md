@@ -1,6 +1,6 @@
 # petstore-sla — worked example
 
-A realistic three-tier topology used as Speculum's use-site validation **and** as the canonical demo of what the harness is for.
+A realistic three-tier topology used as Cyanotype's use-site validation **and** as the canonical demo of what the harness is for.
 
 ```
 client → nginx (round-robin) → 3× petstore → redis primary
@@ -34,7 +34,7 @@ Then `bun test tests/petstore-example/` (Mac/Windows Docker Desktop only — pet
 
 ## Substrates
 
-All five `SPECULUM_ADAPTER` values are supported. Prerequisites per substrate:
+All five `CYANOTYPE_ADAPTER` values are supported. Prerequisites per substrate:
 
 | Adapter | Prerequisite |
 |---|---|

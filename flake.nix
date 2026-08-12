@@ -1,5 +1,5 @@
 {
-  description = "Speculum — Bun-native blackbox test harness for the Component Blueprint";
+  description = "Cyanotype — Bun-native blackbox test harness for the Component Blueprint";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -18,7 +18,7 @@
               pkgs.just
             ];
             shellHook = ''
-              echo "speculum dev shell ($(bun --version))"
+              echo "cyanotype dev shell ($(bun --version))"
             '';
           };
         });

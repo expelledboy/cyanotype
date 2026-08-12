@@ -1,4 +1,4 @@
-# Release workflow — publishes @expelledboy/speculum to npm on tag push.
+# Release workflow — publishes @expelledboy/cyanotype to npm on tag push.
 #
 # Authentication: npm Trusted Publishers (OIDC, GA 2025-07-31).
 #   No NPM_TOKEN secret — the npm CLI exchanges a GitHub Actions OIDC ID
@@ -10,18 +10,18 @@
 #
 # First-publish bootstrap (one-time, before this workflow can run):
 #   The Trusted Publisher UI lives at
-#   https://www.npmjs.com/package/@expelledboy/speculum/access — but that
+#   https://www.npmjs.com/package/@expelledboy/cyanotype/access — but that
 #   URL only exists once the package does. So:
 #     1. Generate a short-lived Granular Access Token on npmjs.com
-#        (Account → Access Tokens → Granular, scope @expelledboy/speculum
+#        (Account → Access Tokens → Granular, scope @expelledboy/cyanotype
 #        write, 7-day expiry).
 #     2. Locally: `NODE_AUTH_TOKEN=<token> npm publish --access public`
 #        (or use any one-shot CI job with the token). This lays down the
 #        first version on npm.
-#     3. On npmjs.com → @expelledboy/speculum → Settings → Trusted
+#     3. On npmjs.com → @expelledboy/cyanotype → Settings → Trusted
 #        Publisher → Add → GitHub Actions:
 #          Organization or user: expelledboy
-#          Repository:           speculum
+#          Repository:           cyanotype
 #          Workflow filename:    release.yml
 #     4. Revoke the bootstrap token.
 #   Every subsequent tag-push then runs this workflow tokenlessly and

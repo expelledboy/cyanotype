@@ -3,7 +3,7 @@
  *
  * Pulls together F1 (we own the topology), F3 (typed calls keep the load
  * loop honest), and F6 (load goes through nginx → 3 instances). The point
- * of this suite is to show that Speculum doesn't fight you when you want
+ * of this suite is to show that Cyanotype doesn't fight you when you want
  * to write *quantitative* assertions, not just smoke checks.
  */
 

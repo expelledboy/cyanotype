@@ -3,12 +3,12 @@
  * Thin wrapper around the shipped `src/cli/derive` library functions.
  *
  * Usage (K8s):
- *   bun tests/petstore-example/scripts/derive-speculum.ts \
+ *   bun tests/petstore-example/scripts/derive-cyanotype.ts \
  *     --k8s tests/support/k8s/petstore-attach/all.yaml \
  *     --out tests/petstore-example/derived.json
  *
  * Usage (Compose):
- *   bun tests/petstore-example/scripts/derive-speculum.ts \
+ *   bun tests/petstore-example/scripts/derive-cyanotype.ts \
  *     --compose tests/support/compose/petstore-attach/compose.yaml \
  *     --out tests/petstore-example/derived-compose.json
  */
@@ -27,7 +27,7 @@ const args = (() => {
   const out = get("--out");
   if ((!k8s && !compose) || !out) {
     console.error(
-      "usage: derive-speculum.ts (--k8s <dir-or-file> | --compose <file>) --out <file-or-->",
+      "usage: derive-cyanotype.ts (--k8s <dir-or-file> | --compose <file>) --out <file-or-->",
     );
     process.exit(2);
   }

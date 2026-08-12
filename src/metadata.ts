@@ -5,7 +5,7 @@
  * no closures, no class instances, no SDK handles.
  *
  * Schema version is the migration guard. A future v2 metadata file written
- * by a newer Speculum is rejected by the current parser; the runtime can
+ * by a newer Cyanotype is rejected by the current parser; the runtime can
  * choose to start fresh or surface the version mismatch.
  */
 
@@ -31,7 +31,7 @@ export type ComponentSnapshot = {
   /**
    * The `Binding.version` that produced this component, when known.
    *
-   * OPTIONAL by design: metadata written by an older Speculum omits it.
+   * OPTIONAL by design: metadata written by an older Cyanotype omits it.
    * On re-ensure, an absent `version` SKIPS the freshness check — it never
    * false-invalidates a pre-existing environment. When present and it
    * differs from the current `Binding.version`, the attach path treats the
@@ -40,7 +40,7 @@ export type ComponentSnapshot = {
   readonly version?: string;
   /**
    * Whether the orchestrator owns this container's lifecycle. Optional for
-   * backward compatibility with metadata written by older Speculum: an
+   * backward compatibility with metadata written by older Cyanotype: an
    * absent field is read as `true` (fully owned) — the historical default.
    * Emitted by the writer ONLY when `false`, so existing metadata stays
    * byte-stable for owned components.

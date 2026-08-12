@@ -1,6 +1,6 @@
 # Attach mode
 
-Connect Speculum tests to workloads that are already running — no deploy from the harness, no test-owned lifecycle. The workloads can be a Kubernetes cluster managed by Helm or Terraform, or a Docker Compose stack spun up by a developer or a CI job. Speculum reads the running substrate, the developer's derive script translates whatever the source of truth is into a small JSON file, and that JSON threads verbatim into the Bindings.
+Connect Cyanotype tests to workloads that are already running — no deploy from the harness, no test-owned lifecycle. The workloads can be a Kubernetes cluster managed by Helm or Terraform, or a Docker Compose stack spun up by a developer or a CI job. Cyanotype reads the running substrate, the developer's derive script translates whatever the source of truth is into a small JSON file, and that JSON threads verbatim into the Bindings.
 
 This document is the developer-facing walkthrough for that flow across both supported substrates: Kubernetes and Docker Compose. The decision records that back it are [D-018](decisions.md#d-018-kubernetes-adapter--attach-mode-discovers-via-service-refuses-cluster-mutation) (K8s denylist), [D-019](decisions.md#d-019-kubectl-shellout-not-kubernetesclient-node-for-the-kubernetes-adapter) (kubectl shellout), [D-021](decisions.md#d-021-attach-mode-port-stability-via-local-port-claim-watch-driven-respawn) (reconnection layer), [D-022](decisions.md#d-022-adapter-specific-binding-config-via-typescript-declaration-merging) (per-Binding override shape), [D-023](decisions.md#d-023-attach-mode-chaos-via-kubectl-scale-against-a-named-deployment-opt-in) (K8s chaos opt-in), [D-025](decisions.md#d-025-docker-compose-attach-mode-adapter-discovery-guard) (Docker Compose adapter + discovery + guard), and [D-026](decisions.md#d-026-docker-compose-attach-chaos-via-docker-stopstart) (Compose chaos via docker stop/start).
 
@@ -34,7 +34,7 @@ Use **deploy** mode instead (`createDockerAdapter({ mode: "deploy" })`) when:
 - The harness should own the full container lifecycle for the test run.
 - Tests need hermetic, per-run environments.
 
-**Hard constraint:** services under test MUST publish their ports to the host using `ports:` in the Compose file. A service that only uses `expose:` (internal-only) cannot be reached by Speculum and will fail at attach time with `compose_attach_service_not_found` or `port_not_bound`.
+**Hard constraint:** services under test MUST publish their ports to the host using `ports:` in the Compose file. A service that only uses `expose:` (internal-only) cannot be reached by Cyanotype and will fail at attach time with `compose_attach_service_not_found` or `port_not_bound`.
 
 ## The flow at a glance
 
@@ -65,15 +65,15 @@ Use **deploy** mode instead (`createDockerAdapter({ mode: "deploy" })`) when:
                   │  bind(..., { adapter:         │
                   │    derived[key] })            │
                   └────────────────┬──────────────┘
-                                   │  Speculum runs
+                                   │  Cyanotype runs
                                    ▼
                           test file unchanged
 ```
 
 Five things to notice:
 
-1. **Speculum doesn't deploy.** The substrate state pre-exists.
-2. **The derive step is yours, but Speculum ships the common case.** For Docker Compose stacks and Kubernetes manifests that follow the `speculum.component` / `speculum.instance` label convention, `bunx @expelledboy/speculum derive compose|k8s` (D-030) does the work. For an arbitrary source of truth — Helm values, Terraform output, a custom registry — your project writes the derive step against that input. The petstore reference script (`tests/petstore-example/scripts/derive-speculum.ts`) is a thin wrapper over the library's `deriveCompose` / `deriveK8s` functions, also available as direct imports.
+1. **Cyanotype doesn't deploy.** The substrate state pre-exists.
+2. **The derive step is yours, but Cyanotype ships the common case.** For Docker Compose stacks and Kubernetes manifests that follow the `cyanotype.component` / `cyanotype.instance` label convention, `bunx @expelledboy/cyanotype derive compose|k8s` (D-030) does the work. For an arbitrary source of truth — Helm values, Terraform output, a custom registry — your project writes the derive step against that input. The petstore reference script (`tests/petstore-example/scripts/derive-cyanotype.ts`) is a thin wrapper over the library's `deriveCompose` / `deriveK8s` functions, also available as direct imports.
 3. **The JSON shape is `AdapterConfig` itself.** No envelope, no wrapper. `derived[key]` is what `bind()` accepts on its `adapter` field, verbatim.
 4. **env.ts validates at startup.** Missing keys throw before any test runs, with the missing names listed — no silent fallback to convention discovery.
 5. **The test file is unchanged.** Same Blueprint surface, same assertions, same chaos calls. Only the adapter wiring differs.
@@ -85,7 +85,7 @@ Five things to notice:
 The shape lives in `src/adapters/kubernetes.ts`, extended into the open `AdapterConfig` interface via TypeScript declaration merging (D-022). The runtime validator is exported:
 
 ```ts
-import { K8sAdapterConfigSchema } from "speculum/adapters/kubernetes";
+import { K8sAdapterConfigSchema } from "cyanotype/adapters/kubernetes";
 
 // equivalent to:
 z.object({
@@ -106,7 +106,7 @@ Per-field semantics:
 | Field | When to set | What happens if omitted |
 |---|---|---|
 | `namespace` | The target workload lives in a different namespace than the adapter default | Falls back to the adapter's constructor `namespace` option |
-| `service` | The cluster's Service name doesn't match `<component>[-<instance>]` | Falls back to label-derived convention (`speculum.component` + optional `speculum.instance` labels on `StartSpec`) |
+| `service` | The cluster's Service name doesn't match `<component>[-<instance>]` | Falls back to label-derived convention (`cyanotype.component` + optional `cyanotype.instance` labels on `StartSpec`) |
 | `port` | The container port to forward to | Falls back to the first port on the resolved Service |
 | `allowChaos` | The Binding's tests need `chaos.stop / start / restart` | Defaults to `false`. Chaos calls throw `chaos_unsupported_in_attach_mode` |
 | `deployment` | **Required** when `allowChaos: true` | If unset with `allowChaos: true`, `start` throws `k8s_attach_deployment_required` |
@@ -118,7 +118,7 @@ Per-field fallback means a partial override is honoured: setting only `service` 
 The shape lives in `src/adapters/docker.ts`, also extended via declaration merging. The runtime validator is exported:
 
 ```ts
-import { ComposeAdapterConfigSchema } from "speculum/adapters/docker";
+import { ComposeAdapterConfigSchema } from "cyanotype/adapters/docker";
 
 // equivalent to:
 z.object({
@@ -140,7 +140,7 @@ Per-field semantics:
 | Field | When to set | What happens if omitted |
 |---|---|---|
 | `project` | The Compose project name differs from the adapter constructor's `project` option | Falls back to `opts.project` on `createDockerAdapter(...)`. If neither is set, throws `compose_attach_project_required` |
-| `service` | The Compose service name doesn't match `<component>[-<instance>]` | Falls back to the `speculum.component` label (+ optional `speculum.instance`) on the container |
+| `service` | The Compose service name doesn't match `<component>[-<instance>]` | Falls back to the `cyanotype.component` label (+ optional `cyanotype.instance`) on the container |
 | `containerNumber` | The target service scales to multiple replicas and you need a specific one | Defaults to `1` (the first replica) |
 | `port` | You want the adapter to resolve **exactly one** specific port from `NetworkSettings.Ports`, ignoring everything else in `spec.ports` (a narrow single-port override of an otherwise multi-port binding) | The adapter resolves **every** port declared in `spec.ports` against the running container — the correct default for multi-port services. See "Multi-port attach services" below |
 | `allowChaos` | The Binding's tests use `runtime.<component>.chaos.stop()` / `chaos.start()` | Defaults to `false`. Chaos calls throw `chaos_unsupported_in_attach_mode` (D-034) |
@@ -175,7 +175,7 @@ bind(networkSimulatorBlueprint, {
 });
 ```
 
-`speculum derive compose|k8s` (D-030, D-035) emits `attach.port` **only** when the underlying compose service or k8s workload publishes exactly one port. Multi-port services produce derived entries with `port` absent — the binding's `spec.ports` becomes the source of truth automatically. Single-port services keep their `port` field for the narrow case where a `spec.ports` key happens to differ from the published container port.
+`cyanotype derive compose|k8s` (D-030, D-035) emits `attach.port` **only** when the underlying compose service or k8s workload publishes exactly one port. Multi-port services produce derived entries with `port` absent — the binding's `spec.ports` becomes the source of truth automatically. Single-port services keep their `port` field for the narrow case where a `spec.ports` key happens to differ from the published container port.
 
 ## Anatomy of the derived JSON
 
@@ -188,7 +188,7 @@ bind(networkSimulatorBlueprint, {
   "redis.primary": {
     "k8s": {
       "attach": {
-        "namespace": "speculum-petstore-attach",
+        "namespace": "cyanotype-petstore-attach",
         "service": "cache-leader",
         "port": 6379,
         "allowChaos": true,
@@ -199,7 +199,7 @@ bind(networkSimulatorBlueprint, {
   "petstore.one": {
     "k8s": {
       "attach": {
-        "namespace": "speculum-petstore-attach",
+        "namespace": "cyanotype-petstore-attach",
         "service": "pet-svc-1",
         "port": 8080,
         "allowChaos": true,
@@ -209,7 +209,7 @@ bind(networkSimulatorBlueprint, {
   },
   "nginx": {
     "k8s": {
-      "attach": { "namespace": "speculum-petstore-attach", "service": "front-door", "port": 8080, "allowChaos": true, "deployment": "front-door" }
+      "attach": { "namespace": "cyanotype-petstore-attach", "service": "front-door", "port": 8080, "allowChaos": true, "deployment": "front-door" }
     }
   }
 }
@@ -247,21 +247,21 @@ bind(networkSimulatorBlueprint, {
 }
 ```
 
-The keying convention is `<component>` for single-instance Bindings, `<component>.<instance>` for multi-instance ones. That matches how Speculum names things internally — your env.ts just looks the key up.
+The keying convention is `<component>` for single-instance Bindings, `<component>.<instance>` for multi-instance ones. That matches how Cyanotype names things internally — your env.ts just looks the key up.
 
-This convention is not load-bearing on Speculum itself: the framework only sees one `AdapterConfig` object per `bind()` call. The keying is purely a contract between *your* derive script and *your* env.ts. The flat map shown above is what the petstore-example uses; you can organise your derive output as one file per Binding, one file per component, or anything else. The framework consumes the values, not the structure.
+This convention is not load-bearing on Cyanotype itself: the framework only sees one `AdapterConfig` object per `bind()` call. The keying is purely a contract between *your* derive script and *your* env.ts. The flat map shown above is what the petstore-example uses; you can organise your derive output as one file per Binding, one file per component, or anything else. The framework consumes the values, not the structure.
 
 ## Example: deriving from Kubernetes YAML
 
-The shipped CLI (`speculum derive k8s`, D-030) walks K8s manifests directly:
+The shipped CLI (`cyanotype derive k8s`, D-030) walks K8s manifests directly:
 
 ```sh
-bunx @expelledboy/speculum derive k8s \
+bunx @expelledboy/cyanotype derive k8s \
   --k8s tests/support/k8s/petstore-attach/all.yaml \
   --out tests/petstore-example/derived.json
 ```
 
-The same logic is importable as `deriveK8s(path)` from the package, and the petstore reference script (`tests/petstore-example/scripts/derive-speculum.ts`) is a thin wrapper over it for cases where you want to call the same code from your test setup directly.
+The same logic is importable as `deriveK8s(path)` from the package, and the petstore reference script (`tests/petstore-example/scripts/derive-cyanotype.ts`) is a thin wrapper over it for cases where you want to call the same code from your test setup directly.
 
 The matching logic is the load-bearing part:
 
@@ -275,11 +275,11 @@ const dep = deployments.find((d) => {
 });
 
 // The component / instance keys come from the pod template's labels.
-const component = podLabels["speculum.component"];
-const instance  = podLabels["speculum.instance"];   // optional
+const component = podLabels["cyanotype.component"];
+const instance  = podLabels["cyanotype.instance"];   // optional
 ```
 
-The prerequisite is that pod templates carry `speculum.component` and (where applicable) `speculum.instance` labels. The petstore-attach demo's YAML (`tests/support/k8s/petstore-attach/all.yaml`) shows this — every Deployment pod template carries both. Adding these labels to existing Helm charts or Terraform-managed Deployments is usually a one-line annotation; if you can't modify the deployment, fall back to name-based heuristics in your own script.
+The prerequisite is that pod templates carry `cyanotype.component` and (where applicable) `cyanotype.instance` labels. The petstore-attach demo's YAML (`tests/support/k8s/petstore-attach/all.yaml`) shows this — every Deployment pod template carries both. Adding these labels to existing Helm charts or Terraform-managed Deployments is usually a one-line annotation; if you can't modify the deployment, fall back to name-based heuristics in your own script.
 
 Each emitted entry is validated against the zod schema before being written:
 
@@ -294,10 +294,10 @@ Failure here halts the derive — a malformed entry would otherwise pass into en
 
 ## Example: deriving from a Docker Compose file
 
-The shipped CLI also handles the Compose case (`speculum derive compose`):
+The shipped CLI also handles the Compose case (`cyanotype derive compose`):
 
 ```sh
-bunx @expelledboy/speculum derive compose \
+bunx @expelledboy/cyanotype derive compose \
   --compose tests/support/compose/petstore-attach/compose.yaml \
   --out tests/petstore-example/derived-compose.json \
   --project petstore-attach
@@ -305,21 +305,21 @@ bunx @expelledboy/speculum derive compose \
 
 Importable as `deriveCompose(path, project?)` from the package.
 
-The matching logic reads `speculum.component` / `speculum.instance` labels from each service:
+The matching logic reads `cyanotype.component` / `cyanotype.instance` labels from each service:
 
 ```ts
 for (const [serviceName, svc] of Object.entries(doc.services)) {
   const labels = parseComposeLabels(svc.labels);
-  const component = labels["speculum.component"];
+  const component = labels["cyanotype.component"];
   if (!component) continue;
-  const instance = labels["speculum.instance"];
+  const instance = labels["cyanotype.instance"];
   // ...emit { compose: { attach: { service: serviceName, port, allowChaos: true } } }
   ComposeAdapterConfigSchema.parse(entry);
   out[bindingKey(component, instance)] = entry;
 }
 ```
 
-The prerequisite is that each service in the Compose file carries a `speculum.component` label. Services without this label are silently skipped. The port is read from the first entry in `ports:` — which must use the published `host:container` form, not bare `expose:`.
+The prerequisite is that each service in the Compose file carries a `cyanotype.component` label. Services without this label are silently skipped. The port is read from the first entry in `ports:` — which must use the published `host:container` form, not bare `expose:`.
 
 Each emitted entry is validated against `ComposeAdapterConfigSchema` before being written, halting the derive for any malformed entry.
 
@@ -333,14 +333,14 @@ jq '
   .values.root_module.resources[]
   | select(.type == "kubernetes_service_v1")
   | {
-      key: .values.metadata[0].labels["speculum.component"]
-        + (.values.metadata[0].labels["speculum.instance"] // "" | if . == "" then "" else "." + . end),
+      key: .values.metadata[0].labels["cyanotype.component"]
+        + (.values.metadata[0].labels["cyanotype.instance"] // "" | if . == "" then "" else "." + . end),
       value: {
         k8s: { attach: {
           namespace:  .values.metadata[0].namespace,
           service:    .values.metadata[0].name,
           port:       .values.spec[0].port[0].port,
-          deployment: .values.metadata[0].labels["speculum.deployment"]
+          deployment: .values.metadata[0].labels["cyanotype.deployment"]
         } }
       }
     }
@@ -355,10 +355,10 @@ Render the chart and walk the manifest stream like the K8s YAML example:
 
 ```sh
 helm template my-release ./chart --values prod-values.yaml \
-  | bun tests/petstore-example/scripts/derive-speculum.ts --k8s /dev/stdin --out derived.json
+  | bun tests/petstore-example/scripts/derive-cyanotype.ts --k8s /dev/stdin --out derived.json
 ```
 
-The reference script reads `/dev/stdin` via the same path handling (treat `-` or pipe the helm output to a temp file). If the chart's templates don't include `speculum.component` labels, override them with `--set podLabels."speculum\.component"=…`.
+The reference script reads `/dev/stdin` via the same path handling (treat `-` or pipe the helm output to a temp file). If the chart's templates don't include `cyanotype.component` labels, override them with `--set podLabels."cyanotype\.component"=…`.
 
 The pattern recurs: whatever your source of truth is, render it to something the script can walk, match Services to backing workloads, and emit the same shape.
 
@@ -397,11 +397,11 @@ const derived = IS_K8S_ATTACH ? loadDerived() : {};
 
 ### Docker Compose — `loadDerivedCompose` (library helper, D-032)
 
-For the Compose case Speculum ships a synchronous library helper that does the read, parse, schema-validate, and missing-key assertion. Call it from your ensure-time setup — not from module top level, so a missing file does not throw at import time:
+For the Compose case Cyanotype ships a synchronous library helper that does the read, parse, schema-validate, and missing-key assertion. Call it from your ensure-time setup — not from module top level, so a missing file does not throw at import time:
 
 ```ts
-import { loadDerivedCompose } from "@expelledboy/speculum";
-import type { AdapterConfig } from "@expelledboy/speculum";
+import { loadDerivedCompose } from "@expelledboy/cyanotype";
+import type { AdapterConfig } from "@expelledboy/cyanotype";
 
 const composeDerived = (): Record<string, AdapterConfig> =>
   loadDerivedCompose(
@@ -447,7 +447,7 @@ Set both fields:
 adapter: {
   k8s: {
     attach: {
-      namespace: "speculum-petstore-attach",
+      namespace: "cyanotype-petstore-attach",
       service:   "cache-leader",
       port:      6379,
       allowChaos: true,
@@ -509,13 +509,13 @@ To inspect intermediate state:
 ```sh
 just deploy-petstore-k8s-attach        # apply tests/support/k8s/petstore-attach/all.yaml
 just derive-petstore-attach            # walk YAML, emit tests/petstore-example/derived.json
-SPECULUM_ADAPTER=k8s-attach bun test tests/petstore-example/
+CYANOTYPE_ADAPTER=k8s-attach bun test tests/petstore-example/
 just teardown-petstore-k8s-attach      # delete namespace
 ```
 
 The composite recipe runs teardown even when tests fail, so cluster state is not leaked.
 
-For your own project, the equivalent is: ensure your cluster has the workloads running (whatever your normal deploy flow is), run your derive script to produce `derived.json` somewhere env.ts can find it, then `SPECULUM_ADAPTER=k8s-attach bun test`.
+For your own project, the equivalent is: ensure your cluster has the workloads running (whatever your normal deploy flow is), run your derive script to produce `derived.json` somewhere env.ts can find it, then `CYANOTYPE_ADAPTER=k8s-attach bun test`.
 
 ### Docker Compose
 
@@ -524,19 +524,19 @@ For your own project, the equivalent is: ensure your cluster has the workloads r
 docker compose -f tests/support/compose/petstore-attach/compose.yaml up -d
 
 # Derive the override config (CLI; importable as `deriveCompose` too).
-bunx @expelledboy/speculum derive compose \
+bunx @expelledboy/cyanotype derive compose \
   --compose tests/support/compose/petstore-attach/compose.yaml \
   --out tests/petstore-example/derived-compose.json \
   --project petstore-attach
 
 # Run the suite.
-SPECULUM_ADAPTER=docker-attach bun test tests/petstore-example/
+CYANOTYPE_ADAPTER=docker-attach bun test tests/petstore-example/
 
-# Tear down the stack when done (Speculum never does this for you in attach mode).
+# Tear down the stack when done (Cyanotype never does this for you in attach mode).
 docker compose -f tests/support/compose/petstore-attach/compose.yaml down
 ```
 
-For your own project, the equivalent is: ensure your Compose stack is up and its services publish ports to the host, run your derive script to produce `derived-compose.json`, then `SPECULUM_ADAPTER=docker-attach bun test`.
+For your own project, the equivalent is: ensure your Compose stack is up and its services publish ports to the host, run your derive script to produce `derived-compose.json`, then `CYANOTYPE_ADAPTER=docker-attach bun test`.
 
 ## Troubleshooting
 
@@ -547,21 +547,21 @@ Errors are thrown as discriminated objects with a `kind` field. The common ones:
 | Kind | Where | Cause + fix |
 |---|---|---|
 | `derived_json_missing` | env.ts load (K8s inline loader) | `derived.json` not found at the expected path. Run your derive step first. The Compose-side equivalent thrown by `loadDerivedCompose` is `derived_compose_missing` (D-032). |
-| `derived_json_missing_keys` | env.ts load (K8s inline loader) | The derive script didn't produce one or more expected Binding keys. Check that services carry the right `speculum.component` / `speculum.instance` labels, or update `EXPECTED_KEYS` if your topology has changed. The Compose-side equivalent thrown by `loadDerivedCompose` is `derived_compose_missing_keys` with `missing: string[]`. |
-| `derived_compose_missing` | `loadDerivedCompose` (D-032) | The derived JSON file is not on disk. Run `bunx @expelledboy/speculum derive compose` (or your derive step) first. |
+| `derived_json_missing_keys` | env.ts load (K8s inline loader) | The derive script didn't produce one or more expected Binding keys. Check that services carry the right `cyanotype.component` / `cyanotype.instance` labels, or update `EXPECTED_KEYS` if your topology has changed. The Compose-side equivalent thrown by `loadDerivedCompose` is `derived_compose_missing_keys` with `missing: string[]`. |
+| `derived_compose_missing` | `loadDerivedCompose` (D-032) | The derived JSON file is not on disk. Run `bunx @expelledboy/cyanotype derive compose` (or your derive step) first. |
 | `derived_compose_invalid` | `loadDerivedCompose` (D-032) | JSON parse failure, or an entry that does not validate against `ComposeAdapterConfigSchema`. The `cause` field carries the underlying error. |
 | `derived_compose_missing_keys` | `loadDerivedCompose` (D-032) | The derived JSON is missing one or more keys passed in `expectedKeys`. The `missing: string[]` field lists them. |
 | `attach_mode_violation` | adapter chokepoint | A destructive operation was attempted in attach mode without `allowChaos`. Either set `allowChaos: true` on the Binding, or switch to deploy mode for that test. |
 | `attach_version_stale` | `freshAttach` (D-027) | Pure-attach mode (`mode: "attach"`) detected that the persisted environment's stored `Binding.version` differs from the current one. There is nothing to rebuild in pure-attach — switch to `startOrAttach` mode, or align the binding version with the running environment. |
 | `attach_image_drift` | docker adapter `startAttach` (D-028, D-032) | `onImageDrift: "fail"` was set and the attached container's image does not match the `Binding`'s expected image. The error carries `expected`, `actual`, and `component`. The comparison tolerates an exact match or an `@sha256:` digest suffix — anything else is treated as drift. |
-| `attach_dead_container` | `freshAttach` | The persisted `<envKey>.json` references a container that no longer exists. Common after the underlying stack was rebuilt outside Speculum's control. Delete `.speculum-env/<envKey>.json` and re-ensure. See the upgrade note below — this is also the symptom of pre-0.3.0 metadata after a stack rebuild. |
-| `container_gone` | `attachOne` (orchestrator) | A *specific* component's container in the snapshot is missing, even though the sample-container liveness check in `startOrAttach` passed. This means the stack was partially torn down. Same fix as `attach_dead_container`: clear `.speculum-env/<envKey>.json` once. |
+| `attach_dead_container` | `freshAttach` | The persisted `<envKey>.json` references a container that no longer exists. Common after the underlying stack was rebuilt outside Cyanotype's control. Delete `.cyanotype-env/<envKey>.json` and re-ensure. See the upgrade note below — this is also the symptom of pre-0.3.0 metadata after a stack rebuild. |
+| `container_gone` | `attachOne` (orchestrator) | A *specific* component's container in the snapshot is missing, even though the sample-container liveness check in `startOrAttach` passed. This means the stack was partially torn down. Same fix as `attach_dead_container`: clear `.cyanotype-env/<envKey>.json` once. |
 
 ### Upgrading from a pre-0.3.0 attach session
 
-Snapshots written by Speculum &lt; 0.3.0 lack the optional `version` field that drives D-027's cache-key invalidation. The library deliberately skips the version check when the stored field is absent (so a newer Speculum never false-invalidates a healthy environment), but that also means an upgraded consumer cannot rely on bumping `Binding.version` to dislodge the legacy snapshot — the check sees `stored: undefined` and skips. If you also rebuild the underlying compose/k8s stack as part of the upgrade (e.g. via `reconcileComposeStack`), the persisted snapshot will reference container IDs that no longer exist, and the next ensure will throw `attach_dead_container` or `container_gone`.
+Snapshots written by Cyanotype &lt; 0.3.0 lack the optional `version` field that drives D-027's cache-key invalidation. The library deliberately skips the version check when the stored field is absent (so a newer Cyanotype never false-invalidates a healthy environment), but that also means an upgraded consumer cannot rely on bumping `Binding.version` to dislodge the legacy snapshot — the check sees `stored: undefined` and skips. If you also rebuild the underlying compose/k8s stack as part of the upgrade (e.g. via `reconcileComposeStack`), the persisted snapshot will reference container IDs that no longer exist, and the next ensure will throw `attach_dead_container` or `container_gone`.
 
-**One-time fix when upgrading:** delete `.speculum-env/<envKey>.json` once. Speculum then writes a fresh snapshot that includes `version`, and from that point forward bumping `Binding.version` triggers the proper stop-and-rebuild path (D-027, with the leak-safe `stopAllInMeta` walk added in 0.3.0).
+**One-time fix when upgrading:** delete `.cyanotype-env/<envKey>.json` once. Cyanotype then writes a fresh snapshot that includes `version`, and from that point forward bumping `Binding.version` triggers the proper stop-and-rebuild path (D-027, with the leak-safe `stopAllInMeta` walk added in 0.3.0).
 
 ### Kubernetes-specific (`k8s_attach_*`)
 
@@ -589,7 +589,7 @@ Snapshots written by Speculum &lt; 0.3.0 lack the optional `version` field that 
 - [`README.md`](../README.md#adapters) — adapter matrix and the Worked Example.
 - [`design.md`](design.md#adapter-specific-binding-config-d-022) — the type story behind `AdapterConfig` and declaration merging.
 - [`k8s-rbac.md`](k8s-rbac.md) — base attach Role + chaos-opt-in addendum.
-- [`decisions.md`](decisions.md) — D-018 (K8s denylist), D-019 (kubectl shellout), D-021 (reconnection layer), D-022 (adapter-specific Binding config), D-023 (K8s chaos via scale), D-025 (Compose adapter + discovery + guard), D-026 (Compose chaos via docker stop/start), D-027 (`Binding.version` cache key), D-028 (attach-mode `onImageDrift` policy), D-029 (`stack.*` observer phase), D-030 (`speculum derive` CLI), D-031 (`reconcileComposeStack`), D-032 (`loadDerivedCompose` + `force` flag + drift-compare boundary).
-- `bunx @expelledboy/speculum derive compose|k8s` — the shipped CLI (D-030). The petstore reference script (`tests/petstore-example/scripts/derive-speculum.ts`) is a thin wrapper over the same library functions (`deriveCompose`, `deriveK8s`).
+- [`decisions.md`](decisions.md) — D-018 (K8s denylist), D-019 (kubectl shellout), D-021 (reconnection layer), D-022 (adapter-specific Binding config), D-023 (K8s chaos via scale), D-025 (Compose adapter + discovery + guard), D-026 (Compose chaos via docker stop/start), D-027 (`Binding.version` cache key), D-028 (attach-mode `onImageDrift` policy), D-029 (`stack.*` observer phase), D-030 (`cyanotype derive` CLI), D-031 (`reconcileComposeStack`), D-032 (`loadDerivedCompose` + `force` flag + drift-compare boundary).
+- `bunx @expelledboy/cyanotype derive compose|k8s` — the shipped CLI (D-030). The petstore reference script (`tests/petstore-example/scripts/derive-cyanotype.ts`) is a thin wrapper over the same library functions (`deriveCompose`, `deriveK8s`).
 - `tests/support/k8s/petstore-attach/all.yaml` — the K8s fixture topology (6 workloads, deliberately non-convention names).
 - `tests/support/compose/petstore-attach/compose.yaml` — the Docker Compose fixture topology (6 services).

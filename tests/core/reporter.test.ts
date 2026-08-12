@@ -12,9 +12,9 @@ const render = (events: ObserverEvent[], progress = false): string => {
 };
 
 describe("reporter/createConsoleReporter", () => {
-  test("prefixes every line with 'speculum'", () => {
+  test("prefixes every line with 'cyanotype'", () => {
     const out = render([ev({ type: "substrate.connected", latencyMs: 5 })]);
-    expect(out).toContain("speculum  ");
+    expect(out).toContain("cyanotype  ");
   });
 
   test("renders the environment rollup", () => {

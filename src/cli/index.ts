@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 /**
- * speculum CLI — shipped as `bin.speculum` in package.json.
+ * cyanotype CLI — shipped as `bin.cyanotype` in package.json.
  *
  * Commands:
- *   speculum derive compose --compose <file> --out <file|-> [--project <name>]
- *   speculum derive k8s     --k8s <dir|file>  --out <file|->
+ *   cyanotype derive compose --compose <file> --out <file|-> [--project <name>]
+ *   cyanotype derive k8s     --k8s <dir|file>  --out <file|->
  */
 
 import { writeFileSync } from "node:fs";
@@ -21,8 +21,8 @@ const usage = (): never => {
   process.stderr.write(
     [
       "Usage:",
-      "  speculum derive compose --compose <file> --out <file|-> [--project <name>]",
-      "  speculum derive k8s     --k8s <dir|file>  --out <file|->",
+      "  cyanotype derive compose --compose <file> --out <file|-> [--project <name>]",
+      "  cyanotype derive k8s     --k8s <dir|file>  --out <file|->",
       "",
     ].join("\n"),
   );

@@ -4,22 +4,22 @@
 # pet-svc-1/2/3, front-door) to exercise the compose.attach.service override
 # path in env.ts/derived-compose.json — mirroring the intent of the K8s demo.
 #
-# All services publish their ports to the host so the Speculum test runner
+# All services publish their ports to the host so the Cyanotype test runner
 # (which runs outside the Docker network) can reach them via 127.0.0.1.
 #
-# Project name: speculum-petstore-attach
+# Project name: cyanotype-petstore-attach
 # Bring up with:
-#   docker compose -p speculum-petstore-attach \
+#   docker compose -p cyanotype-petstore-attach \
 #     -f tests/support/compose/petstore-attach/compose.yaml up -d
 
-name: speculum-petstore-attach
+name: cyanotype-petstore-attach
 
 services:
   cache-leader:
-    image: speculum/redis-configurable:latest
+    image: cyanotype/redis-configurable:latest
     labels:
-      speculum.component: redis
-      speculum.instance: primary
+      cyanotype.component: redis
+      cyanotype.instance: primary
     command: ["redis-server", "/etc/redis/redis.conf"]
     volumes:
       - type: bind
@@ -30,10 +30,10 @@ services:
       - "36379:6379"
 
   cache-follower:
-    image: speculum/redis-configurable:latest
+    image: cyanotype/redis-configurable:latest
     labels:
-      speculum.component: redis
-      speculum.instance: replica
+      cyanotype.component: redis
+      cyanotype.instance: replica
     command: ["redis-server", "/etc/redis/redis.conf"]
     volumes:
       - type: bind
@@ -46,10 +46,10 @@ services:
       - cache-leader
 
   pet-svc-1:
-    image: speculum/petstore-sla:latest
+    image: cyanotype/petstore-sla:latest
     labels:
-      speculum.component: petstore
-      speculum.instance: one
+      cyanotype.component: petstore
+      cyanotype.instance: one
     environment:
       INSTANCE_ID: one
       PORT: "8080"
@@ -65,10 +65,10 @@ services:
       - cache-follower
 
   pet-svc-2:
-    image: speculum/petstore-sla:latest
+    image: cyanotype/petstore-sla:latest
     labels:
-      speculum.component: petstore
-      speculum.instance: two
+      cyanotype.component: petstore
+      cyanotype.instance: two
     environment:
       INSTANCE_ID: two
       PORT: "8080"
@@ -84,10 +84,10 @@ services:
       - cache-follower
 
   pet-svc-3:
-    image: speculum/petstore-sla:latest
+    image: cyanotype/petstore-sla:latest
     labels:
-      speculum.component: petstore
-      speculum.instance: three
+      cyanotype.component: petstore
+      cyanotype.instance: three
     environment:
       INSTANCE_ID: three
       PORT: "8080"
@@ -105,7 +105,7 @@ services:
   front-door:
     image: nginx:alpine
     labels:
-      speculum.component: nginx
+      cyanotype.component: nginx
     volumes:
       - type: bind
         source: ./front-door.conf

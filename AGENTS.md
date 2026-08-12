@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Speculum — Bun-native test harness built around the **Component Blueprint**: a typed contract (API schemas + event catalog) that multiple Bindings (real container, in-process simulator) satisfy. The Adapter is the substrate seam.
+Cyanotype — Bun-native test harness built around the **Component Blueprint**: a typed contract (API schemas + event catalog) that multiple Bindings (real container, in-process simulator) satisfy. The Adapter is the substrate seam.
 
 Read in this order if you have time: [`docs/axioms.md`](docs/axioms.md) → [`docs/design.md`](docs/design.md) → [`CONVENTIONS.md`](CONVENTIONS.md).
 
@@ -30,7 +30,7 @@ just clean-containers          # manual reset; not needed on the normal path
 | Orchestrator (start/attach/chaos) | `src/orchestrator.ts` |
 | Multi-env registry | `src/shared.ts` |
 | Compose-stack reconciliation (`reconcileComposeStack`, `FingerprintSpec`) (D-031, D-032) | `src/compose.ts` |
-| `speculum derive` CLI dispatch (`speculum derive compose|k8s`) (D-030) | `src/cli/index.ts` |
+| `cyanotype derive` CLI dispatch (`cyanotype derive compose|k8s`) (D-030) | `src/cli/index.ts` |
 | Derive library + `loadDerivedCompose` (`deriveCompose`, `deriveK8s`, `loadDerivedCompose`) (D-030, D-032) | `src/cli/derive.ts` |
 | Docker adapter (deploy + Compose attach modes; `onImageDrift`) (D-028) | `src/adapters/docker.ts` |
 | In-process simulator adapter | `src/adapters/memory.ts` |
@@ -67,7 +67,7 @@ const petstoreBlueprint = defineBlueprint({
 });
 
 const petstore = (cfg: PetstoreCfg) => bind(petstoreBlueprint, {
-  image: "speculum/petstore:latest", version: "latest",
+  image: "cyanotype/petstore:latest", version: "latest",
   config: cfg, env: { PORT: "8080", ... },
   ports: { http: cfg.httpPort },
   logParser: petstoreJsonLogParser,
@@ -82,7 +82,7 @@ Before declaring a change done:
 
 1. `just typecheck` — 0 errors.
 2. `just test` — all green. If a test fails because of your change, fix the root cause rather than loosen the assertion.
-3. `docker ps -aq --filter label=speculum=1 | wc -l` should print `0`. If containers leak, the `bun:test` preload teardown is broken — fix that before anything else.
+3. `docker ps -aq --filter label=cyanotype=1 | wc -l` should print `0`. If containers leak, the `bun:test` preload teardown is broken — fix that before anything else.
 
 ## What requires an ADR
 

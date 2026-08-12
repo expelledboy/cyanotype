@@ -17,7 +17,7 @@
  * construction.
  *
  * `teardown` does label-based discovery of stragglers from previous crashed
- * runs (label = `speculum=1`). The orchestrator calls it once at suite-level
+ * runs (label = `cyanotype=1`). The orchestrator calls it once at suite-level
  * teardown.
  *
  * Concerns the adapter does NOT own (they live in the orchestrator):
@@ -100,15 +100,15 @@ export type StartSpec = {
   /** Container path → file content. Adapter materialises tmpfiles + bind mounts. */
   readonly mounts: Record<string, string>;
   /**
-   * Labels for teardown discovery. The orchestrator always sets `speculum=1`
-   * and `speculum.session`. Adapters can add their own keys.
+   * Labels for teardown discovery. The orchestrator always sets `cyanotype=1`
+   * and `cyanotype.session`. Adapters can add their own keys.
    */
   readonly labels: Record<string, string>;
   /**
    * Multi-instance identity, when this Binding is one of several instances
    * of the same component (e.g. `redis.primary` vs `redis.replica`). The
    * orchestrator surfaces this as a first-class typed field so factories
-   * read `spec.instance` directly instead of `spec.labels["speculum.instance"]`.
+   * read `spec.instance` directly instead of `spec.labels["cyanotype.instance"]`.
    * Adapters still mirror it into labels for teardown discovery.
    */
   readonly instance?: string;

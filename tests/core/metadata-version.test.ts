@@ -4,7 +4,7 @@
  * Verifies that the per-Binding `version` round-trips into the running
  * metadata file, that a matching version re-attaches to the live env, that
  * a differing version invalidates the metadata and rebuilds from scratch,
- * and that metadata written without a `version` (older Speculum) SKIPS the
+ * and that metadata written without a `version` (older Cyanotype) SKIPS the
  * check rather than false-invalidating.
  *
  * Uses the in-memory adapter — no Docker required.
@@ -179,7 +179,7 @@ describe("metadata version invalidation (Feature 4)", () => {
     const r1 = await s1.ensure("petstore");
     const cid1 = r1.snapshot().components[0]?.containerId;
 
-    // Simulate metadata written by an older Speculum: strip `version` from
+    // Simulate metadata written by an older Cyanotype: strip `version` from
     // the snapshot. s1 stays alive so the container is still present.
     const raw = fs.readFileSync(path.join(stateDir, "petstore.json"), "utf8");
     const meta = JSON.parse(raw) as {

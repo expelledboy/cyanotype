@@ -14,8 +14,8 @@ import { createK8sAdapter } from "../../src/adapters/kubernetes";
 import { createKubectl } from "../../src/adapters/kubectl";
 import type { Adapter, StartSpec } from "../../src/adapter";
 
-const CONTEXT = process.env["SPECULUM_K8S_CONTEXT"] ?? "orbstack";
-const NAMESPACE = "speculum-attach-tests";
+const CONTEXT = process.env["CYANOTYPE_K8S_CONTEXT"] ?? "orbstack";
+const NAMESPACE = "cyanotype-attach-tests";
 const SERVICE = "attach-nginx";
 const FIXTURE = path.join(import.meta.dir, "..", "support", "k8s", "attach-fixture.yaml");
 const OVERRIDE_FIXTURE = path.join(import.meta.dir, "..", "support", "k8s", "attach-override-fixture.yaml");
@@ -66,7 +66,7 @@ const mkSpec = (sid: string): StartSpec => ({
   env: {},
   ports: { "80": "auto" },
   mounts: {},
-  labels: { speculum: "1", "speculum.session": sid, "speculum.component": SERVICE },
+  labels: { cyanotype: "1", "cyanotype.session": sid, "cyanotype.component": SERVICE },
 });
 
 describe("kubernetes/adapter/attach denylist", () => {
@@ -199,9 +199,9 @@ describe("kubernetes/adapter/attach integration", () => {
         ports: { "80": "auto" },
         mounts: {},
         labels: {
-          speculum: "1",
-          "speculum.session": sid,
-          "speculum.component": "does-not-match-any-service",
+          cyanotype: "1",
+          "cyanotype.session": sid,
+          "cyanotype.component": "does-not-match-any-service",
         },
         adapterConfig: { k8s: { attach: { service: "my-real-prod-nginx" } } },
       };

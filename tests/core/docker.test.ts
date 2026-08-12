@@ -74,7 +74,7 @@ const startAlpineLogger = async (session: string, cmd: string[]): Promise<string
   const cont = await client.createContainer({
     Image: ALPINE,
     Cmd: cmd,
-    Labels: { speculum: "1", "speculum.session": session },
+    Labels: { cyanotype: "1", "cyanotype.session": session },
   });
   await cont.start();
   rawContainers.push(cont.id);
@@ -100,7 +100,7 @@ const mkSpec = (overrides: Partial<StartSpec> = {}): StartSpec => ({
   env: {},
   ports: { "6379": "auto" },
   mounts: {},
-  labels: { speculum: "1", "speculum.session": "test" },
+  labels: { cyanotype: "1", "cyanotype.session": "test" },
   ...overrides,
 });
 
@@ -173,7 +173,7 @@ describe("docker/adapter", () => {
     await adapter.connect();
     const r = await adapter.start(
       mkSpec({
-        mounts: { "/etc/speculum/test.txt": "hello-speculum" },
+        mounts: { "/etc/cyanotype/test.txt": "hello-cyanotype" },
         ports: { "6379": 36380 },
       })
     );
@@ -181,10 +181,10 @@ describe("docker/adapter", () => {
     const Docker = dockerCtor();
     const client = new Docker(dockerOpts());
     const ins = await client.getContainer(r.containerId).inspect();
-    const bind = (ins.HostConfig.Binds ?? []).find((b) => b.endsWith(":/etc/speculum/test.txt:ro"));
+    const bind = (ins.HostConfig.Binds ?? []).find((b) => b.endsWith(":/etc/cyanotype/test.txt:ro"));
     expect(bind).toBeDefined();
     const hostPath = bind!.split(":")[0]!;
-    expect(fs.readFileSync(hostPath, "utf8")).toBe("hello-speculum");
+    expect(fs.readFileSync(hostPath, "utf8")).toBe("hello-cyanotype");
   }, 60_000);
 
   test("logs yields live lines and aborts cleanly", async () => {
@@ -208,7 +208,7 @@ describe("docker/adapter", () => {
 
   test("logs does not replay container history", async () => {
     if (!HAS_DOCKER) return;
-    const HIST = "SPECULUM_HISTORIC_MARKER";
+    const HIST = "CYANOTYPE_HISTORIC_MARKER";
     // Historic line first; then a quiet sleep so non-follow dump settles with HIST only.
     // After follow opens, emit LIVE lines so we prove the stream is still open.
     const id = await startAlpineLogger("s-logs-hist", [
@@ -255,7 +255,7 @@ describe("docker/adapter", () => {
     const a1 = createDockerAdapter({ sessionId: sid });
     await a1.connect();
     const r = await a1.start(
-      mkSpec({ labels: { speculum: "1", "speculum.session": sid } })
+      mkSpec({ labels: { cyanotype: "1", "cyanotype.session": sid } })
     );
     // Intentionally do NOT call a1.stop — orphan it.
     await a1.disconnect();

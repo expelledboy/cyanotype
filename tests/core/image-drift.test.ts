@@ -86,7 +86,7 @@ const mkSpec = (overrides: Partial<StartSpec> = {}): StartSpec => ({
   env: {},
   ports: { "8080": "auto" },
   mounts: {},
-  labels: { speculum: "1", "speculum.session": "s1", "speculum.component": "api" },
+  labels: { cyanotype: "1", "cyanotype.session": "s1", "cyanotype.component": "api" },
   ...overrides,
 });
 

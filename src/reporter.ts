@@ -6,7 +6,7 @@
  * the out-of-the-box answer to "provisioning is slow and silent": pass it as
  * `observer` on `OrchestratorOptions` / `SharedOptions`.
  *
- * Line shape: `speculum  <glyph>  <component>  <message>`. The `speculum`
+ * Line shape: `cyanotype  <glyph>  <component>  <message>`. The `cyanotype`
  * prefix distinguishes harness lines from test-runner output in a CI log;
  * the glyph is a single-width state mark (`✓` done, `✗` failed, `·` info).
  *
@@ -25,7 +25,7 @@ export type ConsoleReporterOptions = {
   readonly progress?: boolean;
 };
 
-const PREFIX = "speculum";
+const PREFIX = "cyanotype";
 const DONE = "✓";
 const FAIL = "✗";
 const INFO = "·";
