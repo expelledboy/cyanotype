@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `createCompositeAdapter({ default, routes })` lets one Environment span more
+  than one substrate — the component under test running for real while its
+  dependencies are simulated. Routes key on component name or
+  `component.instance`, so a real "stable" instance and a simulated "canary"
+  instance of the *same* component can coexist. Realization is fixed at harness
+  construction and cannot be changed from a test. See D-038.
+- `just check-no-leaks` is a gate: silent and exit 0 when clean, and on failure
+  it names the surviving containers and exits non-zero.
+
+### Fixed
+- Container cleanup is scoped to the substrate that created it. Both adapters
+  stamped `cyanotype=1` and `cyanotype.session`, and the Kubernetes adapter puts
+  them on Pod metadata — so where one container runtime is shared between Docker
+  and Kubernetes (OrbStack, Docker Desktop), the leak check counted Pod
+  sandboxes as leaked Docker containers, and `just clean-containers` could
+  `docker rm -f` live Pods. Each adapter now stamps `cyanotype.substrate`, and
+  the Docker teardown scan, `clean-containers` and the leak check all filter on
+  it. Containers created before this labelling need clearing once by hand with
+  `docker rm -f $(docker ps -aq --filter label=cyanotype=1)`.
+
 ## [0.6.0] - 2026-08-30
 
 Contract restoration. Four surfaces that type-checked, looked declared, and

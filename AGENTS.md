@@ -34,6 +34,7 @@ just clean-containers          # manual reset; not needed on the normal path
 | Derive library + `loadDerivedCompose` (`deriveCompose`, `deriveK8s`, `loadDerivedCompose`) (D-030, D-032) | `src/cli/derive.ts` |
 | Docker adapter (deploy + Compose attach modes; `onImageDrift`) (D-028) | `src/adapters/docker.ts` |
 | In-process simulator adapter | `src/adapters/memory.ts` |
+| Multi-substrate adapter (`createCompositeAdapter`) (D-038) | `src/adapters/composite.ts` |
 | K8s adapter (deploy + attach modes, reconnection layer) | `src/adapters/kubernetes.ts` |
 | kubectl subprocess wrapper (D-019) | `src/adapters/kubectl.ts` |
 | Public surface | `src/index.ts` (`.d.ts` is tsc-emitted at build) |

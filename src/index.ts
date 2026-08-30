@@ -22,6 +22,7 @@ export { runProbe } from "./probe.js";
 export { createHelpers } from "./helpers.js";
 export { startEnvironment, attachEnvironment } from "./orchestrator.js";
 export { createInMemoryAdapter } from "./adapters/memory.js";
+export { createCompositeAdapter } from "./adapters/composite.js";
 export { createDockerAdapter, ComposeAdapterConfigSchema } from "./adapters/docker.js";
 export { createK8sAdapter, K8sAdapterConfigSchema } from "./adapters/kubernetes.js";
 export { createConsoleReporter } from "./reporter.js";
@@ -54,6 +55,7 @@ export type {
 } from "./binding.js";
 export type { Environment, Slot, IsMultiInstance } from "./environment.js";
 export type { Adapter, AdapterConfig, StartSpec, Started } from "./adapter.js";
+export type { CompositeAdapterOptions } from "./adapters/composite.js";
 export type { EnvironmentMetadata, SlotSnapshot, ComponentSnapshot } from "./metadata.js";
 export type { Runtime, Running, ComponentRuntime, ChaosControls, RuntimeSnapshot } from "./runtime.js";
 export type { SharedMode, SharedOptions, SharedHarness } from "./shared.js";
