@@ -5,7 +5,6 @@
         "namespace": "cyanotype-petstore-attach",
         "service": "cache-leader",
         "port": 6379,
-        "allowChaos": true,
         "deployment": "cache-leader"
       }
     }
@@ -16,7 +15,6 @@
         "namespace": "cyanotype-petstore-attach",
         "service": "cache-follower",
         "port": 6379,
-        "allowChaos": true,
         "deployment": "cache-follower"
       }
     }
@@ -27,7 +25,6 @@
         "namespace": "cyanotype-petstore-attach",
         "service": "pet-svc-1",
         "port": 8080,
-        "allowChaos": true,
         "deployment": "pet-svc-1"
       }
     }
@@ -38,7 +35,6 @@
         "namespace": "cyanotype-petstore-attach",
         "service": "pet-svc-2",
         "port": 8080,
-        "allowChaos": true,
         "deployment": "pet-svc-2"
       }
     }
@@ -49,7 +45,6 @@
         "namespace": "cyanotype-petstore-attach",
         "service": "pet-svc-3",
         "port": 8080,
-        "allowChaos": true,
         "deployment": "pet-svc-3"
       }
     }
@@ -60,7 +55,6 @@
         "namespace": "cyanotype-petstore-attach",
         "service": "front-door",
         "port": 8080,
-        "allowChaos": true,
         "deployment": "front-door"
       }
     }
