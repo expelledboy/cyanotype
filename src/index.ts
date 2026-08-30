@@ -17,7 +17,7 @@ export { defineBlueprint } from "./blueprint.js";
 export { bind } from "./binding.js";
 export { createEnvironment, RESERVED_COMPONENT_NAMES } from "./environment.js";
 export { createSharedEnvs } from "./shared.js";
-export { createEventBus } from "./events.js";
+export { createEventBus, FROM_START } from "./events.js";
 export { runProbe } from "./probe.js";
 export { createHelpers } from "./helpers.js";
 export { startEnvironment, attachEnvironment } from "./orchestrator.js";
@@ -39,14 +39,14 @@ export type {
 // `./index.d.ts`; this list mirrors it.
 export type {
   Protocol, HttpProtocol, OpaqueProtocol,
-  HttpMethod, HttpRoute, HttpRouteMap, HttpClient, ApiOf,
+  HttpMethod, HttpRoute, HttpRouteMap, HttpClient, ApiOf, HttpErrorShape,
 } from "./protocol.js";
 export type { Interface, InterfaceRecord, ApiFromInterface } from "./interface.js";
 export type { HelperContext, HttpHelpers, HttpRequestInit, HttpResponse } from "./helpers.js";
 export type { Probe, HttpProbe, CustomProbe } from "./probe.js";
 export type {
   EventSchema, EventCatalog, AttributesOf,
-  Event, EventBus, EventFilter, LogParser, ParsedEvent,
+  Event, EventBus, EventFilter, EventCheckpoint, EventWindow, LogParser, ParsedEvent,
 } from "./events.js";
 export type { Blueprint } from "./blueprint.js";
 export type {

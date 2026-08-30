@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-30
+
+Contract restoration. Four surfaces that type-checked, looked declared, and
+could not work. No new capability; each item makes an existing promise true or
+makes it fail to compile.
+
+### Changed (BREAKING)
+- `attachEnvironment` now runs the Blueprint's `readiness` probe before
+  returning a runtime, matching `startEnvironment`. `adapter.exists()` proves a
+  container is present, not that it serves, and attach is the default path —
+  any already-running Compose or Kubernetes stack, and every parallel test
+  worker after the first one to start the environment.
+  A failing probe throws `{ kind: "attach_probe_failed", componentName,
+  instanceId, cause }`. A suite that previously raced ahead of a slow component
+  may now report a real environment failure. See D-036.
+- `EventBus.waitFor` and `expectSequence` match only events ingested after the
+  call; they no longer scan the whole retained buffer. A shared environment
+  outlives a single test, so the old default let an earlier test's event
+  satisfy a later assertion. Pass `{ after: FROM_START }` (or the new
+  `bus.mark()` checkpoint) to widen the window. `collect()`'s default is
+  unchanged — it still returns the whole buffer. See D-037.
+- `HttpRoute` is now discriminated on both `method` and `responseMode`, so a
+  schema only compiles where the client can actually reach it. `request` on a
+  GET or DELETE, and `response` or `errorResponse` on a route whose
+  `responseMode` never parses a body, were all previously accepted and then
+  silently ignored at runtime. Specifically: `status` mode reaches neither
+  response schema, `raw` mode reaches `errorResponse` but not `response`, and
+  `json` mode (the default) reaches both.
+
+### Added
+- `bus.mark(): EventCheckpoint` and `waitFor(name, { after })` /
+  `expectSequence(names, timeoutMs, { after })` for explicit subscription offsets,
+  plus the exported `FROM_START` checkpoint. The underlying sequence counter is
+  monotonic and survives `clear()`, so a checkpoint taken before a chaos
+  restart stays in the past instead of addressing an unrelated event.
+- `wait_for_timeout` carries `after` and `beforeCheckpoint`, separating "never
+  emitted" from "emitted before you waited".
+- `EventWindow` (`{ after }`) is the search bound for `expectSequence` and
+  `collect`, which have no filter object to carry it. `after` therefore means
+  the same thing and is spelled the same way on all three calls.
+- `SharedOptions.attachReadinessTimeoutMs` caps the TOTAL time spent probing
+  readiness on attach. Attach probes components one at a time, so the worst
+  case is otherwise the sum of every Blueprint's own probe timeout. Opt-in:
+  omitted, each Blueprint's `timeoutMs` is honoured in full.
+- `HttpErrorShape` is exported, giving the thrown `http_error` a name.
+- `HttpRoute.errorResponse` — an optional schema for non-2xx bodies. Success
+  bodies were Zod-checked while error bodies crossed the boundary unvalidated.
+  A body that violates the schema keeps its raw value and reports
+  `errorSchemaIssues` rather than being reshaped.
+
+### Fixed
+- Events ingested by the orchestrator now carry `instance` on the event object
+  itself, alongside `component` and `occurredAt`.
+  `EventFilter.instance` was a public filter that could never match in a real
+  environment: both `ingest` call sites had the instance in scope and dropped
+  it, so the field only worked in unit tests that called the bus directly.
+  Multi-instance suites that worked around this by logging the instance into
+  event *attributes* can now filter on the event's own `instance` field
+  instead: `waitFor("NAME", { instance: "primary" })`.
+- A failed attach now shuts down the log-follow streams of every component
+  attached so far. Previously attach could only fail before those streams
+  started, so nothing needed closing; adding the readiness probe above
+  introduced a failure point after they open.
+
 ## [0.5.0] - 2026-08-12
 
 ### Changed (BREAKING)

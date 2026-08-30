@@ -1,6 +1,6 @@
 {
   "name": "@expelledboy/cyanotype",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Bun-native blackbox test harness built around the Component Blueprint",
   "license": "MIT",
   "author": "Anthony Jackson <102334+expelledboy@users.noreply.github.com>",

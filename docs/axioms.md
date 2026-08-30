@@ -6,7 +6,14 @@
 
 Cyanotype's central abstraction is the **Component Blueprint** — a typed contract describing what a component exposes (API schemas) and what it observably emits (a log-event catalog). Anything that satisfies the contract — the real production image, a hand-written in-process simulator, a prior version, a vendor-compatible alternative — is a valid **Binding** for that Blueprint.
 
-A test file consumes the Blueprint surface (`runtime.X.api.method(...)`, `runtime.X.events.waitFor("...")`). It never names a Docker image, a port, a config file, or a substrate. The Adapter is the seam where substrate (Docker / Kubernetes / in-memory) is decided, and it is also where real-vs-simulator is decided: the Adapter interprets the Binding's `image: string` against the substrate it owns. One harness-level line flips a whole suite between real containers and in-process simulators — test code unchanged.
+A **substrate** is the thing that actually runs a component: a Docker daemon, a Kubernetes cluster, or the test process itself running an in-process simulator. It is the "where does this really execute" half of the system, as opposed to the contract half.
+
+A test file consumes the Blueprint surface (`runtime.X.api.method(...)`, `runtime.X.events.waitFor("...")`). It never names a Docker image, a port, a config file, or a substrate. The Adapter is the seam where the substrate is decided, and it is also where real-vs-simulator is decided: the Adapter interprets the Binding's `image: string` against the substrate it owns. One harness-level line flips a whole suite between real containers and in-process simulators — test code unchanged.
+
+An Adapter works in one of two **modes**, and the distinction runs through the whole system:
+
+- **Deploy mode** — Cyanotype creates the containers or workloads itself and owns their lifecycle, including removing them at teardown.
+- **Attach mode** — the containers or workloads already exist, put there by an operator or a `docker compose up` / `kubectl apply` outside the test run. Cyanotype discovers and observes them, and never creates or removes them. Teardown detaches rather than deletes.
 
 The two halves of that promise:
 
@@ -41,7 +48,7 @@ Without this, log-event assertions are regex-greps that drift the moment anyone 
 
 #### B1. Substrate portability via the Adapter SPI
 
-A single test file runs identically against Docker locally, an in-memory adapter for fast inner-loop, and a Kubernetes adapter for CI (deploy or attach mode). The Adapter SPI is seven methods (`connect` / `disconnect` / `teardown` / `start` / `stop` / `logs` / `exists`), and it is the *only* place real-vs-fake or Docker-vs-K8s is decided. Bindings declare `image: string`; adapters interpret what that means.
+A single test file runs identically against Docker locally, an in-memory adapter for fast inner-loop, and a Kubernetes adapter for CI (in either deploy or attach mode, as defined above). The Adapter SPI — Service Provider Interface, the fixed set of methods any substrate must implement to be usable — is seven methods (`connect` / `disconnect` / `teardown` / `start` / `stop` / `logs` / `exists`), and it is the *only* place real-vs-fake or Docker-vs-K8s is decided. Bindings declare `image: string`; adapters interpret what that means.
 
 Without this, every team rewrites integration tests for staging or pays for two suites that drift.
 

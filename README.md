@@ -78,6 +78,12 @@ test("health responds", async () => {
 });
 ```
 
+Reading `rt.health.api.http.ping()` left to right: `health` is the component name
+from `createEnvironment({ health })`; `api` is the typed client Cyanotype derives
+for you; `http` is the interface key returned by the Blueprint's `interface`
+factory; and `ping` is the route key from `routes`. Rename any of those four and
+the test stops compiling — that is the point.
+
 The Docker adapter (default above) needs an image to run. This Dockerfile produces one:
 
 ```dockerfile
@@ -161,12 +167,14 @@ test("primary down → 503 → recovery", async () => {
 
   await runtime.chaos.stop("redis", "primary");          // typed; "tertiary" is a compile error
 
+  const checkpoint = runtime.petstore.one.events.mark(); // waits start here, not at boot
+
   await expect(runtime.petstore.one.api.http.createPet({ name: "X" }))
     .rejects.toMatchObject({ status: 503 });
 
   const evt = await runtime.petstore.one.events.waitFor(
     "PETSTORE_REQUEST",
-    { attributes: { status: 503 } },
+    { attributes: { status: 503 }, after: checkpoint },
     5_000,
   );
   expect(evt.attributes.method).toBe("POST");

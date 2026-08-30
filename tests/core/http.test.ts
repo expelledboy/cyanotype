@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { z } from "zod";
-import { createHttpClient } from "../../src/protocol";
+import { createHttpClient, type HttpRoute } from "../../src/protocol";
 
 let server: { stop: () => void; port: number };
 let baseUrl: string;
@@ -34,6 +34,18 @@ beforeAll(() => {
       }
       if (url.pathname === "/api/status") {
         return new Response("teapot", { status: 418 });
+      }
+      if (url.pathname === "/api/fail") {
+        return new Response(JSON.stringify({ code: "bad_input", message: "nope" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.pathname === "/api/fail-offspec") {
+        return new Response(JSON.stringify({ unexpected: true }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
       }
       return new Response("not found", { status: 404 });
     },
@@ -160,5 +172,91 @@ describe("http/createHttpClient", () => {
     await client.list();
     const last = requests[requests.length - 1]!;
     expect(last.path).toBe("/api/pets");
+  });
+});
+
+describe("http/declaration holes", () => {
+  const ErrorBody = z.object({ code: z.string(), message: z.string() });
+
+  test("declared errorResponse validates the error body", async () => {
+    const client = createHttpClient(
+      { boom: { method: "GET", path: "/fail", errorResponse: ErrorBody } },
+      { baseUrl, basePath: "/api" },
+    );
+    let caught: unknown;
+    try { await client.boom(); } catch (e) { caught = e; }
+    const err = caught as { kind: string; status: number; body: { code: string } };
+    expect(err.kind).toBe("http_error");
+    expect(err.status).toBe(400);
+    expect(err.body.code).toBe("bad_input");
+  });
+
+  test("an error body that violates its schema keeps the raw value and reports issues", async () => {
+    const client = createHttpClient(
+      { boom: { method: "GET", path: "/fail-offspec", errorResponse: ErrorBody } },
+      { baseUrl, basePath: "/api" },
+    );
+    let caught: unknown;
+    try { await client.boom(); } catch (e) { caught = e; }
+    const err = caught as { body: unknown; errorSchemaIssues?: unknown[] };
+    expect(err.body).toEqual({ unexpected: true });
+    expect(Array.isArray(err.errorSchemaIssues)).toBe(true);
+    expect(err.errorSchemaIssues!.length).toBeGreaterThan(0);
+  });
+
+  test("without errorResponse the raw body is carried unchanged", async () => {
+    const client = createHttpClient(
+      { boom: { method: "GET", path: "/fail" } },
+      { baseUrl, basePath: "/api" },
+    );
+    let caught: unknown;
+    try { await client.boom(); } catch (e) { caught = e; }
+    const err = caught as { body: unknown; errorSchemaIssues?: unknown };
+    expect(err.body).toEqual({ code: "bad_input", message: "nope" });
+    expect(err.errorSchemaIssues).toBeUndefined();
+  });
+
+  test("a request schema on a bodyless method does not compile", () => {
+    const _typeguard = () => {
+      createHttpClient(
+        {
+          // @ts-expect-error — DELETE has no request body; the client could never send this
+          drop: { method: "DELETE", path: "/pets/1", request: z.object({ id: z.number() }) },
+        },
+        { baseUrl },
+      );
+      // @ts-expect-error — same for GET
+      void ({ method: "GET", path: "/pets", request: z.object({ q: z.string() }) } satisfies HttpRoute);
+    };
+    expect(typeof _typeguard).toBe("function");
+  });
+
+  test("a response schema unreachable under its responseMode does not compile", () => {
+    const _typeguard = () => {
+      // status mode returns the code and never reads a body, so neither schema
+      // can be honoured.
+      // @ts-expect-error — `response` is unreachable in status mode
+      void ({ method: "GET", path: "/x", responseMode: "status", response: ErrorBody } satisfies HttpRoute);
+      // @ts-expect-error — `errorResponse` is unreachable in status mode
+      void ({ method: "GET", path: "/x", responseMode: "status", errorResponse: ErrorBody } satisfies HttpRoute);
+      // raw mode hands back the Response unparsed on success...
+      // @ts-expect-error — `response` is unreachable in raw mode
+      void ({ method: "GET", path: "/x", responseMode: "raw", response: ErrorBody } satisfies HttpRoute);
+      // ...but a non-2xx still throws, so errorResponse IS reachable here.
+      void ({ method: "GET", path: "/x", responseMode: "raw", errorResponse: ErrorBody } satisfies HttpRoute);
+    };
+    expect(typeof _typeguard).toBe("function");
+  });
+
+  test("errorResponse is honoured in raw mode", async () => {
+    const client = createHttpClient(
+      { boom: { method: "GET", path: "/fail", responseMode: "raw", errorResponse: ErrorBody } },
+      { baseUrl, basePath: "/api" },
+    );
+    let caught: unknown;
+    try { await client.boom(); } catch (e) { caught = e; }
+    const err = caught as { kind: string; body: { code: string } };
+    expect(err.kind).toBe("http_error");
+    expect(err.body.code).toBe("bad_input");
   });
 });

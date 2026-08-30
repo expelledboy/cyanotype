@@ -43,26 +43,70 @@ export type Event<
   readonly instance?: string;
 };
 
+/**
+ * A position in a component's event stream, from `bus.mark()`.
+ *
+ * Opaque on purpose: the only valid ways to obtain one are `mark()` and the
+ * `FROM_START` constant. The sequence it wraps is monotonic for the life of
+ * the bus and is NOT reset by `clear()`, so a checkpoint taken before a chaos
+ * restart stays in the past afterwards rather than silently addressing a
+ * different event.
+ */
+export type EventCheckpoint = { readonly seq: number };
+
+/**
+ * The beginning of the stream — the explicit opt-in to scanning everything
+ * buffered so far. `waitFor` defaults to "from now", so reaching back over
+ * history is something a test states rather than something it inherits.
+ */
+export const FROM_START: EventCheckpoint = Object.freeze({ seq: 0 });
+
 /** Test-facing event bus. Typed against the Blueprint's catalog. */
 export type EventBus<Cat extends EventCatalog> = {
+  /** Current stream position, for `waitFor(..., { after })`. */
+  readonly mark: () => EventCheckpoint;
+
+  /**
+   * Wait for a matching event.
+   *
+   * Waits from the CURRENT stream position by default: an event that arrived
+   * before this call does not satisfy it. Pass `filter.after` (a `mark()`, or
+   * `FROM_START`) to widen the window. The default exists because a shared
+   * environment outlives a single test, and an implicit history scan lets an
+   * earlier call's event satisfy a later assertion.
+   */
   readonly waitFor: <K extends keyof Cat & string>(
     name: K,
     filter?: EventFilter<Cat, K>,
     timeoutMs?: number,
   ) => Promise<Event<Cat, K>>;
 
+  /** Everything buffered, oldest first. Unlike `waitFor`, defaults to the whole buffer. */
   readonly collect: <K extends keyof Cat & string>(
     name?: K,
+    window?: EventWindow,
   ) => readonly Event<Cat, K>[];
 
   /**
    * Wait for an ordered subsequence of events. Returns the matched events
-   * in order. Used for cause→effect assertions.
+   * in order. Used for cause→effect assertions. Same "from now" default as
+   * `waitFor`; widen with `{ after }`, spelled the same way as on `waitFor`.
    */
   readonly expectSequence: (
     names: readonly (keyof Cat & string)[],
     timeoutMs?: number,
+    window?: EventWindow,
   ) => Promise<readonly Event<Cat>[]>;
+};
+
+/**
+ * Where in the stream to start looking. Not a predicate over events — it
+ * bounds the search, it does not decide what matches. `waitFor` accepts it
+ * inline on its filter; `expectSequence`, which has no filter, takes it as
+ * its own argument.
+ */
+export type EventWindow = {
+  readonly after?: EventCheckpoint;
 };
 
 export type EventFilter<
@@ -71,6 +115,12 @@ export type EventFilter<
 > = {
   readonly attributes?: Partial<AttributesOf<Cat[K]>>;
   readonly instance?: string;
+  /**
+   * Search window, not a match predicate — see `EventWindow`. Defaults to the
+   * stream position at the `waitFor` call, so an event that arrived earlier
+   * does not satisfy the wait.
+   */
+  readonly after?: EventCheckpoint;
 };
 
 /**
@@ -133,7 +183,14 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export const createEventBus = <Cat extends EventCatalog>(
   catalog: Cat,
 ): EventBusInternals<Cat> => {
-  const events: Event<Cat>[] = [];
+  type Slot = { readonly seq: number; readonly evt: Event<Cat> };
+  const events: Slot[] = [];
+  // Monotonic for the life of the bus. Deliberately NOT reset by `clear()`:
+  // an index into the array would make a checkpoint taken before a chaos
+  // restart address an unrelated event afterwards.
+  let lastSeq = 0;
+
+  const mark = (): EventCheckpoint => ({ seq: lastSeq });
 
   const ingest = (
     parsed: ParsedEvent,
@@ -159,7 +216,8 @@ export const createEventBus = <Cat extends EventCatalog>(
       component: meta.component,
       ...(meta.instance !== undefined ? { instance: meta.instance } : {}),
     } as Event<Cat>;
-    events.push(evt);
+    lastSeq += 1;
+    events.push({ seq: lastSeq, evt });
   };
 
   const clear = (): void => {
@@ -168,8 +226,12 @@ export const createEventBus = <Cat extends EventCatalog>(
 
   const collect = <K extends keyof Cat & string>(
     name?: K,
+    window?: EventWindow,
   ): readonly Event<Cat, K>[] => {
-    return events.filter((e) => !name || e.name === name) as unknown as readonly Event<Cat, K>[];
+    const from = window?.after?.seq ?? 0;
+    return events
+      .filter((e) => e.seq > from && (!name || e.evt.name === name))
+      .map((e) => e.evt) as unknown as readonly Event<Cat, K>[];
   };
 
   const waitFor = async <K extends keyof Cat & string>(
@@ -178,17 +240,23 @@ export const createEventBus = <Cat extends EventCatalog>(
     timeoutMs = 10_000,
   ): Promise<Event<Cat, K>> => {
     const start = Date.now();
+    const from = filter?.after?.seq ?? lastSeq;
     while (true) {
-      const found = events.find((e) => eventMatches(e, name, filter));
-      if (found) return found as Event<Cat, K>;
+      const found = events.find((e) => e.seq > from && eventMatches(e.evt, name, filter));
+      if (found) return found.evt as Event<Cat, K>;
       const elapsedMs = Date.now() - start;
       if (elapsedMs >= timeoutMs) {
+        const sameName = events.filter((e) => e.evt.name === name);
         throw {
           kind: "wait_for_timeout",
           eventName: name,
           filter,
           elapsedMs,
-          candidates: events.filter((e) => e.name === name).slice(-3),
+          after: from,
+          candidates: sameName.filter((e) => e.seq > from).slice(-3).map((e) => e.evt),
+          // Distinguishes "never emitted" from "emitted before you waited" —
+          // the failure mode the from-now default introduces.
+          beforeCheckpoint: sameName.filter((e) => e.seq <= from).length,
         };
       }
       await sleep(100);
@@ -198,15 +266,17 @@ export const createEventBus = <Cat extends EventCatalog>(
   const expectSequence = async (
     names: readonly (keyof Cat & string)[],
     timeoutMs = 10_000,
+    window?: EventWindow,
   ): Promise<readonly Event<Cat>[]> => {
     const start = Date.now();
+    const from = window?.after?.seq ?? lastSeq;
     while (true) {
-      const relevant = events.filter((e) => names.includes(e.name));
+      const relevant = events.filter((e) => e.seq > from && names.includes(e.evt.name));
       let idx = 0;
       const matched: Event<Cat>[] = [];
       for (const e of relevant) {
-        if (e.name === names[idx]) {
-          matched.push(e);
+        if (e.evt.name === names[idx]) {
+          matched.push(e.evt);
           idx += 1;
           if (idx === names.length) return matched;
         }
@@ -217,7 +287,8 @@ export const createEventBus = <Cat extends EventCatalog>(
           kind: "sequence_timeout",
           names,
           elapsedMs,
-          seen: relevant.map((e) => e.name),
+          after: from,
+          seen: relevant.map((e) => e.evt.name),
         };
       }
       await sleep(100);
@@ -225,7 +296,7 @@ export const createEventBus = <Cat extends EventCatalog>(
   };
 
   return {
-    bus: { waitFor, collect, expectSequence },
+    bus: { mark, waitFor, collect, expectSequence },
     ingest,
     clear,
   };

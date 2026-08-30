@@ -105,10 +105,13 @@ describe("orchestrator/startEnvironment", () => {
     runtime = await startEnvironment(buildEnv(), {
       adapter: buildAdapter(), sessionId: "s1", envKey: "test",
     });
+    // Checkpoint first, act, then wait: the log line can land before the wait
+    // is registered, and `waitFor` no longer scans back over history.
+    const checkpoint = runtime.petstore.events.mark();
     await runtime.petstore.api.http.createPet({ name: "Spot" });
     const evt = await runtime.petstore.events.waitFor(
       "PETSTORE_REQUEST",
-      { attributes: { method: "POST" } },
+      { attributes: { method: "POST" }, after: checkpoint },
       2000,
     );
     expect(evt.attributes.method).toBe("POST");

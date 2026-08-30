@@ -35,13 +35,52 @@ export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
  *   - "status": return only the status code (number)
  *   - "raw": return the Response object untouched
  */
-export type HttpRoute = {
-  readonly method: HttpMethod;
+/**
+ * A route is the intersection of three independent axes. Each axis is a union,
+ * so a schema can only be declared where the client actually reads or sends the
+ * thing it describes. The rule being enforced: a declared schema that no code
+ * path can reach is a contract with no executor, and should not compile.
+ */
+export type HttpRoute = RoutePath & RouteRequest & RouteResponse;
+
+type RoutePath = {
+  /** Static string, or a function whose arity becomes the client method's path args. */
   readonly path: string | ((...args: never[]) => string);
-  readonly request?: z.ZodTypeAny;
-  readonly response?: z.ZodTypeAny;
-  readonly responseMode?: "json" | "status" | "raw";
 };
+
+/** Only body-bearing methods can declare a request schema. */
+type RouteRequest =
+  | { readonly method: "POST" | "PUT" | "PATCH"; readonly request?: z.ZodTypeAny }
+  | { readonly method: "GET" | "DELETE"; readonly request?: never };
+
+/**
+ * `responseMode` decides which response schemas are reachable:
+ *   - "json" (default): the body is parsed, so both schemas apply.
+ *   - "raw": the Response is handed back unparsed on success, so `response`
+ *     is unreachable — but a non-2xx still throws, so `errorResponse` applies.
+ *   - "status": only the status code is returned and nothing is ever parsed,
+ *     so neither applies.
+ *
+ * `errorResponse` validates the body of a non-2xx response. A body that does
+ * not conform keeps its raw value and reports `errorSchemaIssues` rather than
+ * being silently reshaped.
+ */
+type RouteResponse =
+  | {
+      readonly responseMode?: "json";
+      readonly response?: z.ZodTypeAny;
+      readonly errorResponse?: z.ZodTypeAny;
+    }
+  | {
+      readonly responseMode: "raw";
+      readonly response?: never;
+      readonly errorResponse?: z.ZodTypeAny;
+    }
+  | {
+      readonly responseMode: "status";
+      readonly response?: never;
+      readonly errorResponse?: never;
+    };
 
 export type HttpRouteMap = Record<string, HttpRoute>;
 
@@ -144,6 +183,34 @@ const parseBodyOrText = async (res: Response): Promise<unknown> => {
   }
 };
 
+/**
+ * Build the thrown `http_error`. Success bodies are Zod-checked; without this
+ * the error body was the one part of the contract that crossed the boundary
+ * unvalidated. A body that fails its declared schema keeps the raw value and
+ * reports the issues — the error is never reshaped into a lie.
+ */
+export type HttpErrorShape = {
+  readonly kind: "http_error";
+  readonly status: number;
+  readonly body: unknown;
+  readonly route: string;
+  /** Present only when `errorResponse` was declared and the body failed it. */
+  readonly errorSchemaIssues?: z.ZodIssue[];
+};
+
+const httpError = (
+  route: HttpRoute,
+  name: string,
+  status: number,
+  raw: unknown,
+): HttpErrorShape => {
+  if (!route.errorResponse) return { kind: "http_error", status, body: raw, route: name };
+  const parsed = route.errorResponse.safeParse(raw);
+  return parsed.success
+    ? { kind: "http_error", status, body: parsed.data, route: name }
+    : { kind: "http_error", status, body: raw, route: name, errorSchemaIssues: parsed.error.issues };
+};
+
 export const createHttpClient = <R extends HttpRouteMap>(
   routes: R,
   opts: HttpClientOptions,
@@ -196,14 +263,12 @@ export const createHttpClient = <R extends HttpRouteMap>(
       if (mode === "status") return res.status;
       if (mode === "raw") {
         if (!res.ok) {
-          const errBody = await parseBodyOrText(res);
-          throw { kind: "http_error", status: res.status, body: errBody, route: name };
+          throw httpError(route, name, res.status, await parseBodyOrText(res));
         }
         return res;
       }
       if (!res.ok) {
-        const errBody = await parseBodyOrText(res);
-        throw { kind: "http_error", status: res.status, body: errBody, route: name };
+        throw httpError(route, name, res.status, await parseBodyOrText(res));
       }
       const json = await res.json();
       return route.response ? route.response.parse(json) : json;
