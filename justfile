@@ -60,12 +60,33 @@ test-petstore-docker-attach: up-petstore-docker-attach derive-petstore-docker-at
     just teardown-petstore-docker-attach
     exit $status
 
+# Refuse to pass while Cyanotype-owned Docker containers survive the suite.
+[group('docker')]
+check-no-leaks:
+    #!/usr/bin/env bash
+    # [GATE] no Cyanotype-owned containers survive the suite
+    # Filters on cyanotype.substrate, NOT cyanotype=1: where the container
+    # runtime is shared with Kubernetes (OrbStack, Docker Desktop), Pods carry
+    # the same cyanotype/session labels and would be counted as Docker leaks.
+    leaked=$(docker ps -aq --filter label=cyanotype.substrate=docker)
+    [ -z "$leaked" ] && exit 0
+    echo "[GATE] check-no-leaks"
+    docker ps -a --filter label=cyanotype.substrate=docker
+    echo
+    echo "Teardown left these behind. tests/preload.ts owns suite teardown;"
+    echo "'just clean-containers' clears them by hand."
+    echo "[GATE] check-no-leaks"
+    exit 1
+
 # Force-remove orphan Cyanotype containers and stale state (manual reset).
 [group('docker')]
 clean-containers:
     # Use this when a previous run was killed mid-suite (kill -9) and leaked
     # containers — the normal path cleans up on its own via tests/preload.ts.
-    docker ps -aq --filter label=cyanotype=1 | xargs -r docker rm -f
+    # Scoped to cyanotype.substrate=docker: a bare cyanotype=1 filter also
+    # matches Kubernetes Pod sandboxes on a shared runtime, and this recipe
+    # force-removes what it finds.
+    docker ps -aq --filter label=cyanotype.substrate=docker | xargs -r docker rm -f
     rm -rf .cyanotype-env/
 
 # ─── kubernetes substrate ────────────────────────────────────────────────

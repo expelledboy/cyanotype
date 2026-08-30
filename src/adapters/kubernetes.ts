@@ -204,7 +204,10 @@ const buildPodManifest = (
   return {
     apiVersion: "v1",
     kind: "Pod",
-    metadata: { name: podName, namespace, labels: { ...spec.labels, ...extraLabels } },
+    metadata: {
+      name: podName, namespace,
+      labels: { ...spec.labels, ...extraLabels, "cyanotype.substrate": "kubernetes" },
+    },
     spec: {
       restartPolicy: "Never",
       containers: [
@@ -235,7 +238,10 @@ const buildConfigMapManifest = (
   return {
     apiVersion: "v1",
     kind: "ConfigMap",
-    metadata: { name: cmName, namespace, labels: spec.labels },
+    metadata: {
+      name: cmName, namespace,
+      labels: { ...spec.labels, "cyanotype.substrate": "kubernetes" },
+    },
     data,
   };
 };
@@ -266,7 +272,10 @@ const buildServiceManifest = (
   return {
     apiVersion: "v1",
     kind: "Service",
-    metadata: { name: serviceName, namespace, labels: spec.labels },
+    metadata: {
+      name: serviceName, namespace,
+      labels: { ...spec.labels, "cyanotype.substrate": "kubernetes" },
+    },
     spec: {
       type: "ClusterIP",
       selector: { "cyanotype.podname": podName },

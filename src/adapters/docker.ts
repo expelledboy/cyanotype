@@ -588,7 +588,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       Image: imageRef,
       Env: Object.entries(spec.env).map(([k, v]) => `${k}=${v}`),
       ExposedPorts: exposedPorts,
-      Labels: spec.labels,
+      Labels: { ...spec.labels, "cyanotype.substrate": "docker" },
       HostConfig: { Binds: binds, PortBindings: portBindings, AutoRemove: false },
     });
     emit?.({ type: "container.created", containerId: created.id });
@@ -697,7 +697,16 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     try {
       const list = await client.listContainers({
         all: true,
-        filters: { label: ["cyanotype=1", `cyanotype.session=${sessionId}`] },
+        // Substrate-scoped, not just session-scoped. Where one container
+        // runtime is shared with Kubernetes (OrbStack, Docker Desktop), Pods
+        // carry the same `cyanotype` and `cyanotype.session` labels, and a
+        // session-only filter would sweep up live Pod sandboxes.
+        filters: {
+          label: [
+            "cyanotype.substrate=docker",
+            `cyanotype.session=${sessionId}`,
+          ],
+        },
       });
       for (const entry of list) {
         const cont = client.getContainer(entry.Id);

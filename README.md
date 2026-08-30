@@ -340,7 +340,7 @@ just test-adapter-k8s-attach
 just typecheck
 ```
 
-If a `bun test` run is interrupted (Ctrl-C during the integration suite), orphan containers can keep ports allocated. `just clean-containers` force-removes everything labeled `cyanotype=1`.
+If a `bun test` run is interrupted (Ctrl-C during the integration suite), orphan containers can keep ports allocated. `just clean-containers` force-removes everything labeled `cyanotype.substrate=docker`, and `just check-no-leaks` reports whether any survived.
 
 ## Contributing
 

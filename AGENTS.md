@@ -82,7 +82,7 @@ Before declaring a change done:
 
 1. `just typecheck` — 0 errors.
 2. `just test` — all green. If a test fails because of your change, fix the root cause rather than loosen the assertion.
-3. `docker ps -aq --filter label=cyanotype=1 | wc -l` should print `0`. If containers leak, the `bun:test` preload teardown is broken — fix that before anything else.
+3. `just check-no-leaks` — silent, exit 0. If it names containers, the `bun:test` preload teardown is broken; fix that before anything else. It filters on `cyanotype.substrate=docker` rather than `cyanotype=1`, because on a runtime shared with Kubernetes (OrbStack, Docker Desktop) Pods carry the same `cyanotype` labels and would read as Docker leaks.
 
 ## What requires an ADR
 

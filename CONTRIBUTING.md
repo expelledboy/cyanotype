@@ -50,7 +50,7 @@ just clean-containers
 
 `bun test` runs all files in a single process. `bunfig.toml` registers `tests/preload.ts` as a preload script; that file's top-level `afterAll` (from `bun:test`) fires once after the entire run and calls `shared.stopAll()`. The harness stops cached runtimes, then reconnects briefly to force-clean any session-labelled stragglers, then disconnects. No orphan containers remain between runs.
 
-**Docker Compose attach mode is non-destructive and requires manual teardown.** When running `CYANOTYPE_ADAPTER=docker-attach`, Cyanotype never removes the Compose stack's containers — they must be stopped with `docker compose down` when you're done. `just clean-containers` will **not** catch Compose containers because they lack the `cyanotype=1` label that the cleanup filter targets.
+**Docker Compose attach mode is non-destructive and requires manual teardown.** When running `CYANOTYPE_ADAPTER=docker-attach`, Cyanotype never removes the Compose stack's containers — they must be stopped with `docker compose down` when you're done. `just clean-containers` will **not** catch Compose containers because they lack the `cyanotype.substrate=docker` label that the cleanup filter targets.
 
 If you wire your own integration suite for a Cyanotype-based project, you'll need the same pattern:
 
