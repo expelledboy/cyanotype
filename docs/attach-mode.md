@@ -489,7 +489,7 @@ Behaviour:
 - `chaos.stop("redis", "primary")` calls `docker stop` on the matching container and marks the binding as paused. The container is stopped but not removed.
 - `chaos.start("redis", "primary")` calls `docker start` on the same container, refreshes the port mapping, and marks the binding as resumed.
 - `chaos.restart(...)` is stop + start sequenced.
-- Any chaos call on a Binding whose `allowChaos` is unset or false throws `attach_mode_violation`.
+- Any chaos call on a Binding whose `allowChaos` is unset or false throws `chaos_unsupported_in_attach_mode`. (`attach_mode_violation` is a different error, raised one layer down when a destructive Docker or `kubectl` operation reaches the adapter chokepoint — see the error table below.)
 
 There is no `deployment` field — the container is the chaos unit directly. No RBAC is required; chaos operates against the local Docker daemon.
 

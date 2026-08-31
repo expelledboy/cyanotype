@@ -18,6 +18,16 @@ default:
 typecheck:
     bun run typecheck
 
+# Lint src/ and tests/. Warnings fail: a rule worth enabling is worth enforcing.
+[group('general')]
+lint:
+    bun run lint
+
+# Apply the lint fixes Biome considers safe.
+[group('general')]
+lint-fix:
+    bunx biome lint --write
+
 # Run the whole test suite.
 [group('general')]
 test:
@@ -27,6 +37,11 @@ test:
 [group('general')]
 test-core:
     bun test tests/core/
+
+# Refuse to pass unless this tree is releasable. Checks everything, tags nothing.
+[group('general')]
+pre-release:
+    bun scripts/pre-release.ts
 
 # ─── memory substrate ────────────────────────────────────────────────────
 
@@ -51,21 +66,17 @@ test-petstore-docker: build-test-images
 # Petstore example suite attached to a Compose stack this recipe brings up and tears down.
 [group('docker')]
 test-petstore-docker-attach: up-petstore-docker-attach derive-petstore-docker-attach
-    #!/usr/bin/env bash
-    # Chain: compose up → derive → test → compose down. Teardown runs even on
-    # failure so the Compose stack isn't leaked (attach-mode chaos is real).
-    set -u
-    CYANOTYPE_ADAPTER=docker-attach bun test tests/petstore-example
-    status=$?
-    just teardown-petstore-docker-attach
-    exit $status
+    bun scripts/attach-suite.ts docker
 
-# Force-remove orphan Cyanotype containers and stale state (manual reset).
+# Refuse to pass while Cyanotype-owned Docker containers survive the suite.
+[group('docker')]
+check-no-leaks:
+    bun scripts/check-no-leaks.ts
+
+# Force-remove orphan Cyanotype containers and stale state; for a run killed mid-suite.
 [group('docker')]
 clean-containers:
-    # Use this when a previous run was killed mid-suite (kill -9) and leaked
-    # containers — the normal path cleans up on its own via tests/preload.ts.
-    docker ps -aq --filter label=cyanotype=1 | xargs -r docker rm -f
+    docker ps -aq --filter label=cyanotype.substrate=docker | xargs -r docker rm -f
     rm -rf .cyanotype-env/
 
 # ─── kubernetes substrate ────────────────────────────────────────────────
@@ -88,14 +99,7 @@ test-petstore-k8s: load-k8s-images
 # Petstore example suite attached to a cluster this recipe deploys and tears down.
 [group('kubernetes')]
 test-petstore-k8s-attach: deploy-petstore-k8s-attach derive-petstore-attach
-    #!/usr/bin/env bash
-    # Chain: deploy → derive → test → delete namespace. Teardown runs even on
-    # failure so cluster state isn't leaked (attach-mode chaos is real).
-    set -u
-    CYANOTYPE_ADAPTER=k8s-attach CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun test tests/petstore-example
-    status=$?
-    just teardown-petstore-k8s-attach
-    exit $status
+    CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun scripts/attach-suite.ts k8s
 
 # ─── internal helpers (hidden from `just --list`) ────────────────────────
 

@@ -50,7 +50,7 @@ just clean-containers
 
 `bun test` runs all files in a single process. `bunfig.toml` registers `tests/preload.ts` as a preload script; that file's top-level `afterAll` (from `bun:test`) fires once after the entire run and calls `shared.stopAll()`. The harness stops cached runtimes, then reconnects briefly to force-clean any session-labelled stragglers, then disconnects. No orphan containers remain between runs.
 
-**Docker Compose attach mode is non-destructive and requires manual teardown.** When running `CYANOTYPE_ADAPTER=docker-attach`, Cyanotype never removes the Compose stack's containers — they must be stopped with `docker compose down` when you're done. `just clean-containers` will **not** catch Compose containers because they lack the `cyanotype=1` label that the cleanup filter targets.
+**Docker Compose attach mode is non-destructive and requires manual teardown.** When running `CYANOTYPE_ADAPTER=docker-attach`, Cyanotype never removes the Compose stack's containers — they must be stopped with `docker compose down` when you're done. `just clean-containers` will **not** catch Compose containers because they lack the `cyanotype.substrate=docker` label that the cleanup filter targets.
 
 If you wire your own integration suite for a Cyanotype-based project, you'll need the same pattern:
 
@@ -113,30 +113,30 @@ The ADR process:
 
 ## Pre-release checklist
 
-Before tagging any `v*.*.*` and triggering `release.yml`:
+Tags go on `master`, never on a branch: CI runs only on pull requests, so a
+tag on an unmerged branch publishes code no CI has validated. Land the release
+prep in the PR, merge, then tag `master`. The full cycle and the checks the
+automation does not perform are in [`AGENTS.md`](./AGENTS.md#releasing).
 
-- `just typecheck && bun run build && just test-core` must all be green.
-- **Exercise the bin entry end-to-end.** Library tests in
-  `tests/core/cli-derive.test.ts` cover `deriveCompose` and `deriveK8s`
-  as pure functions; they do not catch `src/cli/index.ts` argv-parsing
-  or subcommand-routing bugs. The spawn suite in the same file (under
-  `describe("cyanotype derive (CLI dispatch)", ...)`) does — and 0.3.0
-  shipped with a broken dispatcher because no test ever ran the bin
-  itself. The dispatch suite is the regression bar; do not relax it.
-  Manual smoke before publish:
-  ```sh
-  bun run build
-  bun dist/cli/index.js derive compose \
-    --compose tests/support/compose/petstore-attach/compose.yaml \
-    --out - --project petstore-attach \
-    | jq '.bankingSim, .payswitch' >/dev/null
-  bun dist/cli/index.js derive k8s \
-    --k8s tests/support/k8s/petstore-attach/all.yaml \
-    --out - | jq 'keys | length' >/dev/null
-  ```
-- The CHANGELOG `[Unreleased]` section is non-empty and reads coherently
-  as a release-note. Move it to `[X.Y.Z] - YYYY-MM-DD` in the release
-  commit; `release.yml` feeds it to the GitHub Release body.
+Before tagging any `v*.*.*` and triggering `release.yml`, run:
+
+```sh
+just pre-release
+```
+
+It is a gate, not a list: silent and exit 0 when the tree is releasable,
+otherwise every failing check between two `[GATE]` lines. It covers git state,
+the CHANGELOG section the release workflow will look for, the lockfile, lint,
+typecheck, build, the core tests, all five substrate suites, and container
+leaks — and it tags nothing.
+
+It also smokes the built CLI, which is the one check with a story behind it:
+`tests/core/cli-derive.test.ts` covers `deriveCompose` and `deriveK8s` as pure
+functions, so nothing there catches argv parsing or subcommand routing, and
+0.3.0 shipped a broken dispatcher for exactly that reason. The gate runs
+`dist/cli/index.js` for real and asserts on what it emits, including that
+misuse exits 2 — a dispatcher bug shows up as accepting bad input rather than
+as wrong output.
 
 ## Project layout
 

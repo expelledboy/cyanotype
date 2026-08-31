@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   ci:
-    name: typecheck / build / test
+    name: lint / typecheck / build / test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,6 +38,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
 
       - name: Typecheck
         run: bun run typecheck

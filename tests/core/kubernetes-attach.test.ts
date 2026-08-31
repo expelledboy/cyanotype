@@ -14,7 +14,7 @@ import { createK8sAdapter } from "../../src/adapters/kubernetes";
 import { createKubectl } from "../../src/adapters/kubectl";
 import type { Adapter, StartSpec } from "../../src/adapter";
 
-const CONTEXT = process.env["CYANOTYPE_K8S_CONTEXT"] ?? "orbstack";
+const CONTEXT = process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack";
 const NAMESPACE = "cyanotype-attach-tests";
 const SERVICE = "attach-nginx";
 const FIXTURE = path.join(import.meta.dir, "..", "support", "k8s", "attach-fixture.yaml");
@@ -104,13 +104,11 @@ beforeAll(async () => {
     return r.stdout !== "Terminating";
   }, 60_000);
   if (!nsClear) {
-    // biome-ignore lint/suspicious/noConsole: surface to test runner.
     console.error("namespace still terminating after 60s — skipping attach integration");
     return;
   }
   const apply = await kubectl(["apply", "-f", FIXTURE]);
   if (apply.exit !== 0) {
-    // biome-ignore lint/suspicious/noConsole: surface to test runner.
     console.error("attach-fixture apply failed:", apply.stderr);
     return;
   }
@@ -120,12 +118,10 @@ beforeAll(async () => {
   ]);
   FIXTURE_READY = ready.exit === 0;
   if (!FIXTURE_READY) {
-    // biome-ignore lint/suspicious/noConsole: surface to test runner.
     console.error("attach-fixture not Available:", ready.stderr);
   }
   const applyOverride = await kubectl(["apply", "-f", OVERRIDE_FIXTURE]);
   if (applyOverride.exit !== 0) {
-    // biome-ignore lint/suspicious/noConsole: surface to test runner.
     console.error("attach-override-fixture apply failed:", applyOverride.stderr);
     return;
   }
@@ -144,7 +140,7 @@ afterAll(async () => {
 describe("kubernetes/adapter/attach integration", () => {
   test("discovers Service + port-forwards + HTTP 200", async () => {
     if (!HAS_K8S || !FIXTURE_READY) return;
-    const sid = "att-" + Math.random().toString(36).slice(2, 8);
+    const sid = `att-${Math.random().toString(36).slice(2, 8)}`;
     const adapter: Adapter = createK8sAdapter({
       mode: "attach", sessionId: sid, context: CONTEXT, namespace: NAMESPACE,
     });
@@ -164,7 +160,7 @@ describe("kubernetes/adapter/attach integration", () => {
 
   test("survives rolling restart via reconnection layer", async () => {
     if (!HAS_K8S || !FIXTURE_READY) return;
-    const sid = "rec-" + Math.random().toString(36).slice(2, 8);
+    const sid = `rec-${Math.random().toString(36).slice(2, 8)}`;
     const adapter: Adapter = createK8sAdapter({
       mode: "attach", sessionId: sid, context: CONTEXT, namespace: NAMESPACE,
     });
@@ -187,7 +183,7 @@ describe("kubernetes/adapter/attach integration", () => {
 
   test("honours adapter.k8s.attach.service override when convention does not match", async () => {
     if (!HAS_K8S || !FIXTURE_READY) return;
-    const sid = "ovr-" + Math.random().toString(36).slice(2, 8);
+    const sid = `ovr-${Math.random().toString(36).slice(2, 8)}`;
     const adapter: Adapter = createK8sAdapter({
       mode: "attach", sessionId: sid, context: CONTEXT, namespace: NAMESPACE,
     });
@@ -218,7 +214,7 @@ describe("kubernetes/adapter/attach integration", () => {
 
   test("teardown does NOT delete cluster resources", async () => {
     if (!HAS_K8S || !FIXTURE_READY) return;
-    const sid = "safe-" + Math.random().toString(36).slice(2, 8);
+    const sid = `safe-${Math.random().toString(36).slice(2, 8)}`;
     const adapter: Adapter = createK8sAdapter({
       mode: "attach", sessionId: sid, context: CONTEXT, namespace: NAMESPACE,
     });

@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-31
+
+Contract restoration, plus the first multi-substrate Environment.
+
+The bulk of this release closes four surfaces that type-checked, looked
+declared, and could not work — each item below either makes an existing promise
+true or makes it fail to compile. Alongside that, `createCompositeAdapter` lifts
+the real-vs-simulated choice from per-Environment to per-component, which is the
+isolation case the Blueprint contract was designed around.
+
+### Changed (BREAKING)
+- `attachEnvironment` now runs the Blueprint's `readiness` probe before
+  returning a runtime, matching `startEnvironment`. `adapter.exists()` proves a
+  container is present, not that it serves, and attach is the default path —
+  any already-running Compose or Kubernetes stack, and every parallel test
+  worker after the first one to start the environment.
+  A failing probe throws `{ kind: "attach_probe_failed", componentName,
+  instanceId, cause }`. A suite that previously raced ahead of a slow component
+  may now report a real environment failure. See D-036.
+- `EventBus.waitFor` and `expectSequence` match only events ingested after the
+  call; they no longer scan the whole retained buffer. A shared environment
+  outlives a single test, so the old default let an earlier test's event
+  satisfy a later assertion. Pass `{ after: FROM_START }` (or the new
+  `bus.mark()` checkpoint) to widen the window. `collect()`'s default is
+  unchanged — it still returns the whole buffer. See D-037.
+- `HttpRoute` is now discriminated on both `method` and `responseMode`, so a
+  schema only compiles where the client can actually reach it. `request` on a
+  GET or DELETE, and `response` or `errorResponse` on a route whose
+  `responseMode` never parses a body, were all previously accepted and then
+  silently ignored at runtime. Specifically: `status` mode reaches neither
+  response schema, `raw` mode reaches `errorResponse` but not `response`, and
+  `json` mode (the default) reaches both.
+
+### Added
+- `bus.mark(): EventCheckpoint` and `waitFor(name, { after })` /
+  `expectSequence(names, timeoutMs, { after })` for explicit subscription offsets,
+  plus the exported `FROM_START` checkpoint. The underlying sequence counter is
+  monotonic and survives `clear()`, so a checkpoint taken before a chaos
+  restart stays in the past instead of addressing an unrelated event.
+- `wait_for_timeout` carries `after` and `beforeCheckpoint`, separating "never
+  emitted" from "emitted before you waited".
+- `EventWindow` (`{ after }`) is the search bound for `expectSequence` and
+  `collect`, which have no filter object to carry it. `after` therefore means
+  the same thing and is spelled the same way on all three calls.
+- `SharedOptions.attachReadinessTimeoutMs` caps the TOTAL time spent probing
+  readiness on attach. Attach probes components one at a time, so the worst
+  case is otherwise the sum of every Blueprint's own probe timeout. Opt-in:
+  omitted, each Blueprint's `timeoutMs` is honoured in full.
+- `HttpErrorShape` is exported, giving the thrown `http_error` a name.
+- `HttpRoute.errorResponse` — an optional schema for non-2xx bodies. Success
+  bodies were Zod-checked while error bodies crossed the boundary unvalidated.
+  A body that violates the schema keeps its raw value and reports
+  `errorSchemaIssues` rather than being reshaped.
+- `createCompositeAdapter({ default, routes })` lets one Environment span more
+  than one substrate — the component under test running for real while its
+  dependencies are simulated. Routes key on component name or
+  `component.instance`, so a real "stable" instance and a simulated "canary"
+  instance of the *same* component can coexist. Realization is fixed at harness
+  construction and cannot be changed from a test. See D-038.
+- `just check-no-leaks` is a gate: silent and exit 0 when clean, and on failure
+  it names the surviving containers and exits non-zero.
+
+### Fixed
+- Events ingested by the orchestrator now carry `instance` on the event object
+  itself, alongside `component` and `occurredAt`.
+  `EventFilter.instance` was a public filter that could never match in a real
+  environment: both `ingest` call sites had the instance in scope and dropped
+  it, so the field only worked in unit tests that called the bus directly.
+  Multi-instance suites that worked around this by logging the instance into
+  event *attributes* can now filter on the event's own `instance` field
+  instead: `waitFor("NAME", { instance: "primary" })`.
+- A failed attach now shuts down the log-follow streams of every component
+  attached so far. Previously attach could only fail before those streams
+  started, so nothing needed closing; adding the readiness probe above
+  introduced a failure point after they open.
+- Container cleanup is scoped to the substrate that created it. Both adapters
+  stamped `cyanotype=1` and `cyanotype.session`, and the Kubernetes adapter puts
+  them on Pod metadata — so where one container runtime is shared between Docker
+  and Kubernetes (OrbStack, Docker Desktop), the leak check counted Pod
+  sandboxes as leaked Docker containers, and `just clean-containers` could
+  `docker rm -f` live Pods. Each adapter now stamps `cyanotype.substrate`, and
+  the Docker teardown scan, `clean-containers` and the leak check all filter on
+  it. Containers created before this labelling need clearing once by hand with
+  `docker rm -f $(docker ps -aq --filter label=cyanotype=1)`.
+
 ## [0.5.0] - 2026-08-12
 
 ### Changed (BREAKING)
@@ -278,7 +363,14 @@ Initial public release. Developer preview — pre-1.0, expect minor-version brea
 - Only HTTP and Opaque protocols implemented; TCP/gRPC/SOAP deferred
 - OrbStack K8s degrades under prolonged port-forward + rollout-restart load (kind/remote recommended for sustained CI)
 
-[Unreleased]: https://github.com/expelledboy/cyanotype/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/expelledboy/cyanotype/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.6.0
+[0.5.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.5.0
+[0.4.2]: https://github.com/expelledboy/cyanotype/releases/tag/v0.4.2
+[0.4.1]: https://github.com/expelledboy/cyanotype/releases/tag/v0.4.1
+[0.4.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.4.0
+[0.3.1]: https://github.com/expelledboy/cyanotype/releases/tag/v0.3.1
+[0.3.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.3.0
 [0.2.1]: https://github.com/expelledboy/cyanotype/releases/tag/v0.2.1
 [0.2.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.2.0
 [0.1.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.1.0

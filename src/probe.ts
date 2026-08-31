@@ -71,7 +71,7 @@ export const runProbe = async <I extends InterfaceRecord>(
   const start = Date.now();
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-  let lastError: unknown = undefined;
+  let lastError: unknown;
   let attempts = 0;
 
   emit?.({ type: "probe.started", probeKind: probe.kind, timeoutMs, intervalMs });

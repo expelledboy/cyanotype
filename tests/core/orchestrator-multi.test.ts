@@ -107,6 +107,30 @@ describe("orchestrator/multi-instance", () => {
     expect(namesOne).toContain("Beta");
   });
 
+  // Declared before the chaos tests so it exercises the log task started by
+  // buildComponentRuntime. The sibling test at the end of this file covers the
+  // separate ingest call site in the chaos-restart path.
+  test("event envelope carries instance identity", async () => {
+    const evtPromise = runtime.petstore.one.events.waitFor(
+      "PETSTORE_REQUEST", { instance: "one" }, 5_000,
+    );
+    await runtime.petstore.one.api.http.createPet({ name: "StampOnStart" });
+    const evt = await evtPromise;
+    expect(evt.component).toBe("petstore");
+    expect(evt.instance).toBe("one");
+  });
+
+  test("instance filter is live, not a no-op", async () => {
+    await runtime.petstore.two.api.http.createPet({ name: "StampFilter" });
+    let caught: unknown;
+    try {
+      await runtime.petstore.two.events.waitFor(
+        "PETSTORE_REQUEST", { instance: "not-an-instance" }, 300,
+      );
+    } catch (e) { caught = e; }
+    expect((caught as { kind: string }).kind).toBe("wait_for_timeout");
+  });
+
   test("chaos.stop on multi-instance slot", async () => {
     const stoppedId = runtime.petstore.one.ports.http;
     await runtime.chaos.stop("petstore", "one");
@@ -141,6 +165,18 @@ describe("orchestrator/multi-instance", () => {
     expect(newPort).not.toBe(oldPort);
     const list = await runtime.petstore.two.api.http.listPets();
     expect(Array.isArray(list.items)).toBe(true);
+  });
+
+  // Runs after chaos.restart, so instance "two" is being followed by the log
+  // task the chaos path re-created — a different ingest call site to the one
+  // the start-path test above covers.
+  test("event envelope keeps instance identity across a chaos restart", async () => {
+    const evtPromise = runtime.petstore.two.events.waitFor(
+      "PETSTORE_REQUEST", { instance: "two" }, 5_000,
+    );
+    await runtime.petstore.two.api.http.createPet({ name: "StampAfterRestart" });
+    const evt = await evtPromise;
+    expect(evt.instance).toBe("two");
   });
 
   test("petstore primary-down causes 503 on writes", async () => {

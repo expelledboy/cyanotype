@@ -45,6 +45,18 @@ export type OrchestratorOptions = {
    * omitted = zero cost, silent (today's behaviour).
    */
   readonly observer?: Observer;
+  /**
+   * Ceiling on the TOTAL time `attachEnvironment` spends on readiness probes,
+   * across all components.
+   *
+   * Attach probes components one at a time, so without this the worst case is
+   * the sum of every Blueprint's own probe timeout — six components at the 30s
+   * default is three minutes before a dead stack is reported. Omitted (the
+   * default) means no aggregate ceiling: each Blueprint's `timeoutMs` is
+   * honoured in full, which is the right call when those values were chosen
+   * deliberately and the wrong one on a shared CI runner.
+   */
+  readonly attachReadinessTimeoutMs?: number;
 };
 
 type Emitter = ReturnType<typeof createEmitter>;
@@ -105,6 +117,12 @@ const deriveAutoApi = (ifaceRecord: InterfaceRecord, uri: string): Record<string
 
 const stateKey = (componentName: string, instanceId: string | undefined): string =>
   instanceId === undefined ? componentName : `${componentName}:${instanceId}`;
+
+/** Source attribution stamped onto every ingested event. Omits `instance` for single-instance slots. */
+const eventMeta = (componentName: string, instanceId: string | undefined) =>
+  instanceId === undefined
+    ? { component: componentName }
+    : { component: componentName, instance: instanceId };
 
 /**
  * Auto-extract `host` and `port` from `uri` when the Blueprint factory
@@ -182,7 +200,7 @@ const buildComponentRuntime = (
     try {
       for await (const line of adapter.logs(containerId, signal.signal)) {
         const parsed = binding.logParser?.(line);
-        if (parsed) eventBus.ingest(parsed, { component: componentName });
+        if (parsed) eventBus.ingest(parsed, eventMeta(componentName, instanceId));
       }
     } catch (e) {
       console.error(`[orchestrator] log task failed for ${componentName}:`, e);
@@ -257,9 +275,10 @@ export const startEnvironment = async <E extends Environment>(
     }
     finalizeApi(state);
     components.set(stateKey(componentName, instanceId), state);
+    done += 1;
     compEmit({
       type: "environment.component_ready",
-      done: (done += 1), total, durationMs: Date.now() - compStart,
+      done, total, durationMs: Date.now() - compStart,
     });
     return state;
   };
@@ -332,7 +351,7 @@ export const startEnvironment = async <E extends Environment>(
       try {
         for await (const line of opts.adapter.logs(s.containerId, s.signal.signal)) {
           const parsed = s.binding.logParser?.(line);
-          if (parsed) s.eventBus.ingest(parsed, { component: s.componentName });
+          if (parsed) s.eventBus.ingest(parsed, eventMeta(s.componentName, s.instanceId));
         }
       } catch (e) {
         console.error(`[orchestrator] log task failed for ${s.componentName}:`, e);
@@ -380,6 +399,17 @@ export const attachEnvironment = async <E extends Environment>(
   rootEmit({ type: "substrate.connected", latencyMs: Date.now() - connectStart });
   const components = new Map<string, ComponentState>();
 
+  // Aggregate ceiling across every component's probe — see
+  // `OrchestratorOptions.attachReadinessTimeoutMs`. One controller for the
+  // whole attach; each probe honours it via the signal it already accepts.
+  // Started AFTER connect: the budget is for probing, and the `finally` that
+  // clears it is only reachable once the connect path has succeeded.
+  const readinessDeadline = new AbortController();
+  const readinessTimer =
+    opts.attachReadinessTimeoutMs !== undefined
+      ? setTimeout(() => readinessDeadline.abort(), opts.attachReadinessTimeoutMs)
+      : undefined;
+
   const attachOne = async (
     componentName: string,
     instanceId: string | undefined,
@@ -395,6 +425,30 @@ export const attachEnvironment = async <E extends Environment>(
     const state = buildComponentRuntime(
       opts.adapter, componentName, instanceId, binding, snap.containerId, { ...snap.ports }, false,
     );
+    // `exists()` above proves the container is present, not that it serves.
+    // Attaching to a warm stack is the case readiness was written for: the
+    // component may be mid-restart, or a sibling worker may have written
+    // metadata the instant its containers came up. Probe before handing the
+    // caller an api.
+    if (binding.blueprint.readiness) {
+      const compEmit = emitter.scope({
+        adapter: opts.adapter.name, envKey: opts.envKey,
+        component: componentName, instance: instanceId,
+      });
+      try {
+        await runProbe(
+          binding.blueprint.readiness, state.interface, readinessDeadline.signal, compEmit,
+        );
+      } catch (cause) {
+        // buildComponentRuntime has already detached a log-follow task; this is
+        // the first attach failure that can happen after it starts, so close it
+        // here or the stream outlives the failed attach.
+        state.signal.abort();
+        // runProbe's `probe_timeout` carries the probe and last error but no
+        // component identity, and attach probes several components in a row.
+        throw { kind: "attach_probe_failed", componentName, instanceId, cause };
+      }
+    }
     finalizeApi(state);
     components.set(stateKey(componentName, instanceId), state);
   };
@@ -417,8 +471,14 @@ export const attachEnvironment = async <E extends Environment>(
       }
     }
   } catch (e) {
+    // Attach owns no containers, so there is nothing to stop — but every
+    // component attached before the failure is following logs. Close those
+    // streams; the caller is never handed a runtime to stop them through.
+    for (const s of components.values()) s.signal.abort();
     rootEmit({ type: "environment.failed", phase: "attach", error: e });
     throw e;
+  } finally {
+    clearTimeout(readinessTimer);
   }
   rootEmit({ type: "environment.ready", durationMs: Date.now() - envStart });
 

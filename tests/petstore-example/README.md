@@ -39,7 +39,7 @@ All five `CYANOTYPE_ADAPTER` values are supported. Prerequisites per substrate:
 | Adapter | Prerequisite |
 |---|---|
 | `docker` | Docker running; images built (`just build-test-images`). |
-| `docker-attach` | Compose stack up and `derived-compose.json` generated — `just test-petstore-docker-attach` handles both. |
+| `docker-attach` | A running Compose stack, plus `derived-compose.json` — the topology file `cyanotype derive compose` writes next to `env.ts`, mapping each component to its published host port. `just test-petstore-docker-attach` brings the stack up, generates the file, runs, and tears down. |
 | `memory` | None — runs entirely in-process with no Docker images required. |
 | `k8s` | OrbStack (or another cluster) — `just test-petstore-k8s` builds, loads images, and deploys automatically. |
-| `k8s-attach` | Pre-deployed cluster with the fixture stack; `just test-petstore-k8s-attach` deploys, derives, and tears down automatically. |
+| `k8s-attach` | A reachable cluster. You do not deploy the fixture stack yourself: `just test-petstore-k8s-attach` applies it, derives the topology, runs, and deletes the namespace. |

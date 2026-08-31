@@ -103,7 +103,7 @@ export const deriveK8s = (k8sPath: string): Record<string, unknown> => {
         Record<string, unknown>
       >) ?? [];
     const ports =
-      (containers[0]?.["ports"] as
+      (containers[0]?.ports as
         | Array<{ containerPort: number }>
         | undefined) ?? [];
     // Emit `attach.port` iff the workload declares exactly one container
@@ -173,14 +173,14 @@ const parseComposeLabels = (
 const parseComposeContainerPort = (
   ports: ComposeService["ports"],
 ): number | undefined => {
-  if (!ports || ports.length !== 1) return undefined;
+  if (ports?.length !== 1) return undefined;
   const first = ports[0]!;
   if (typeof first === "string") {
     const parts = first.split(":");
     const containerPart = parts[parts.length - 1]!;
     const portStr = containerPart.split("/")[0]!;
     const n = parseInt(portStr, 10);
-    return isNaN(n) ? undefined : n;
+    return Number.isNaN(n) ? undefined : n;
   }
   return typeof first.target === "number" ? first.target : undefined;
 };

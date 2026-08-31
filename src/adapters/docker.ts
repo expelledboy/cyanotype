@@ -402,7 +402,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       return;
     }
     const agentOptions = { keepAlive: false };
-    const dockerHost = process.env["DOCKER_HOST"];
+    const dockerHost = process.env.DOCKER_HOST;
     // WHY: `agent` is supported by docker-modem at runtime but not in any
     // @types we have — we already lack @types/dockerode entirely; the cast
     // is the documented escape per the task spec.
@@ -535,7 +535,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     // Resume path: a re-`start` of a chaos-paused binding restarts the real
     // container and refreshes ports. A stopped container is valid here.
     const existing = attachBindings.get(containerId);
-    if (existing && existing.paused) {
+    if (existing?.paused) {
       try { await c.getContainer(match.id).start(); } catch { /* already running */ }
       const refreshed = await c.getContainer(match.id).inspect();
       const ports = resolvePorts(refreshed, existing.portKeys, match.id);
@@ -561,7 +561,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
   };
 
   const start = async (spec: StartSpec, emit?: Emit): Promise<Started> => {
-    if (spec.labels["cyanotype"] !== "1") {
+    if (spec.labels.cyanotype !== "1") {
       throw { kind: "missing_cyanotype_label", labels: spec.labels };
     }
     if (mode === "attach") {
@@ -588,7 +588,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       Image: imageRef,
       Env: Object.entries(spec.env).map(([k, v]) => `${k}=${v}`),
       ExposedPorts: exposedPorts,
-      Labels: spec.labels,
+      Labels: { ...spec.labels, "cyanotype.substrate": "docker" },
       HostConfig: { Binds: binds, PortBindings: portBindings, AutoRemove: false },
     });
     emit?.({ type: "container.created", containerId: created.id });
@@ -634,7 +634,7 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     // the chaos resume path can re-`start` it.
     if (mode === "attach") {
       const b = attachBindings.get(containerId);
-      if (b && b.paused) return false;
+      if (b?.paused) return false;
     }
     try {
       const inspected = await c.getContainer(realId(containerId)).inspect();
@@ -697,7 +697,16 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     try {
       const list = await client.listContainers({
         all: true,
-        filters: { label: ["cyanotype=1", `cyanotype.session=${sessionId}`] },
+        // Substrate-scoped, not just session-scoped. Where one container
+        // runtime is shared with Kubernetes (OrbStack, Docker Desktop), Pods
+        // carry the same `cyanotype` and `cyanotype.session` labels, and a
+        // session-only filter would sweep up live Pod sandboxes.
+        filters: {
+          label: [
+            "cyanotype.substrate=docker",
+            `cyanotype.session=${sessionId}`,
+          ],
+        },
       });
       for (const entry of list) {
         const cont = client.getContainer(entry.Id);

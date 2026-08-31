@@ -78,6 +78,12 @@ test("health responds", async () => {
 });
 ```
 
+Reading `rt.health.api.http.ping()` left to right: `health` is the component name
+from `createEnvironment({ health })`; `api` is the typed client Cyanotype derives
+for you; `http` is the interface key returned by the Blueprint's `interface`
+factory; and `ping` is the route key from `routes`. Rename any of those four and
+the test stops compiling — that is the point.
+
 The Docker adapter (default above) needs an image to run. This Dockerfile produces one:
 
 ```dockerfile
@@ -101,6 +107,7 @@ Now swap which `const adapter = …` line is active and re-run the same test:
 - **Docker Compose attach** — uncomment `createDockerAdapter({ mode: "attach", ... })`. Point it at an already-running `docker compose up` stack; Cyanotype discovers containers via `com.docker.compose.project`/`com.docker.compose.service` labels and never creates or removes containers. Services must publish their ports to the host (`ports:` in your Compose file). The test code does not change.
 - **Kubernetes** — uncomment `createK8sAdapter`. Your kubectl context must point at a cluster that can pull `cyanotype-health-example:latest` (OrbStack mounts the host Docker registry automatically; for `kind`, `kind load docker-image cyanotype-health-example:latest`). Also supports `mode: "attach"` to test against pre-deployed workloads without managing the cluster yourself. The test code does not change.
 - **In-memory simulator** — uncomment `createInMemoryAdapter`. No Docker daemon, no cluster — milliseconds per test. The factories map registers a `Bun.serve` fake under the same image key the Binding already declares. The test code does not change.
+- **Mixed** — `createCompositeAdapter({ default, routes })` picks the substrate per component, so the component under test can run for real while its dependencies are simulated and a neighbouring team's broken build cannot fail your test. Routes key on component name or `component.instance`, so a real `stable` instance and a simulated `canary` instance of the *same* component can coexist. The test code does not change.
 
 That is the entire architectural claim — `Blueprint → Binding → Adapter`, with the substrate as the only swappable layer. Everything else in the library is the machinery that makes it true.
 
@@ -161,12 +168,14 @@ test("primary down → 503 → recovery", async () => {
 
   await runtime.chaos.stop("redis", "primary");          // typed; "tertiary" is a compile error
 
+  const checkpoint = runtime.petstore.one.events.mark(); // waits start here, not at boot
+
   await expect(runtime.petstore.one.api.http.createPet({ name: "X" }))
     .rejects.toMatchObject({ status: 503 });
 
   const evt = await runtime.petstore.one.events.waitFor(
     "PETSTORE_REQUEST",
-    { attributes: { status: 503 } },
+    { attributes: { status: 503 }, after: checkpoint },
     5_000,
   );
   expect(evt.attributes.method).toBe("POST");
@@ -332,7 +341,7 @@ just test-adapter-k8s-attach
 just typecheck
 ```
 
-If a `bun test` run is interrupted (Ctrl-C during the integration suite), orphan containers can keep ports allocated. `just clean-containers` force-removes everything labeled `cyanotype=1`.
+If a `bun test` run is interrupted (Ctrl-C during the integration suite), orphan containers can keep ports allocated. `just clean-containers` force-removes everything labeled `cyanotype.substrate=docker`, and `just check-no-leaks` reports whether any survived.
 
 ## Contributing
 

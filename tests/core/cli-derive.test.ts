@@ -67,8 +67,8 @@ services:
   test("passes optional project name into compose.attach.project", () => {
     const path = tmpFile("compose.yaml", COMPOSE_YAML);
     const result = deriveCompose(path, "my-project");
-    const entry = result["redis"] as { compose: { attach: Record<string, unknown> } };
-    expect(entry.compose.attach["project"]).toBe("my-project");
+    const entry = result.redis as { compose: { attach: Record<string, unknown> } };
+    expect(entry.compose.attach.project).toBe("my-project");
   });
 
   test("returns empty object for compose file with no services", () => {
@@ -79,10 +79,10 @@ services:
   test("does not emit allowChaos — policy belongs at the bind site", () => {
     const path = tmpFile("compose.yaml", COMPOSE_YAML);
     const result = deriveCompose(path);
-    const entry = result["redis"] as { compose: { attach: Record<string, unknown> } };
-    expect(entry.compose.attach["allowChaos"]).toBeUndefined();
+    const entry = result.redis as { compose: { attach: Record<string, unknown> } };
+    expect(entry.compose.attach.allowChaos).toBeUndefined();
     const entry2 = result["petstore.primary"] as { compose: { attach: Record<string, unknown> } };
-    expect(entry2.compose.attach["allowChaos"]).toBeUndefined();
+    expect(entry2.compose.attach.allowChaos).toBeUndefined();
   });
 
   test("handles array-style labels", () => {
@@ -120,12 +120,12 @@ services:
 `;
     const path = tmpFile("multi-port.yaml", yaml);
     const result = deriveCompose(path);
-    const single = result["cache"] as { compose: { attach: Record<string, unknown> } };
-    const multi  = result["simulator"] as { compose: { attach: Record<string, unknown> } };
-    expect(single.compose.attach["port"]).toBe(6379);
-    expect(multi.compose.attach["port"]).toBeUndefined();
+    const single = result.cache as { compose: { attach: Record<string, unknown> } };
+    const multi  = result.simulator as { compose: { attach: Record<string, unknown> } };
+    expect(single.compose.attach.port).toBe(6379);
+    expect(multi.compose.attach.port).toBeUndefined();
     // Topology is still preserved for the multi-port service.
-    expect(multi.compose.attach["service"]).toBe("multi");
+    expect(multi.compose.attach.service).toBe("multi");
   });
 });
 
@@ -220,20 +220,20 @@ spec:
   test("populates namespace, service, port, deployment", () => {
     const path = tmpFile("k8s.yaml", K8S_YAML);
     const result = deriveK8s(path);
-    const entry = result["redis"] as { k8s: { attach: Record<string, unknown> } };
-    expect(entry.k8s.attach["namespace"]).toBe("test-ns");
-    expect(entry.k8s.attach["service"]).toBe("redis-svc");
-    expect(entry.k8s.attach["port"]).toBe(6379);
-    expect(entry.k8s.attach["deployment"]).toBe("redis-dep");
+    const entry = result.redis as { k8s: { attach: Record<string, unknown> } };
+    expect(entry.k8s.attach.namespace).toBe("test-ns");
+    expect(entry.k8s.attach.service).toBe("redis-svc");
+    expect(entry.k8s.attach.port).toBe(6379);
+    expect(entry.k8s.attach.deployment).toBe("redis-dep");
   });
 
   test("does not emit allowChaos — policy belongs at the bind site", () => {
     const path = tmpFile("k8s.yaml", K8S_YAML);
     const result = deriveK8s(path);
-    const entry = result["redis"] as { k8s: { attach: Record<string, unknown> } };
-    expect(entry.k8s.attach["allowChaos"]).toBeUndefined();
+    const entry = result.redis as { k8s: { attach: Record<string, unknown> } };
+    expect(entry.k8s.attach.allowChaos).toBeUndefined();
     const entry2 = result["petstore.primary"] as { k8s: { attach: Record<string, unknown> } };
-    expect(entry2.k8s.attach["allowChaos"]).toBeUndefined();
+    expect(entry2.k8s.attach.allowChaos).toBeUndefined();
   });
 
   test("walks a directory of yaml files", () => {
@@ -242,7 +242,7 @@ spec:
     // Split the yaml into two files
     const [part1, part2] = K8S_YAML.split("---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api-dep");
     writeFileSync(join(dir, "01-redis.yaml"), part1!, "utf8");
-    writeFileSync(join(dir, "02-api.yaml"), "---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api-dep" + part2!, "utf8");
+    writeFileSync(join(dir, "02-api.yaml"), `---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api-dep${part2!}`, "utf8");
     const result = deriveK8s(dir);
     expect(Object.keys(result).sort()).toEqual(["petstore.primary", "redis"]);
   });
@@ -321,13 +321,13 @@ spec:
 `;
     const path = tmpFile("multi-port-k8s.yaml", yaml);
     const result = deriveK8s(path);
-    const single = result["cache"]     as { k8s: { attach: Record<string, unknown> } };
-    const multi  = result["simulator"] as { k8s: { attach: Record<string, unknown> } };
-    expect(single.k8s.attach["port"]).toBe(6379);
-    expect(multi.k8s.attach["port"]).toBeUndefined();
+    const single = result.cache     as { k8s: { attach: Record<string, unknown> } };
+    const multi  = result.simulator as { k8s: { attach: Record<string, unknown> } };
+    expect(single.k8s.attach.port).toBe(6379);
+    expect(multi.k8s.attach.port).toBeUndefined();
     // Topology is still preserved for the multi-port workload.
-    expect(multi.k8s.attach["service"]).toBe("multi-svc");
-    expect(multi.k8s.attach["deployment"]).toBe("multi-dep");
+    expect(multi.k8s.attach.service).toBe("multi-svc");
+    expect(multi.k8s.attach.deployment).toBe("multi-dep");
   });
 });
 
@@ -347,8 +347,8 @@ describe("loadDerivedCompose", () => {
     const path = tmpFile("derived-compose.json", VALID);
     const result = loadDerivedCompose(path, ["redis", "petstore.primary"]);
     expect(Object.keys(result).sort()).toEqual(["petstore.primary", "redis"]);
-    const entry = result["redis"] as { compose: { attach: Record<string, unknown> } };
-    expect(entry.compose.attach["service"]).toBe("cache");
+    const entry = result.redis as { compose: { attach: Record<string, unknown> } };
+    expect(entry.compose.attach.service).toBe("cache");
   });
 
   test("missing file throws derived_compose_missing", () => {
@@ -431,7 +431,7 @@ describe("cyanotype derive (CLI dispatch)", () => {
     expect(stderr).toBe("");
     const parsed = JSON.parse(stdout) as Record<string, unknown>;
     expect(parsed["redis.primary"]).toBeDefined();
-    expect(parsed["petstore"]).toBeDefined();
+    expect(parsed.petstore).toBeDefined();
   });
 
   test("derive k8s --out - dispatches to the k8s handler", async () => {
@@ -469,7 +469,7 @@ describe("cyanotype derive (CLI dispatch)", () => {
     ]);
     expect(code).toBe(0);
     const parsed = JSON.parse(stdout) as Record<string, unknown>;
-    expect(parsed["demo"]).toBeDefined();
+    expect(parsed.demo).toBeDefined();
   });
 
   test("unknown subcommand exits 2 with usage", async () => {

@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { z } from "zod";
-import { createEventBus } from "../../src/events";
+import { createEventBus, FROM_START } from "../../src/events";
 
 const catalog = {
   REQUEST: z.object({ path: z.string(), status: z.number() }),
@@ -61,7 +61,7 @@ describe("events/waitFor", () => {
   test("returns an already-present matching event", async () => {
     const { bus, ingest } = createEventBus(catalog);
     ingest({ name: "RESPONSE", attributes: { ms: 7 } }, meta);
-    const evt = await bus.waitFor("RESPONSE");
+    const evt = await bus.waitFor("RESPONSE", { after: FROM_START });
     expect(evt.attributes.ms).toBe(7);
   });
 
@@ -85,7 +85,7 @@ describe("events/waitFor", () => {
     ingest({ name: "REQUEST", attributes: { path: "/a", status: 200 } }, meta);
     ingest({ name: "REQUEST", attributes: { path: "/b", status: 200 } }, meta);
     try {
-      await bus.waitFor("REQUEST", { attributes: { status: 500 } }, 150);
+      await bus.waitFor("REQUEST", { attributes: { status: 500 }, after: FROM_START }, 150);
       throw new Error("should have thrown");
     } catch (e) {
       expect((e as { kind: string }).kind).toBe("wait_for_timeout");
@@ -97,7 +97,7 @@ describe("events/waitFor", () => {
     const { bus, ingest } = createEventBus(catalog);
     ingest({ name: "REQUEST", attributes: { path: "/a", status: 200 } }, meta);
     ingest({ name: "REQUEST", attributes: { path: "/b", status: 404 } }, meta);
-    const evt = await bus.waitFor("REQUEST", { attributes: { status: 404 } });
+    const evt = await bus.waitFor("REQUEST", { attributes: { status: 404 }, after: FROM_START });
     expect(evt.attributes.path).toBe("/b");
   });
 
@@ -105,7 +105,7 @@ describe("events/waitFor", () => {
     const { bus, ingest } = createEventBus(catalog);
     ingest({ name: "RESPONSE", attributes: { ms: 1 } }, { component: "x", instance: "one" });
     ingest({ name: "RESPONSE", attributes: { ms: 2 } }, { component: "x", instance: "two" });
-    const evt = await bus.waitFor("RESPONSE", { instance: "two" });
+    const evt = await bus.waitFor("RESPONSE", { instance: "two", after: FROM_START });
     expect(evt.attributes.ms).toBe(2);
   });
 
@@ -115,6 +115,7 @@ describe("events/waitFor", () => {
     ingest({ name: "REQUEST", attributes: { path: "/b", status: 503 } }, meta);
     const evt = await bus.waitFor("REQUEST", {
       attributes: { status: ((v: unknown) => typeof v === "number" && v >= 500) as unknown as number },
+      after: FROM_START,
     });
     expect(evt.attributes.status).toBe(503);
   });
@@ -124,6 +125,7 @@ describe("events/waitFor", () => {
     ingest({ name: "REQUEST", attributes: { path: "/users/42", status: 200 } }, meta);
     const evt = await bus.waitFor("REQUEST", {
       attributes: { path: /^\/users\/\d+$/ as unknown as string },
+      after: FROM_START,
     });
     expect(evt.attributes.path).toBe("/users/42");
   });
@@ -134,7 +136,7 @@ describe("events/expectSequence", () => {
     const { bus, ingest } = createEventBus(catalog);
     ingest({ name: "REQUEST", attributes: { path: "/", status: 200 } }, meta);
     ingest({ name: "RESPONSE", attributes: { ms: 3 } }, meta);
-    const seq = await bus.expectSequence(["REQUEST", "RESPONSE"]);
+    const seq = await bus.expectSequence(["REQUEST", "RESPONSE"], 10_000, { after: FROM_START });
     expect(seq.length).toBe(2);
     expect(seq[0]!.name).toBe("REQUEST");
     expect(seq[1]!.name).toBe("RESPONSE");
@@ -144,7 +146,7 @@ describe("events/expectSequence", () => {
     const { bus, ingest } = createEventBus(catalog);
     ingest({ name: "REQUEST", attributes: { path: "/", status: 200 } }, meta);
     setTimeout(() => ingest({ name: "RESPONSE", attributes: { ms: 1 } }, meta), 150);
-    const seq = await bus.expectSequence(["REQUEST", "RESPONSE"], 2000);
+    const seq = await bus.expectSequence(["REQUEST", "RESPONSE"], 2000, { after: FROM_START });
     expect(seq.map((e) => e.name)).toEqual(["REQUEST", "RESPONSE"]);
   });
 
@@ -153,7 +155,7 @@ describe("events/expectSequence", () => {
     ingest({ name: "RESPONSE", attributes: { ms: 1 } }, meta);
     ingest({ name: "REQUEST", attributes: { path: "/", status: 200 } }, meta);
     await expect(
-      bus.expectSequence(["REQUEST", "RESPONSE"], 150),
+      bus.expectSequence(["REQUEST", "RESPONSE"], 150, { after: FROM_START }),
     ).rejects.toMatchObject({ kind: "sequence_timeout" });
   });
 
@@ -161,7 +163,7 @@ describe("events/expectSequence", () => {
     const { bus, ingest } = createEventBus(catalog);
     ingest({ name: "RESPONSE", attributes: { ms: 1 } }, meta);
     try {
-      await bus.expectSequence(["REQUEST", "RESPONSE"], 150);
+      await bus.expectSequence(["REQUEST", "RESPONSE"], 150, { after: FROM_START });
       throw new Error("should have thrown");
     } catch (e) {
       expect((e as { seen: string[] }).seen).toEqual(["RESPONSE"]);
@@ -177,5 +179,76 @@ describe("events/clear", () => {
     expect(bus.collect().length).toBe(2);
     clear();
     expect(bus.collect().length).toBe(0);
+  });
+});
+
+describe("events/subscription offset", () => {
+  test("waitFor ignores events that arrived before the call", async () => {
+    const { bus, ingest } = createEventBus(catalog);
+    ingest({ name: "RESPONSE", attributes: { ms: 1 } }, meta);
+    await expect(bus.waitFor("RESPONSE", undefined, 150)).rejects.toMatchObject({
+      kind: "wait_for_timeout",
+    });
+  });
+
+  test("timeout distinguishes never-emitted from emitted-before-the-wait", async () => {
+    const { bus, ingest } = createEventBus(catalog);
+    ingest({ name: "RESPONSE", attributes: { ms: 1 } }, meta);
+    ingest({ name: "RESPONSE", attributes: { ms: 2 } }, meta);
+    try {
+      await bus.waitFor("RESPONSE", undefined, 150);
+      throw new Error("should have thrown");
+    } catch (e) {
+      expect((e as { beforeCheckpoint: number }).beforeCheckpoint).toBe(2);
+      expect((e as { candidates: unknown[] }).candidates.length).toBe(0);
+    }
+  });
+
+  test("a mark() taken before the event makes it visible", async () => {
+    const { bus, ingest } = createEventBus(catalog);
+    const checkpoint = bus.mark();
+    ingest({ name: "RESPONSE", attributes: { ms: 42 } }, meta);
+    const evt = await bus.waitFor("RESPONSE", { after: checkpoint }, 150);
+    expect(evt.attributes.ms).toBe(42);
+  });
+
+  test("a mark() taken after the event excludes it", async () => {
+    const { bus, ingest } = createEventBus(catalog);
+    ingest({ name: "RESPONSE", attributes: { ms: 42 } }, meta);
+    const checkpoint = bus.mark();
+    await expect(
+      bus.waitFor("RESPONSE", { after: checkpoint }, 150),
+    ).rejects.toMatchObject({ kind: "wait_for_timeout" });
+  });
+
+  test("collect defaults to the whole buffer and narrows with a checkpoint", () => {
+    const { bus, ingest } = createEventBus(catalog);
+    ingest({ name: "RESPONSE", attributes: { ms: 1 } }, meta);
+    const checkpoint = bus.mark();
+    ingest({ name: "RESPONSE", attributes: { ms: 2 } }, meta);
+    expect(bus.collect().length).toBe(2);
+    expect(bus.collect("RESPONSE", { after: checkpoint }).map((e) => e.attributes.ms)).toEqual([2]);
+  });
+
+  // The counter must not restart with the buffer. An array-index checkpoint
+  // would address a different event after a chaos restart drains the bus —
+  // here it would skip past the only event and hang until timeout.
+  test("a checkpoint stays meaningful across clear()", async () => {
+    const { bus, ingest, clear } = createEventBus(catalog);
+    ingest({ name: "RESPONSE", attributes: { ms: 1 } }, meta);
+    const checkpoint = bus.mark();
+    clear();
+    ingest({ name: "RESPONSE", attributes: { ms: 2 } }, meta);
+    const evt = await bus.waitFor("RESPONSE", { after: checkpoint }, 150);
+    expect(evt.attributes.ms).toBe(2);
+  });
+
+  test("expectSequence honours the from-now default", async () => {
+    const { bus, ingest } = createEventBus(catalog);
+    ingest({ name: "REQUEST", attributes: { path: "/", status: 200 } }, meta);
+    ingest({ name: "RESPONSE", attributes: { ms: 1 } }, meta);
+    await expect(
+      bus.expectSequence(["REQUEST", "RESPONSE"], 150),
+    ).rejects.toMatchObject({ kind: "sequence_timeout" });
   });
 });

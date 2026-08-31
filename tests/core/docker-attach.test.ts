@@ -67,7 +67,7 @@ const makeFakeClient = () => ({
 const seedContainer = (
   overrides: Partial<FakeContainerState> & { number?: string } = {},
 ): FakeContainerState => ({
-  Id: overrides.Id ?? "c0ffee" + Math.random().toString(36).slice(2, 8),
+  Id: overrides.Id ?? `c0ffee${Math.random().toString(36).slice(2, 8)}`,
   labels: overrides.labels ?? {
     "com.docker.compose.project": "myproj",
     "com.docker.compose.service": "api",
@@ -112,6 +112,14 @@ const catchKind = async (fn: () => unknown | Promise<unknown>): Promise<unknown>
 // ---------------------------------------------------------------------------
 
 /** Build a fake client wired to a call-recorder for denylist assertions. */
+// The fake implements only the slice of dockerode's client that attach mode
+// touches. There is no @types/dockerode in this project (see the note in
+// src/adapters/docker.ts), so `DockerClient` is structural and a partial fake
+// cannot satisfy it nominally. One documented escape, used at every injection
+// site below.
+// biome-ignore lint/suspicious/noExplicitAny: see above
+type InjectedDockerClient = any;
+
 const makeDenylistClient = () => {
   const calls: string[] = [];
   const client = {
@@ -158,8 +166,7 @@ describe("docker/adapter/attach denylist", () => {
   test("adapter.start in attach mode never calls createContainer", async () => {
     // createContainer on the fake client records the call — if reached, the
     // test would also see an error message other than compose_attach_project_required.
-    // biome-ignore lint/suspicious/noExplicitAny: spy client satisfies DockerClient surface.
-    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", dockerClient: makeDenylistClient() as any });
+    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", dockerClient: makeDenylistClient() as InjectedDockerClient });
     await a.connect();
     const e = await catchKind(() => a.start(mkSpec()));
     expect((e as { kind?: string }).kind).toBe("compose_attach_project_required");
@@ -169,8 +176,7 @@ describe("docker/adapter/attach denylist", () => {
   test("pull is blocked in attach mode (createContainer also blocked)", async () => {
     fakeContainers = [seedContainer({ Id: "api1" })];
     const spy = makeDenylistClient();
-    // biome-ignore lint/suspicious/noExplicitAny: spy client satisfies DockerClient surface.
-    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as any });
+    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as InjectedDockerClient });
     await a.connect();
     await a.start(mkSpec()); // discovery uses listContainers + inspect — no pull.
     expect(spy._calls).not.toContain("pull");
@@ -181,8 +187,7 @@ describe("docker/adapter/attach denylist", () => {
   test("container.remove is never called by teardown in attach mode", async () => {
     fakeContainers = [seedContainer({ Id: "api1" })];
     const spy = makeDenylistClient();
-    // biome-ignore lint/suspicious/noExplicitAny: spy client satisfies DockerClient surface.
-    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as any });
+    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as InjectedDockerClient });
     await a.connect();
     await a.start(mkSpec());
     await a.teardown();
@@ -195,8 +200,7 @@ describe("docker/adapter/attach denylist", () => {
     test(`container.${op} is not called when allowChaos is false (throws instead)`, async () => {
       fakeContainers = [seedContainer({ Id: "api1" })];
       const spy = makeDenylistClient();
-      // biome-ignore lint/suspicious/noExplicitAny: spy client satisfies DockerClient surface.
-      const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as any });
+        const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as InjectedDockerClient });
       await a.connect();
       const r = await a.start(mkSpec()); // no allowChaos
       spy._calls.length = 0; // reset after start
@@ -211,8 +215,7 @@ describe("docker/adapter/attach denylist", () => {
   test("container.stop is called when allowChaos is true", async () => {
     fakeContainers = [seedContainer({ Id: "api1" })];
     const spy = makeDenylistClient();
-    // biome-ignore lint/suspicious/noExplicitAny: spy client satisfies DockerClient surface.
-    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as any });
+    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as InjectedDockerClient });
     await a.connect();
     const spec = mkSpec({ adapterConfig: { compose: { attach: { allowChaos: true } } } });
     const r = await a.start(spec);
@@ -226,8 +229,7 @@ describe("docker/adapter/attach denylist", () => {
   test("container.start is permitted through guardAttachClient when allowChaos is true", async () => {
     fakeContainers = [seedContainer({ Id: "api1", status: "exited" })];
     const spy = makeDenylistClient();
-    // biome-ignore lint/suspicious/noExplicitAny: spy client satisfies DockerClient surface.
-    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as any });
+    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as InjectedDockerClient });
     await a.connect();
     const spec = mkSpec({ adapterConfig: { compose: { attach: { allowChaos: true } } } });
     // Seed a paused binding so re-start hits the resume path (which calls start).
@@ -246,7 +248,6 @@ describe("docker/adapter/attach denylist", () => {
     // Drive it through the fake client directly via the guard (no blocking expected).
     fakeContainers = [seedContainer({ Id: "api1" })];
     const spy = makeDenylistClient();
-    // biome-ignore lint/suspicious/noExplicitAny: spy client satisfies DockerClient surface.
     await spy.getContainer("api1").restart();
     expect(spy._calls).toContain("container.restart");
   });
@@ -254,7 +255,6 @@ describe("docker/adapter/attach denylist", () => {
   test("container.kill is permitted through guardAttachClient when allowChaos is true", async () => {
     fakeContainers = [seedContainer({ Id: "api1" })];
     const spy = makeDenylistClient();
-    // biome-ignore lint/suspicious/noExplicitAny: spy client satisfies DockerClient surface.
     await spy.getContainer("api1").kill();
     expect(spy._calls).toContain("container.kill");
   });
@@ -262,8 +262,7 @@ describe("docker/adapter/attach denylist", () => {
   test("read ops (listContainers, inspect, ping) pass through in attach mode", async () => {
     fakeContainers = [seedContainer({ Id: "api1" })];
     const spy = makeDenylistClient();
-    // biome-ignore lint/suspicious/noExplicitAny: spy client satisfies DockerClient surface.
-    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as any });
+    const a = createDockerAdapter({ sessionId: "s1", mode: "attach", project: "myproj", dockerClient: spy as InjectedDockerClient });
     await a.connect();
     const r = await a.start(mkSpec());
     // ping is called during connect; listContainers + inspect during start; inspect again during exists().

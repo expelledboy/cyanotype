@@ -99,7 +99,6 @@ export const nginxFake = (opts: NginxFakeOptions): FakeFactory => {
           return new Response(res.body, { status: res.status, headers: outHeaders });
         } catch {
           state.set(name, { deadUntil: Date.now() + FAIL_TIMEOUT_MS });
-          continue;
         }
       }
 

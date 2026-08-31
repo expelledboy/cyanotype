@@ -26,6 +26,13 @@ export type SharedOptions = {
   readonly getTargetEnv?: () => string;
   /** Framework-lifecycle observer, forwarded to the orchestrator. See `observer.ts`. */
   readonly observer?: Observer;
+  /**
+   * Ceiling on the total time spent probing readiness when attaching, across
+   * all components. Forwarded to the orchestrator; see
+   * `OrchestratorOptions.attachReadinessTimeoutMs` for why the aggregate is
+   * worth bounding separately from each Blueprint's own probe timeout.
+   */
+  readonly attachReadinessTimeoutMs?: number;
 };
 
 export type SharedHarness<R extends Record<string, Environment>> = {
@@ -181,6 +188,9 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
     sessionId: `${process.pid}-${Date.now()}`,
     envKey,
     ...(options.observer !== undefined ? { observer: options.observer } : {}),
+    ...(options.attachReadinessTimeoutMs !== undefined
+      ? { attachReadinessTimeoutMs: options.attachReadinessTimeoutMs }
+      : {}),
   });
 
   const doStart = async <K extends keyof R & string>(envKey: K): Promise<Runtime<R[K]>> => {

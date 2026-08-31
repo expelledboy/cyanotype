@@ -1,4 +1,4 @@
-const http = require("http");
+const http = require("node:http");
 const { createClient } = require("redis");
 
 const PORT = Number(process.env.PORT || 8080);
@@ -16,7 +16,7 @@ const replica = createClient({ url: `redis://${REPLICA_HOST}:${REPLICA_PORT}` })
 let primaryReady = false;
 let replicaReady = false;
 
-const log = (req, res, start, status) => {
+const log = (req, _res, start, status) => {
     const durationMs = Date.now() - start;
     const entry = {
         ts: new Date().toISOString(),
@@ -248,7 +248,7 @@ const server = http.createServer(async (req, res) => {
 
         notFound(res);
         log(req, res, start, 404);
-    } catch (err) {
+    } catch {
         json(res, 500, { error: "SERVER_ERROR" });
         log(req, res, start, 500);
     }

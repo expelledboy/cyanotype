@@ -244,7 +244,7 @@ const petstore = (config: PetstoreConfig) =>
 const redisPrimaryConfig = (): string =>
   `bind 0.0.0.0\nport 6379\nprotected-mode no\nappendonly yes\n`;
 
-const redisReplicaConfig = (primaryHostPort: number): string =>
+const redisReplicaConfig = (_primaryHostPort: number): string =>
   `bind 0.0.0.0\nport 6379\nprotected-mode no\nappendonly yes\nreplicaof ${REDIS_PRIMARY_DNS} ${REDIS_PRIMARY_WIRE_PORT}\n`;
 
 type RedisApi = {

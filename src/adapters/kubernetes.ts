@@ -204,7 +204,10 @@ const buildPodManifest = (
   return {
     apiVersion: "v1",
     kind: "Pod",
-    metadata: { name: podName, namespace, labels: { ...spec.labels, ...extraLabels } },
+    metadata: {
+      name: podName, namespace,
+      labels: { ...spec.labels, ...extraLabels, "cyanotype.substrate": "kubernetes" },
+    },
     spec: {
       restartPolicy: "Never",
       containers: [
@@ -235,7 +238,10 @@ const buildConfigMapManifest = (
   return {
     apiVersion: "v1",
     kind: "ConfigMap",
-    metadata: { name: cmName, namespace, labels: spec.labels },
+    metadata: {
+      name: cmName, namespace,
+      labels: { ...spec.labels, "cyanotype.substrate": "kubernetes" },
+    },
     data,
   };
 };
@@ -266,7 +272,10 @@ const buildServiceManifest = (
   return {
     apiVersion: "v1",
     kind: "Service",
-    metadata: { name: serviceName, namespace, labels: spec.labels },
+    metadata: {
+      name: serviceName, namespace,
+      labels: { ...spec.labels, "cyanotype.substrate": "kubernetes" },
+    },
     spec: {
       type: "ClusterIP",
       selector: { "cyanotype.podname": podName },
@@ -396,7 +405,6 @@ const startReconnectForward = async (
       if (state.stopped) break;
       if (!newPod) {
         state.stopped = true;
-        // biome-ignore lint/suspicious/noConsole: surface to test runner; throwing here is unobservable.
         console.error(JSON.stringify({ kind: "k8s_attach_reconnect_failed", service: serviceName, attempts }));
         break;
       }
@@ -477,7 +485,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
         try {
           for await (const line of handle.lines) {
             const m = line.match(/Forwarding from 127\.0\.0\.1:(\d+) ->/);
-            if (m && m[1]) {
+            if (m?.[1]) {
               clearTimeout(timer);
               resolve({ proc: handle.proc, localPort: Number(m[1]) });
               return;
@@ -497,7 +505,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
 
   const stop = async (containerId: string): Promise<void> => {
     const t = tracked.get(containerId);
-    if (t && t.attach && containerId.startsWith("attach:")) {
+    if (t?.attach && containerId.startsWith("attach:")) {
       if (!t.attach.allowChaos) {
         throw {
           kind: "chaos_unsupported_in_attach_mode",
@@ -510,7 +518,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       if (!deployment) {
         throw {
           kind: "k8s_attach_deployment_required",
-          message: "adapter.k8s.attach.deployment is required when allowChaos: true (service=" + t.attach.serviceName + ")",
+          message: `adapter.k8s.attach.deployment is required when allowChaos: true (service=${t.attach.serviceName})`,
           service: t.attach.serviceName,
           namespace: t.namespace,
         };
@@ -648,7 +656,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   };
 
   const start = async (spec: StartSpec): Promise<Started> => {
-    if (spec.labels["cyanotype"] !== "1") {
+    if (spec.labels.cyanotype !== "1") {
       throw { kind: "missing_cyanotype_label", labels: spec.labels };
     }
     if (mode === "attach") {
@@ -776,7 +784,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   const teardown = async (): Promise<void> => {
     for (const id of Array.from(known)) {
       const t = tracked.get(id);
-      if (t && t.attach) {
+      if (t?.attach) {
         for (const r of t.attach.reconnects) { try { r.kill(); } catch { /* ignore */ } }
         tracked.delete(id);
         globalTracked.delete(id);

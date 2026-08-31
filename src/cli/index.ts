@@ -62,5 +62,5 @@ if (sub === "compose") {
 }
 
 const json = JSON.stringify(derived, null, 2);
-if (out === "-") process.stdout.write(json + "\n");
-else writeFileSync(out!, json + "\n");
+if (out === "-") process.stdout.write(`${json}\n`);
+else writeFileSync(out!, `${json}\n`);
