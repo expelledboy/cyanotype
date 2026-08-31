@@ -14,6 +14,20 @@ export type EnvironmentMetadata = {
   readonly envKey: string;
   /** ISO 8601 timestamp. */
   readonly savedAt: string;
+  /**
+   * `Adapter.name` of the substrate that started these containers.
+   *
+   * Environment-level rather than per-component: `createSharedEnvs` takes one
+   * Adapter for the whole environment, and a composite adapter reports itself
+   * as a single name.
+   *
+   * OPTIONAL by design, exactly as `ComponentSnapshot.version` is: metadata
+   * written by an older Cyanotype omits it, and an absent value SKIPS the check
+   * rather than invalidating a healthy environment. When present and it differs
+   * from the current adapter, the container ids in this file belong to a
+   * substrate that cannot interpret them. See D-041.
+   */
+  readonly adapter?: string;
   readonly components: Readonly<Record<string, SlotSnapshot>>;
 };
 

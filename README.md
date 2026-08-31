@@ -330,8 +330,11 @@ just test-petstore-docker-attach
 # See docs/attach-mode.md for the developer-derive-script flow.
 just test-petstore-k8s-attach
 
-# Harness self-tests (no Docker images needed, in-memory adapter only)
-just test-core
+# Harness unit tests — pure, no Docker daemon, no cluster. Seconds.
+just test-unit
+
+# Adapter integration against real Docker and Kubernetes.
+just test-substrate
 
 # K8s adapter self-tests (deploy + attach)
 just test-adapter-k8s

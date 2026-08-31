@@ -57,6 +57,22 @@ export type OrchestratorOptions = {
    * deliberately and the wrong one on a shared CI runner.
    */
   readonly attachReadinessTimeoutMs?: number;
+  /**
+   * How component slots are brought up.
+   *
+   * `"sequential"` (default) starts one slot at a time in declaration order, so
+   * total startup is the SUM of every slot's readiness time. `"concurrent"`
+   * starts them all at once, making it the length of the longest dependency
+   * chain instead — readiness probes poll, so a component whose dependency is
+   * still coming up simply retries until it is there.
+   *
+   * Sequential remains the default because the ordering it provides, while
+   * incidental — it is object key order, not a declared dependency graph — is
+   * what existing environments have been running against. Opt in when your
+   * components tolerate starting before their dependencies, which is the normal
+   * case for anything that retries its connections.
+   */
+  readonly startup?: "sequential" | "concurrent";
 };
 
 type Emitter = ReturnType<typeof createEmitter>;
@@ -284,13 +300,25 @@ export const startEnvironment = async <E extends Environment>(
   };
 
   try {
-    for (const [name, slot] of Object.entries(env)) {
+    const startSlot = async ([name, slot]: [string, unknown]): Promise<void> => {
       if (isSingleBinding(slot)) {
         await startOne(name, undefined, slot);
-      } else {
-        const entries = Object.entries(slot as Record<string, AnyBinding>);
-        await Promise.all(entries.map(([instanceId, binding]) => startOne(name, instanceId, binding)));
+        return;
       }
+      const entries = Object.entries(slot as Record<string, AnyBinding>);
+      await Promise.all(entries.map(([instanceId, binding]) => startOne(name, instanceId, binding)));
+    };
+
+    const slots = Object.entries(env);
+    if (opts.startup === "concurrent") {
+      // allSettled, not all: a rejection from `all` would leave the other slots
+      // starting in the background with nobody holding their handles, which is
+      // how a failed start leaks containers.
+      const results = await Promise.allSettled(slots.map(startSlot));
+      const failed = results.find((r) => r.status === "rejected");
+      if (failed && failed.status === "rejected") throw failed.reason;
+    } else {
+      for (const entry of slots) await startSlot(entry);
     }
   } catch (e) {
     rootEmit({ type: "environment.failed", phase: "start", error: e });
@@ -538,6 +566,7 @@ const finalizeRuntime = <E extends Environment>(
       schemaVersion: 1,
       envKey: opts.envKey,
       savedAt: new Date().toISOString(),
+      adapter: opts.adapter.name,
       components: out,
     };
   };

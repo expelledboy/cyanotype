@@ -210,6 +210,9 @@ const petstoreBlueprint = defineBlueprint({
   readiness: {
     kind: "custom" as const,
     timeoutMs: 30_000,
+    // The default 1000ms interval rounds every startup up to the next whole
+    // second; the petstore waits on Redis, so it is the component that pays.
+    intervalMs: 250,
     check: async (i: PetstoreIface) => httpProbe(`http://127.0.0.1:${i.http.port ?? 0}/health`),
   },
   events: petstoreEvents,
@@ -359,6 +362,7 @@ const nginxBlueprint = defineBlueprint({
   readiness: {
     kind: "custom" as const,
     timeoutMs: 30_000,
+    intervalMs: 250,
     check: async (i: NginxIface) => httpProbe(`http://127.0.0.1:${i.http.port ?? 0}/v1/pets`),
   },
 });

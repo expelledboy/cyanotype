@@ -8,20 +8,47 @@ export type LoadStats     = { total: number; success: number; p95: number; avg: 
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Poll until truthy or `timeoutMs` elapses. Captured throws surface on timeout. */
+/**
+ * Poll until truthy or `timeoutMs` elapses.
+ *
+ * On timeout the thrown object carries the TRAJECTORY, not just the last error:
+ * how many attempts were made, how long it ran, and a sample of what the
+ * predicate actually observed over time. Without that, a timeout cannot
+ * distinguish "never came close" from "recovering, just not fast enough" —
+ * which is the difference between a broken component and a budget set too
+ * tight, and it is not recoverable after the fact from a one-line failure.
+ */
 export const waitFor = async <T>(
   predicate: () => Promise<T> | T,
   opts: { timeoutMs: number; intervalMs?: number; description?: string },
 ): Promise<T> => {
-  const deadline = Date.now() + opts.timeoutMs;
+  const started = Date.now();
+  const deadline = started + opts.timeoutMs;
   const interval = opts.intervalMs ?? 50;
+  const samples: string[] = [];
+  let attempts = 0;
   let lastError: unknown;
+
+  const note = (outcome: string): void => {
+    const line = `+${Date.now() - started}ms ${outcome}`;
+    samples.push(line);
+    // Keep the first few and the last few: the shape of the trajectory is in
+    // the ends, and an unbounded list would bury it.
+    if (samples.length > 12) samples.splice(4, 1);
+  };
+
   while (Date.now() < deadline) {
+    attempts += 1;
     try {
       const result = await predicate();
       if (result) return result;
+      note("falsy");
     } catch (e) {
       lastError = e;
+      const kind = (e as { kind?: string; status?: number })?.kind
+        ?? (e as { status?: number })?.status
+        ?? String(e).slice(0, 60);
+      note(`threw ${String(kind)}`);
     }
     await sleep(interval);
   }
@@ -29,6 +56,9 @@ export const waitFor = async <T>(
     kind: "wait_for_timeout",
     description: opts.description ?? "predicate did not become truthy",
     timeoutMs: opts.timeoutMs,
+    elapsedMs: Date.now() - started,
+    attempts,
+    samples,
     lastError,
   };
 };

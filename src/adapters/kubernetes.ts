@@ -257,9 +257,30 @@ const buildServiceName = (spec: StartSpec): string | null => {
   return sanitiseDnsLabel(raw);
 };
 
+/**
+ * Select the *binding*, not one pod. `cyanotype.component` + optional
+ * `cyanotype.instance`, scoped to the session, identify a slot across pod
+ * replacement, so the Service survives chaos and its endpoints follow the new
+ * pod automatically.
+ *
+ * WHY this matters beyond tidiness: selecting on a per-pod label forced chaos
+ * to delete the Service with the pod, which deletes the cluster-internal DNS
+ * name. Dependents then hit NXDOMAIN — a different, slower-to-recover failure
+ * than the connection-refused a real pod death produces, since resolvers cache
+ * negative answers and clients back off against a name that no longer exists.
+ * A dead pod behind a live Service is what production actually does. (D-039)
+ */
+const buildServiceSelector = (spec: StartSpec): Record<string, string> => {
+  const selector: Record<string, string> = {};
+  for (const key of ["cyanotype.component", "cyanotype.instance", "cyanotype.session"]) {
+    const value = spec.labels[key];
+    if (value !== undefined) selector[key] = value;
+  }
+  return selector;
+};
+
 const buildServiceManifest = (
   serviceName: string,
-  podName: string,
   spec: StartSpec,
   namespace: string,
 ): unknown => {
@@ -278,7 +299,7 @@ const buildServiceManifest = (
     },
     spec: {
       type: "ClusterIP",
-      selector: { "cyanotype.podname": podName },
+      selector: buildServiceSelector(spec),
       ports,
     },
   };
@@ -564,9 +585,11 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
         k.run(["delete", "pod", containerId, "--wait=false", "--ignore-not-found=true", "--grace-period=0", "--force"]),
         k.run(["delete", "configmap", `${containerId}-mounts`, "--wait=false", "--ignore-not-found=true"]),
       ];
-      if (t?.serviceName) {
-        tasks.push(k.run(["delete", "service", t.serviceName, "--wait=false", "--ignore-not-found=true"]));
-      }
+      // The Service is deliberately left in place. Deleting it would remove the
+      // cluster-internal DNS name along with the pod, which is a compound fault
+      // production never produces: a dead pod leaves a live Service with no
+      // endpoints, so dependents get connection-refused and recover promptly.
+      // Suite teardown removes it by label. (D-039)
       await Promise.all(tasks);
     }
   };
@@ -698,7 +721,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     // each Service points to exactly one Pod.
     const serviceName = Object.keys(spec.ports).length > 0 ? buildServiceName(spec) : null;
     if (serviceName) {
-      const svcManifest = buildServiceManifest(serviceName, podName, spec, namespace);
+      const svcManifest = buildServiceManifest(serviceName, spec, namespace);
       const svcRes = await k.run(["apply", "-f", "-"], { stdin: JSON.stringify(svcManifest) });
       if (svcRes.exit !== 0) {
         await k.run(["delete", "pod", podName, "--wait=false", "--ignore-not-found=true"]);

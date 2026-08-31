@@ -10,7 +10,9 @@ Read in this order if you have time: [`docs/axioms.md`](docs/axioms.md) → [`do
 bun install                    # one-time
 just lint                      # biome; warnings fail
 just typecheck                 # tsc --noEmit
-just test-core                 # harness functionality tests; Docker/K8s tests self-skip if unavailable
+just test-unit                 # pure suite; no Docker, no cluster — the inner loop
+just test-substrate            # adapter integration against real Docker + Kubernetes
+just test-core                 # both of the above
 just build-test-images         # one-time: builds petstore + redis-configurable
 just test                      # full suite against real Docker
 just clean-containers          # manual reset; not needed on the normal path
@@ -41,7 +43,8 @@ just pre-release               # the release bar; checks everything, tags nothin
 | kubectl subprocess wrapper (D-019) | `src/adapters/kubectl.ts` |
 | Public surface | `src/index.ts` (`.d.ts` is tsc-emitted at build) |
 | End-to-end smoke (runs across all five adapters) | `tests/petstore-example/` |
-| Harness self-tests | `tests/core/` |
+| Harness unit tests — pure, no substrate | `tests/core/` |
+| Adapter integration against real Docker / Kubernetes | `tests/substrate/` |
 | Test setup/teardown hooks | `tests/preload.ts` (registered in `bunfig.toml`) |
 | Release + leak gates, attach-suite chain | `scripts/` (one-line `just` recipes call these) |
 | K8s + Docker Compose attach walkthrough | `docs/attach-mode.md` |
@@ -54,7 +57,7 @@ just pre-release               # the release bar; checks everything, tags nothin
 - **`any`:** only in variance-widener positions — places where a specific generic (say `Binding<PetstoreBlueprint>`) must be assignable to a container that holds bindings of *any* Blueprint, and TypeScript's variance rules reject the narrower type. Use the existing `biome-ignore lint/suspicious/noExplicitAny` line with a one-line reason.
 - **Errors:** tagged objects, not classes. `throw { kind: "probe_timeout", lastError, elapsedMs }` — never `throw new Error(...)` except for "this should be impossible" cases.
 - **Tests:** `expect(...)` only. No `sleep(N)`-style waits — use `waitFor(predicate, opts)` from `tests/petstore-example/test-helpers.ts`.
-- **ADRs:** append-only. Never edit an existing entry in `docs/decisions.md`. If a decision is wrong, write a new ADR that retires it.
+- **ADRs:** append-only. Never edit an existing entry in `docs/decisions.md`. If a decision is wrong, write a new ADR that retires it. Note that ADRs written before the adapter tests moved out of `tests/core/` cite `tests/core/<name>.test.ts` paths for files that now live in `tests/substrate/` — the paths are historical, the decisions stand.
 
 ## Canonical pattern
 
@@ -86,8 +89,34 @@ Before declaring a change done:
 
 1. `just lint` — 0 diagnostics. `just lint-fix` applies the safe ones.
 2. `just typecheck` — 0 errors.
-3. `just test` — all green. If a test fails because of your change, fix the root cause rather than loosen the assertion.
+3. `just test-unit` — all green, and fast enough to run constantly. `just test` for the full sweep before you are done. If a test fails because of your change, fix the root cause rather than loosen the assertion.
 4. `just check-no-leaks` — silent, exit 0. If it names containers, the `bun:test` preload teardown is broken; fix that before anything else. It filters on `cyanotype.substrate=docker` rather than `cyanotype=1`, because on a runtime shared with Kubernetes (OrbStack, Docker Desktop) Pods carry the same `cyanotype` labels and would read as Docker leaks. An unreachable daemon fails it — a check that cannot look must not report success.
+
+## Chaos tests and the shared registry
+
+The cross-process registry (`createSharedEnvs`) is what lets parallel test
+workers share one environment: the first process starts the containers, every
+other one attaches. For read-only suites that is correct and fast.
+
+**Chaos suites are not safe to run concurrently against a shared environment.**
+`getTargetEnv` guards against attaching to the *wrong* environment; nothing
+guards against two processes attaching to the *right* one and both mutating it.
+Two runs of a chaos suite will stop and restart the same component underneath
+each other, and the failures look like flakiness in the system under test rather
+than interference between runs.
+
+If you are measuring or debugging a chaos suite, run one at a time, and do not
+delete the namespace or `.cyanotype-env` immediately before a run — a suite that
+starts into that churn produces failures that are yours, not the code's.
+
+**Clear `.cyanotype-env` when switching substrates.** Environment metadata is
+keyed by env key alone (`<stateDir>/<envKey>.json`) and records nothing about
+which substrate wrote it, so a Kubernetes run inherits the file a Compose-attach
+run left behind. Nothing breaks outright — `adapter.exists()` is asked about a
+container id from the other substrate, says no, and the environment is started
+fresh — but the invalidate-and-restart is slow and has been observed to produce
+spurious failures when suites run back to back. `rm -rf .cyanotype-env` between
+`CYANOTYPE_ADAPTER` changes.
 
 ## Releasing
 

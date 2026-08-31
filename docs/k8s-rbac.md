@@ -4,7 +4,7 @@ The K8s adapter (`src/adapters/kubernetes.ts`) drives `kubectl` via `Bun.spawn` 
 
 ## Deploy mode
 
-Creates Pods, ConfigMaps, and per-Pod Services (D-017 + D-020). Streams logs and exec'es `kubectl port-forward`. Force-deletes everything tagged with the session label on teardown.
+Creates Pods, ConfigMaps, and one Service per binding (D-017, D-020, D-039 — the Service selects the component/instance and survives pod replacement, so chaos deletes the Pod and leaves the Service standing). Streams logs and exec'es `kubectl port-forward`. Force-deletes everything tagged with the session label on teardown.
 
 | Resource | Verbs |
 |---|---|

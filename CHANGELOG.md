@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `SharedOptions.startup` / `OrchestratorOptions.startup` accept `"concurrent"`
+  to start every component slot at once instead of one at a time, making
+  startup the length of the longest dependency chain rather than the sum of
+  every slot's readiness. Defaults to `"sequential"`; opt in when your
+  components retry their dependencies. See D-040.
+
+- Persisted environment metadata records the substrate that produced it
+  (`EnvironmentMetadata.adapter`). Switching `CYANOTYPE_ADAPTER` between runs
+  used to leave a state file the next adapter could not interpret; it survived
+  only because `exists()` happened to reject the foreign container ids.
+  `startOrAttach` now rebuilds explicitly, and `attach` throws
+  `attach_substrate_mismatch` instead of the misleading `attach_dead_container`.
+  Optional and additive — metadata without the field is attached as before.
+  See D-041.
+
+### Changed
+- A component's Kubernetes `Service` now selects the binding
+  (`cyanotype.component` + `cyanotype.instance`, session-scoped) rather than a
+  single pod, so it survives pod replacement. `chaos.stop` consequently deletes
+  the pod and leaves the Service standing: a dead pod behind a live Service is
+  what production produces, and deleting the address alongside the process was
+  a compound fault that no real failure mode creates. See D-039.
+
+### Fixed
+- `waitFor` in the reference example records its trajectory — attempts, elapsed
+  time and a sample of what the predicate observed — so a timeout distinguishes
+  "never came close" from "recovering, just not inside the budget".
+- The reference fixture no longer trusts `REDIS_PRIMARY_PORT` blindly.
+  Kubernetes injects `<SERVICE_NAME>_PORT=tcp://<ip>:<port>` into every pod for
+  every Service in the namespace, so a `redis-primary` Service silently
+  replaced that variable with a URL; `Number()` yielded `NaN` and the container
+  died at module load. Anyone whose environment variable names collide with
+  Service names needs the same guard. See D-039.
+
+### Development
+- `tests/core/` is now the pure unit suite — no Docker, no cluster, ~6s — and
+  the six adapter-integration files moved to `tests/substrate/`. `just
+  test-unit` runs the fast suite for the inner loop, `just test-substrate` the
+  integration one, `just test-core` both. `npm test` and `prepublishOnly` run
+  both, so continuous integration coverage is unchanged.
+
 ## [0.6.0] - 2026-08-31
 
 Contract restoration, plus the first multi-substrate Environment.

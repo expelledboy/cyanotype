@@ -33,6 +33,11 @@ export type SharedOptions = {
    * worth bounding separately from each Blueprint's own probe timeout.
    */
   readonly attachReadinessTimeoutMs?: number;
+  /**
+   * Forwarded to the orchestrator. `"concurrent"` starts every component slot
+   * at once instead of one at a time; see `OrchestratorOptions.startup`.
+   */
+  readonly startup?: "sequential" | "concurrent";
 };
 
 export type SharedHarness<R extends Record<string, Environment>> = {
@@ -127,6 +132,15 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
    * absent stored `version` skips the check — metadata written before the
    * field existed never false-invalidates.
    */
+  /**
+   * The stored environment belongs to a different substrate.
+   *
+   * Absent `adapter` means metadata written before this field existed — skip,
+   * never false-invalidate (same rule `version` follows, D-027).
+   */
+  const isSubstrateMismatch = (meta: EnvironmentMetadata): boolean =>
+    meta.adapter !== undefined && meta.adapter !== options.adapter.name;
+
   const isVersionStale = <K extends keyof R & string>(envKey: K, meta: EnvironmentMetadata): boolean => {
     const env = registry[envKey] as Environment;
     for (const [componentName, slot] of Object.entries(meta.components)) {
@@ -191,6 +205,7 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
     ...(options.attachReadinessTimeoutMs !== undefined
       ? { attachReadinessTimeoutMs: options.attachReadinessTimeoutMs }
       : {}),
+    ...(options.startup !== undefined ? { startup: options.startup } : {}),
   });
 
   const doStart = async <K extends keyof R & string>(envKey: K): Promise<Runtime<R[K]>> => {
@@ -223,6 +238,18 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
     const meta = readMetadataMaybe(envKey);
     if (meta === null) throw { kind: "attach_no_metadata", envKey };
     if (meta.state !== "running") throw { kind: "attach_state_not_running", envKey, state: meta.state };
+    // Before `exists()`, deliberately. Asking this adapter about a container id
+    // from another substrate is meaningless, and the `false` it returns would
+    // surface as `attach_dead_container` — a confident, wrong diagnosis that
+    // sends the reader looking for a rebuilt stack.
+    if (isSubstrateMismatch(meta)) {
+      throw {
+        kind: "attach_substrate_mismatch",
+        envKey,
+        expected: options.adapter.name,
+        found: meta.adapter,
+      };
+    }
     const sample = pickSampleContainerId(meta);
     if (sample && !(await options.adapter.exists(sample))) {
       throw { kind: "attach_dead_container", envKey };
@@ -253,6 +280,16 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
         const ageMs = Date.now() - meta.startedAt;
         if (ageMs > STALE_MS) { deleteFile(envKey); continue; }
         await sleep(POLL_MS);
+        continue;
+      }
+      // Substrate switch (a changed CYANOTYPE_ADAPTER, typically). Rebuild
+      // rather than error — D-027's rule for `startOrAttach`. Unlike a version
+      // bump, do NOT call stopAllInMeta first: those containers belong to
+      // another substrate and this adapter cannot stop them. They are left to
+      // their own substrate's teardown, which is also what happened before this
+      // check existed.
+      if (isSubstrateMismatch(meta)) {
+        deleteFile(envKey);
         continue;
       }
       const sample = pickSampleContainerId(meta);

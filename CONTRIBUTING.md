@@ -31,7 +31,13 @@ Switch to a semver pin once your library change has landed in a published releas
 # Type-check.
 just typecheck
 
-# Harness functionality tests — exercises adapters/orchestrator directly, not via the example; Docker/K8s tests self-skip when unavailable.
+# Pure unit suite — no Docker, no cluster. Seconds, not minutes; run it constantly.
+just test-unit
+
+# Adapter integration against real Docker and Kubernetes.
+just test-substrate
+
+# Both harness suites.
 just test-core
 
 # Full suite. Teardown runs automatically; back-to-back `bun test` invocations
@@ -76,10 +82,10 @@ preload = ["./tests/preload.ts"]
 ### Code changes
 
 - Follow `CONVENTIONS.md`.
-- Every implementation module has a test file in `tests/core/<module>.test.ts`. Add tests for new behaviour there.
+- Every implementation module has a test file: `tests/core/<module>.test.ts` for anything testable without a substrate, `tests/substrate/<module>.test.ts` for adapter behaviour that needs a real Docker daemon or cluster. Add tests for new behaviour there.
 - The end-to-end example in `tests/petstore-example/` is the integration smoke; if your change affects orchestration or the Adapter SPI, it should still pass.
 - `just typecheck` must be clean.
-- `just test-core` must be clean. Then `just test` against real Docker.
+- `just test-unit` must be clean — run it constantly, it takes seconds. Then `just test-core` (adds substrate integration) and `just test` against real Docker.
 
 ### Architectural changes
 

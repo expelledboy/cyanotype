@@ -112,6 +112,10 @@ Six user-facing entities. Each maps to a TypeScript type. Inference helpers (`de
     deploy mode)       D-019;             real ports)        attach mode;
                        deploy +                              D-025, D-026)
                        attach modes)
+
+   Composite (D-038) wraps any of the above and routes per component or
+   per instance, so one Environment can span substrates — the component
+   under test real, its dependencies simulated.
 ```
 
 ## The supporting types
@@ -215,7 +219,9 @@ See [D-022](decisions.md#d-022-adapter-specific-binding-config-via-typescript-de
    ─ winner: start containers, write metadata, rewrite state to "running"
    ─ loser:  poll metadata until state === "running", then attach
    ─ stale "starting" file (> 90 s) → reclaim
+   ─ different substrate (metadata.adapter !== adapter.name) → start fresh (D-041)
    ─ dead containers (adapter.exists === false) → start fresh
+   ─ bumped Binding.version → stop those containers, then start fresh (D-027)
    ─ runs Blueprint readiness probes
    ─ wires log streams → binding.logParser → typed event buses
    ─ returns a Runtime<E> handle (typed from the literal env type)
@@ -272,6 +278,14 @@ Substrate-internal events (`image.*`, `container.creating/created/starting/start
 flow through an optional `emit` parameter on `Adapter.start`; everything else
 the orchestrator emits directly. The SPI stays at seven methods (D-004) — `emit`
 is a trailing optional argument.
+
+**Emitting them is optional, and only the Docker adapter does today.** `emit` is
+an optional parameter, so an adapter that ignores it still satisfies the SPI —
+the Kubernetes adapter's `start` does not declare it and emits nothing. Under
+Kubernetes a reporter therefore sees the orchestrator-level events only
+(`probe.*`, `environment.*`, `chaos.*`) and no image or container phases. That
+is a real gap rather than a design choice: it means the stream cannot answer
+"where did the time go" on the substrate whose provisioning is slowest.
 
 A throwing reporter is isolated inside `createEmitter` — telemetry never breaks
 the thing it observes. Cyanotype ships one reference consumer,
@@ -369,6 +383,7 @@ The `ChaosArgs<E, K>` conditional discriminates single-instance from multi-insta
 - Chaos primitives at the container level
 - Mount-as-content config injection
 - Per-Binding adapter-specific configuration via TypeScript declaration merging (D-022)
+- One Environment spanning several substrates, routed by component and instance (D-038)
 - Attach to pre-deployed substrates with verified non-destructive guarantees, plus an opt-in for real chaos — Kubernetes (D-018, D-022, D-023) and Docker Compose (D-025, D-026)
 
 **What's out of scope (would require a new ADR to add):**

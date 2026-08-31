@@ -42,6 +42,9 @@
 - [D-036 — Attach runs the Blueprint readiness probe; `exists()` is not readiness](#d-036-attach-runs-the-blueprint-readiness-probe-exists-is-not-readiness)
 - [D-037 — Event subscription starts at the current stream position; checkpoints are monotonic](#d-037-event-subscription-starts-at-the-current-stream-position-checkpoints-are-monotonic)
 - [D-038 — Composite adapter: one Environment, several substrates, routed by component and instance](#d-038-composite-adapter-one-environment-several-substrates-routed-by-component-and-instance)
+- [D-039 — A component's Service selects the binding, not the pod; chaos kills the pod, not the address](#d-039-a-components-service-selects-the-binding-not-the-pod-chaos-kills-the-pod-not-the-address)
+- [D-040 — Component slots may start concurrently; readiness probes are the synchronisation](#d-040-component-slots-may-start-concurrently-readiness-probes-are-the-synchronisation)
+- [D-041 — Persisted environment metadata records its substrate; a mismatch rebuilds or refuses, never attaches](#d-041-persisted-environment-metadata-records-its-substrate-a-mismatch-rebuilds-or-refuses-never-attaches)
 
 ---
 
@@ -772,3 +775,70 @@ The obvious routing key — the Binding's `image` — is wrong. The same require
 - Route keys may not contain the `::` separator; construction rejects them, so an id can always be split unambiguously.
 - Not addressed here: verifying up front that every component routed to the in-memory substrate has a registered factory. The composite sees a `StartSpec` only at start time and never sees the Environment, so a preflight needs the Environment passed separately. Today a missing factory surfaces as `image_not_registered` when that component starts. Worth building once a consumer asks; not worth guessing at the shape before then.
 - This is additive. An Environment with a single adapter is unaffected, and no existing metadata, Binding, or test changes.
+
+## D-039. A component's Service selects the binding, not the pod; chaos kills the pod, not the address
+
+**Context:** In Kubernetes deploy mode each component gets a per-Pod `Service` (D-020) whose selector was the unique `cyanotype.podname` label. Because a chaos restart generates a fresh pod name, that selector could never match the replacement, so `chaos.stop` deleted the Service along with the pod and `chaos.start` recreated it.
+
+That makes the injected fault a compound one: the process dies **and** its cluster-internal DNS name stops existing. Those are independent faults, so an observed failure cannot be attributed to either. It is also not a fault production produces — when a pod dies its Service remains and simply loses an endpoint. Jepsen's entire built-in nemesis vocabulary is partitions, process pause/kill, clock skew and file corruption; nothing in it removes service discovery, because removing the address is not how machines fail.
+
+The measured consequence was a slower and differently-shaped recovery. Dependents resolving a deleted name get NXDOMAIN rather than connection-refused, and resolvers cache negative answers.
+
+**Decision:** The Service selector is `cyanotype.component` plus `cyanotype.instance` (when present), scoped by `cyanotype.session` — the identity of the *binding*, which is stable across pod replacement. Endpoints then follow a new pod automatically, so `chaos.stop` deletes the pod and its ConfigMap and deliberately leaves the Service standing. Suite teardown still removes it by label.
+
+**This retires the Selector bullet of D-020**, which chose the per-Pod label deliberately and gave a reason: a 1:1 Service avoids "cross-instance traffic when two Pods share `cyanotype.component` + `cyanotype.instance` — e.g. mid-chaos when an old Pod is terminating while the new one is starting". That concern is real and is not dismissed. It is accepted because:
+
+- Kubernetes Endpoints include only Pods that are **Ready**. A terminating Pod is marked NotReady and drops out of the endpoint set before it stops answering, so the overlap window requires two simultaneously-Ready Pods, not merely two existing ones.
+- `chaos.stop` force-deletes with `--grace-period=0` and `chaos.start` then creates a new Pod and waits for Ready before the caller proceeds. The old Pod's deletion is issued before the new Pod exists, so the orderings that would produce two Ready Pods are narrow.
+- The selector is session-scoped, so two concurrent test sessions in one namespace cannot select each other's Pods regardless.
+- The failure it replaces was worse and was not a window but a certainty: deleting the Service deleted the cluster-internal DNS name, which is a fault no real failure mode produces and which measurably changed how dependents recovered.
+
+A residual window remains where a not-yet-removed Ready Pod and a new Ready Pod both match. If that ever produces an observable defect, the fix is to have `chaos.stop` wait for endpoint removal before returning rather than to restore the per-Pod selector, because the per-Pod selector is what forced the Service deletion in the first place.
+
+**Consequences:**
+- `chaos.stop` in deploy mode is now a clean node kill. Dependents see a live Service with no endpoints and get connection-refused, which is what a dead pod produces in production.
+- The `cyanotype.podname` label remains on the pod. It is no longer a selector, but it still identifies a specific pod for diagnosis.
+- **This did not measurably change recovery time**, and it is worth recording that it was expected to. Instrumented before and after, dependents became usable 4356ms and 4303ms after `chaos.start` returned — unchanged. The recovery cost was the Redis client's own reconnect backoff, not DNS. The change is justified on fault-model correctness alone; anyone revisiting it for performance reasons should know that measurement already happened.
+- Services now persist for the life of a session rather than being deleted and recreated around every chaos cycle. That widens the window for a Kubernetes footgun worth stating plainly: for every Service in a namespace, Kubernetes injects `<SERVICE_NAME>_PORT=tcp://<ip>:<port>` into every pod started afterwards. A workload that reads a same-named variable receives a URL where it expected a value. The reference fixture reads `REDIS_PRIMARY_PORT`; with a `redis-primary` Service present it got `tcp://192.168.194.219:6379`, `Number()` produced `NaN`, the Redis URL became `redis://host:NaN`, and the container exited at module load before it ever listened — which `restartPolicy: Never` then turns into a pod that sits Failed until the readiness probe gives up. The fixture now takes that variable only when it parses as a port; consumers whose environment variable names collide with Service names need the same defence. This hazard predates the change and is not caused by it, but the change makes encountering it more likely.
+- Two concurrent sessions in one namespace still collide on the Service *name*, which was true before this change and is unaddressed.
+
+## D-040. Component slots may start concurrently; readiness probes are the synchronisation
+
+**Context:** `startEnvironment` started component slots strictly one at a time, in `Object.entries(env)` order, awaiting each slot's readiness before beginning the next. Total startup was therefore the SUM of every slot's readiness time. Measured on the six-component reference example under Kubernetes: redis 1.6s + petstore 6.1s + nginx 0.9s ≈ 8.7s.
+
+The ordering this provided was never a contract. Cyanotype has no dependency graph; the order was whichever order the keys happened to be declared in. Components that depend on each other already tolerate arriving early, because readiness probes poll — a component whose dependency is still coming up simply retries.
+
+**Decision:** `OrchestratorOptions.startup` (forwarded from `SharedOptions`) accepts `"sequential"` or `"concurrent"`. Sequential remains the default. Concurrent starts every slot at once, making startup the length of the longest dependency chain rather than the sum of all of them.
+
+- Concurrent uses `Promise.allSettled` and rethrows the first rejection, rather than `Promise.all`. A rejection from `all` would leave the remaining slots starting in the background with nobody holding their handles, which is how a failed start leaks containers.
+- The default stays sequential because existing environments have been running against the incidental ordering, and a silent change to provisioning order is not something to impose on a consumer mid-release.
+
+**Consequences:**
+- The reference example opts in. Measured on Kubernetes over five runs of each mode, environment startup is 7.2s concurrent (7.0/7.0/6.8/7.3/7.7) against 9.1s sequential (9.6/10.3/7.4/8.3/9.9) — roughly 2s faster, and with visibly tighter spread, since sequential adds each slot's variance rather than overlapping it.
+- The gain is smaller than the arithmetic suggests, because removing the serialisation exposes the dependency chain underneath. What remains is pod scheduling (~1.7-2s, all six concurrently) plus a cascade — Redis, then the petstores that connect to it, then nginx which proxies to them — and per-component `kubectl port-forward` setup, which the adapter must complete before it can probe. No single component reliably dominates; which one finishes last varies between runs.
+- Application boot time is NOT a meaningful factor here, contrary to what the shape of the numbers suggests. Measured inside the reference image, `require("redis")` costs 89ms and the HTTP server binds immediately. Anyone optimising this should start with the substrate and the adapter's port-forward setup, not the fixture.
+- Opting in is only safe for components that retry their dependencies. Anything that exits when a dependency is absent — with `restartPolicy: Never`, a pod that exits stays exited — should stay sequential.
+- `environment.component_ready` counts may interleave under concurrency. The totals are correct; the ordering of the intermediate `done` values is not meaningful.
+
+## D-041. Persisted environment metadata records its substrate; a mismatch rebuilds or refuses, never attaches
+
+**Context:** `<stateDir>/<envKey>.json` is keyed by env key alone and recorded nothing about which substrate produced it. Container ids are only meaningful to the adapter that issued them, so flipping `CYANOTYPE_ADAPTER` between runs — the ordinary developer loop, and what the reference example's own `just` recipes do — leaves behind a file the next adapter cannot interpret.
+
+It nevertheless appeared to work, by accident. `adapter.exists()` was handed a foreign container id, returned `false`, and the existing dead-container path rebuilt. Three problems with relying on that:
+
+1. It is not guaranteed. The Adapter SPI does not require `exists()` to return `false` rather than throw, or rather than matching, for an id shape the substrate never issued. A permissive adapter attaches to another substrate's environment.
+2. In pure `attach` mode it surfaces as `attach_dead_container`, which `docs/attach-mode.md` explains as "the underlying stack was rebuilt outside Cyanotype's control" — a confident and wrong diagnosis.
+3. Silent identity drift is the failure mode the axioms exist to prevent (A1, A2).
+
+**Decision:** `EnvironmentMetadata` gains an optional `adapter?: string`, the `Adapter.name` of the substrate that started the environment. The behaviour on mismatch follows D-027's split exactly, because this is the same problem — a persisted environment that no longer matches current intent — with a second cache key:
+
+- **`startOrAttach`**: delete the metadata and re-race the ensure loop. Not an error. Erroring here would break the ordinary flow of changing substrate between runs.
+- **`attach`** (`freshAttach`): throw `{ kind: "attach_substrate_mismatch", envKey, expected, found }`, alongside `attach_version_stale` and `attach_dead_container`. There is nothing to rebuild in that mode.
+
+Environment-level, not per-component: `createSharedEnvs` takes one Adapter for the whole environment, and a composite adapter (D-038) reports itself under a single name.
+
+**Consequences:**
+- Optional and additive, so `schemaVersion` stays `1`. Metadata written before this field omits it, and an absent value skips the check — it can never false-invalidate a healthy environment. Same rule `ComponentSnapshot.version` follows.
+- The mismatch check runs BEFORE `exists()` in both paths. Asking an adapter about a foreign container id is meaningless, and letting its `false` answer flow onward is what produced the misleading `attach_dead_container`.
+- Unlike a version bump, `startOrAttach` does NOT call `stopAllInMeta` before rebuilding. Those containers belong to another substrate and this adapter cannot stop them; they are left to their own substrate's teardown and leak gate. Switching substrate therefore orphans the previous substrate's containers — which is exactly what happened before this decision, so it is not a regression, but it is a reason to run `just clean-containers` when moving between substrates.
+- A composite adapter's name encodes its members (`composite(memory+docker)`), so re-pointing a route changes the name and invalidates the environment. That is correct — the containers really are on different substrates — but it means composite configurations are not interchangeable across a persisted environment.

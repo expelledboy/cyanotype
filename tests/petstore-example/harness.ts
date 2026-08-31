@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import {
   createSharedEnvs,
   createDockerAdapter,
+  createConsoleReporter,
 } from "../../src/index";
 import { createInMemoryAdapter, type FakeFactory } from "../../src/adapters/memory";
 import { createK8sAdapter } from "../../src/adapters/kubernetes";
@@ -83,6 +84,11 @@ const adapter = adapterType === "docker"
     })
   : (() => { throw { kind: "unknown_adapter", value: adapterType }; })();
 
+// CYANOTYPE_REPORTER=1 renders the framework lifecycle (probe timings, chaos
+// phases, per-component readiness) to stderr. Off by default so test output
+// stays clean; invaluable when a run fails and you need the timeline.
+const observer = process.env.CYANOTYPE_REPORTER === "1" ? createConsoleReporter() : undefined;
+
 export const shared = createSharedEnvs(
   { "petstore-sla": env },
   {
@@ -90,5 +96,10 @@ export const shared = createSharedEnvs(
     stateDir: ".cyanotype-env",
     mode:     "startOrAttach",
     getTargetEnv: () => "petstore-sla",
+    // Every component here retries its dependencies (petstore reconnects to
+    // Redis, nginx proxies to petstores that may not be up yet), so there is
+    // nothing to gain from bringing them up one at a time.
+    startup: "concurrent",
+    ...(observer ? { observer } : {}),
   },
 );

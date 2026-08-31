@@ -5,13 +5,37 @@ const PORT = Number(process.env.PORT || 8080);
 const BASE_PATH = process.env.BASE_PATH || "/v1";
 const INSTANCE_ID = process.env.INSTANCE_ID || "unknown";
 
-const PRIMARY_HOST = process.env.REDIS_PRIMARY_HOST || "host.docker.internal";
-const PRIMARY_PORT = Number(process.env.REDIS_PRIMARY_PORT || 6379);
-const REPLICA_HOST = process.env.REDIS_REPLICA_HOST || PRIMARY_HOST;
-const REPLICA_PORT = Number(process.env.REDIS_REPLICA_PORT || PRIMARY_PORT);
+// Kubernetes injects `<SERVICE_NAME>_PORT=tcp://<ip>:<port>` into every pod in
+// a namespace, for every Service in it. A Service named `redis-primary`
+// therefore sets REDIS_PRIMARY_PORT to a URL, clobbering the numeric value this
+// expects — `Number()` yields NaN, the client URL becomes `redis://host:NaN`,
+// and the process dies at module load before the server ever listens. Take the
+// variable only when it actually parses as a port.
+const portEnv = (name, fallback) => {
+    const raw = process.env[name];
+    const n = Number(raw);
+    return raw !== undefined && Number.isInteger(n) && n > 0 && n < 65536 ? n : fallback;
+};
 
-const primary = createClient({ url: `redis://${PRIMARY_HOST}:${PRIMARY_PORT}` });
-const replica = createClient({ url: `redis://${REPLICA_HOST}:${REPLICA_PORT}` });
+const PRIMARY_HOST = process.env.REDIS_PRIMARY_HOST || "host.docker.internal";
+const PRIMARY_PORT = portEnv("REDIS_PRIMARY_PORT", 6379);
+const REPLICA_HOST = process.env.REDIS_REPLICA_HOST || PRIMARY_HOST;
+const REPLICA_PORT = portEnv("REDIS_REPLICA_PORT", PRIMARY_PORT);
+
+// Reconnect fast. node-redis defaults to `retries * 50` capped at 500ms, which
+// is polite for a production client and pure dead time for a fixture whose
+// whole job is to demonstrate failover against a Redis on the same cluster.
+// This tunes how quickly the CLIENT notices recovery; it does not change which
+// failover path the tests exercise.
+//
+// Each client gets its OWN socket object: node-redis merges the parsed URL's
+// host and port into the options it is handed, so sharing one literal between
+// two clients makes the second overwrite the first's target — both then talk to
+// the same server, and every write lands on the read-only replica.
+const fastReconnect = () => ({ reconnectStrategy: () => 100 });
+
+const primary = createClient({ url: `redis://${PRIMARY_HOST}:${PRIMARY_PORT}`, socket: fastReconnect() });
+const replica = createClient({ url: `redis://${REPLICA_HOST}:${REPLICA_PORT}`, socket: fastReconnect() });
 
 let primaryReady = false;
 let replicaReady = false;
@@ -62,8 +86,13 @@ const parseBody = (req) =>
         req.on("error", reject);
     });
 
+// Flat, short retry. This runs against a Redis on the same host or cluster, so
+// there is nothing to protect with exponential backoff — and the old 2s cap
+// meant a single attempt landing just before Redis was reachable cost two
+// seconds of startup on every run, on every substrate.
+const RETRY_MS = 250;
+
 const connectWithRetry = async (client, label) => {
-    let delayMs = 200;
     while (true) {
         try {
             await client.connect();
@@ -71,8 +100,7 @@ const connectWithRetry = async (client, label) => {
             return;
         } catch (err) {
             console.log(JSON.stringify({ ts: new Date().toISOString(), event: "redis_connect_failed", label, error: String(err) }));
-            await new Promise((r) => setTimeout(r, delayMs));
-            delayMs = Math.min(delayMs * 2, 2000);
+            await new Promise((r) => setTimeout(r, RETRY_MS));
         }
     }
 };

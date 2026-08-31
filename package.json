@@ -52,8 +52,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome lint --error-on-warnings",
     "build": "tsc -p tsconfig.build.json",
-    "test": "bun test tests/core/",
-    "prepublishOnly": "bun run lint && bun run typecheck && bun run build && bun test tests/core/"
+    "test": "bun test tests/core/ tests/substrate/",
+    "prepublishOnly": "bun run lint && bun run typecheck && bun run build && bun test tests/core/ tests/substrate/"
   },
   "dependencies": {
     "yaml": "^2.9.0",
