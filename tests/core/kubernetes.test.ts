@@ -10,7 +10,7 @@ import net from "node:net";
 import { createK8sAdapter } from "../../src/adapters/kubernetes";
 import type { Adapter, StartSpec } from "../../src/adapter";
 
-const CONTEXT = process.env["CYANOTYPE_K8S_CONTEXT"] ?? "orbstack";
+const CONTEXT = process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack";
 const NAMESPACE = "cyanotype-tests";
 const IMAGE = "cyanotype/petstore-sla:latest";
 const CONTAINER_PORT = "8080";
@@ -74,7 +74,7 @@ describe("kubernetes/adapter", () => {
 
   test("connect creates namespace if missing", async () => {
     if (!HAS_K8S) return;
-    const sid = "ns-" + Math.random().toString(36).slice(2, 8);
+    const sid = `ns-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
     const proc = Bun.spawn(
@@ -88,7 +88,7 @@ describe("kubernetes/adapter", () => {
 
   test("start returns Started with reachable port", async () => {
     if (!HAS_K8S) return;
-    const sid = "start-" + Math.random().toString(36).slice(2, 8);
+    const sid = `start-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
     const r = await adapter.start(mkSpec(sid));
@@ -101,7 +101,7 @@ describe("kubernetes/adapter", () => {
 
   test("exists returns true for started, false for never-existed", async () => {
     if (!HAS_K8S) return;
-    const sid = "exists-" + Math.random().toString(36).slice(2, 8);
+    const sid = `exists-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
     const r = await adapter.start(mkSpec(sid));
@@ -112,7 +112,7 @@ describe("kubernetes/adapter", () => {
 
   test("logs yields at least one line", async () => {
     if (!HAS_K8S) return;
-    const sid = "logs-" + Math.random().toString(36).slice(2, 8);
+    const sid = `logs-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
     const r = await adapter.start(mkSpec(sid));
@@ -141,7 +141,7 @@ describe("kubernetes/adapter", () => {
 
   test("stop removes the pod and exists returns false", async () => {
     if (!HAS_K8S) return;
-    const sid = "stop-" + Math.random().toString(36).slice(2, 8);
+    const sid = `stop-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
     const r = await adapter.start(mkSpec(sid));
@@ -154,7 +154,7 @@ describe("kubernetes/adapter", () => {
 
   test("teardown removes all session-labelled pods/configmaps", async () => {
     if (!HAS_K8S) return;
-    const sid = "td-" + Math.random().toString(36).slice(2, 8);
+    const sid = `td-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
     const r = await adapter.start(mkSpec(sid, {

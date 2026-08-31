@@ -39,5 +39,5 @@ const derived: Record<string, unknown> = args.compose
   : deriveK8s(args.k8s!);
 
 const json = JSON.stringify(derived, null, 2);
-if (args.out === "-") process.stdout.write(json + "\n");
-else writeFileSync(args.out, json + "\n");
+if (args.out === "-") process.stdout.write(`${json}\n`);
+else writeFileSync(args.out, `${json}\n`);

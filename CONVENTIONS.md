@@ -11,7 +11,7 @@
 
 ## TypeScript
 
-- **`any` is forbidden** except in variance-widener positions — where a specific generic must be assignable to a container holding *any* instantiation of it, and TypeScript's variance rules reject the narrower type. When used, add a `biome-ignore` line explaining why.
+- **`any` is forbidden** except in variance-widener positions — where a specific generic must be assignable to a container holding *any* instantiation of it, and TypeScript's variance rules reject the narrower type. When used, add a `biome-ignore` line explaining why. `just lint` enforces this, and also reports suppression comments that no longer suppress anything, so a stale `biome-ignore` fails the build rather than lingering.
 - **`strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes` are on.** Respect them. No `// @ts-ignore`, no `as any` shortcuts.
 - **Errors are plain tagged objects**, not classes: `throw { kind: "probe_timeout", lastError, elapsedMs }`. Consumers `catch (e)` and check `e.kind`. This round-trips through JSON cleanly and avoids `instanceof` cross-realm pitfalls.
 - **`AbortSignal` over flags** for cancellation. `AsyncIterable` over manual iterators where possible.

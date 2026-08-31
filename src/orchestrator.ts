@@ -275,9 +275,10 @@ export const startEnvironment = async <E extends Environment>(
     }
     finalizeApi(state);
     components.set(stateKey(componentName, instanceId), state);
+    done += 1;
     compEmit({
       type: "environment.component_ready",
-      done: (done += 1), total, durationMs: Date.now() - compStart,
+      done, total, durationMs: Date.now() - compStart,
     });
     return state;
   };

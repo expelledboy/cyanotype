@@ -18,6 +18,16 @@ default:
 typecheck:
     bun run typecheck
 
+# Lint src/ and tests/. Warnings fail: a rule worth enabling is worth enforcing.
+[group('general')]
+lint:
+    bun run lint
+
+# Apply the lint fixes Biome considers safe.
+[group('general')]
+lint-fix:
+    bunx biome lint --write
+
 # Run the whole test suite.
 [group('general')]
 test:

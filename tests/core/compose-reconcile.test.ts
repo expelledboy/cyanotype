@@ -4,7 +4,7 @@
  * path self-skips when no Docker daemon is reachable.
  */
 
-import { describe, test, expect, beforeAll, afterEach } from "bun:test";
+import { describe, test, expect, beforeAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

@@ -132,7 +132,7 @@ describe("orchestrator/startEnvironment", () => {
       adapter, sessionId: "s1", envKey: "test",
     });
     const first = r.snapshot().components[0];
-    if (!first || !first.containerId) throw new Error("no containerId");
+    if (!first?.containerId) throw new Error("no containerId");
     const containerId = first.containerId;
     await r.stop();
     runtime = undefined;

@@ -66,7 +66,6 @@ const createRecordingAdapter = (initial?: Record<string, boolean>): RecordingAda
       stops.push(containerId);
       live.delete(containerId);
     },
-    // biome-ignore lint/correctness/useYield: empty stream
     logs: async function* () { /* no log lines */ },
     exists: async (containerId: string) => live.has(containerId),
   };
@@ -273,7 +272,7 @@ describe("orchestrator/owned-lifecycle", () => {
     adapter.stops.length = 0;
 
     const sharedV2 = createSharedEnvs({ main: envV("v2") }, { adapter, stateDir });
-    const r2 = await sharedV2.ensure("main");
+    await sharedV2.ensure("main");
 
     // The stale-invalidation path must have stopped only the owned one.
     expect(adapter.stops).toContain(ownedId as string);

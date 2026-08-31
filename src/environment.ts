@@ -52,7 +52,6 @@ export const RESERVED_COMPONENT_NAMES = ["start", "stop", "snapshot", "metadata"
  * (interior) — CONVENTIONS.md "parse at boundaries, trust internally".
  */
 export const createEnvironment = <
-  // biome-ignore lint/suspicious/noExplicitAny: const-modifier needs widest constraint to preserve literals
   const E extends Environment,
 >(
   env: E,

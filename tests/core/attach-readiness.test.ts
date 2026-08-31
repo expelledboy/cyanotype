@@ -40,7 +40,6 @@ const createStubAdapter = (): Adapter => {
       return { containerId, ports, owned: true };
     },
     stop: async (containerId: string) => { live.delete(containerId); },
-    // biome-ignore lint/correctness/useYield: empty stream
     logs: async function* () { /* no log lines */ },
     exists: async (containerId: string) => live.has(containerId),
   };

@@ -18,6 +18,12 @@ import {
 } from "../../src/index";
 import { createInMemoryAdapter } from "../../src/adapters/memory";
 
+// Every Environment below is built from one shared Binding, so the precise
+// Runtime shape is not inferable and the tests index it by component and
+// instance. One documented escape beats six bare casts.
+// biome-ignore lint/suspicious/noExplicitAny: see above
+type TestRuntime = any;
+
 const routes = {
   whoami: { method: "GET", path: "/whoami", response: z.object({ substrate: z.string() }) },
 } as const satisfies HttpRouteMap;
@@ -68,7 +74,6 @@ const createRealishAdapter = (): Adapter & { readonly started: string[] } => {
       return { containerId: id, ports: { http: s.port as number }, owned: true };
     },
     stop: async (id) => { servers.get(id)?.stop(true); servers.delete(id); },
-    // biome-ignore lint/correctness/useYield: no log lines from this stand-in
     logs: async function* () {},
     exists: async (id) => servers.has(id),
   };
@@ -100,7 +105,7 @@ describe("adapters/composite", () => {
     });
     const env: Environment = { svc: { stable: binding, canary: binding } };
 
-    const rt = await startEnvironment(env, { adapter, sessionId: "s1", envKey: "mixed" }) as any;
+    const rt = await startEnvironment(env, { adapter, sessionId: "s1", envKey: "mixed" }) as TestRuntime;
 
     expect((await rt.svc.stable.api.http.whoami()).substrate).toBe("real");
     expect((await rt.svc.canary.api.http.whoami()).substrate).toBe("fake");
@@ -118,7 +123,7 @@ describe("adapters/composite", () => {
       routes: { svc: createFakeAdapter() },
     });
     const env: Environment = { svc: { one: binding, two: binding } };
-    const rt = await startEnvironment(env, { adapter, sessionId: "s1", envKey: "slot" }) as any;
+    const rt = await startEnvironment(env, { adapter, sessionId: "s1", envKey: "slot" }) as TestRuntime;
 
     expect((await rt.svc.one.api.http.whoami()).substrate).toBe("fake");
     expect((await rt.svc.two.api.http.whoami()).substrate).toBe("fake");
@@ -135,7 +140,7 @@ describe("adapters/composite", () => {
       routes: { svc: fake, "svc.stable": real },
     });
     const env: Environment = { svc: { stable: binding, canary: binding } };
-    const rt = await startEnvironment(env, { adapter, sessionId: "s1", envKey: "prec" }) as any;
+    const rt = await startEnvironment(env, { adapter, sessionId: "s1", envKey: "prec" }) as TestRuntime;
 
     expect((await rt.svc.stable.api.http.whoami()).substrate).toBe("real");
     expect((await rt.svc.canary.api.http.whoami()).substrate).toBe("fake");
@@ -149,7 +154,7 @@ describe("adapters/composite", () => {
       routes: { "svc.canary": createFakeAdapter() },
     });
     const env: Environment = { svc: { stable: binding, canary: binding } };
-    const rt = await startEnvironment(env, { adapter, sessionId: "s1", envKey: "evt" }) as any;
+    const rt = await startEnvironment(env, { adapter, sessionId: "s1", envKey: "evt" }) as TestRuntime;
 
     const mark = rt.svc.canary.events.mark();
     await rt.svc.canary.api.http.whoami();
@@ -170,14 +175,14 @@ describe("adapters/composite", () => {
       routes: { "svc.canary": fake },
     });
     const env: Environment = { svc: { stable: binding, canary: binding } };
-    const rt = await startEnvironment(env, { adapter, sessionId: "s1", envKey: "rt" }) as any;
+    const rt = await startEnvironment(env, { adapter, sessionId: "s1", envKey: "rt" }) as TestRuntime;
 
     // Exactly what the cross-process registry persists and re-reads.
     const meta = JSON.parse(JSON.stringify(rt.metadata()));
 
     const attached = await attachEnvironment(
       env, { adapter, sessionId: "s2", envKey: "rt" }, { components: meta.components },
-    ) as any;
+    ) as TestRuntime;
 
     expect((await attached.svc.stable.api.http.whoami()).substrate).toBe("real");
     expect((await attached.svc.canary.api.http.whoami()).substrate).toBe("fake");
@@ -202,7 +207,6 @@ describe("adapters/composite", () => {
       connect: async () => {}, disconnect: async () => {}, teardown: async () => {},
       start: async () => ({ containerId: "x", ports: {}, owned: true }),
       stop: async () => {},
-      // biome-ignore lint/correctness/useYield: stand-in
       logs: async function* () {},
       exists: async () => true,
     };

@@ -8,6 +8,7 @@ Read in this order if you have time: [`docs/axioms.md`](docs/axioms.md) → [`do
 
 ```sh
 bun install                    # one-time
+just lint                      # biome; warnings fail
 just typecheck                 # tsc --noEmit
 just test-core                 # harness functionality tests; Docker/K8s tests self-skip if unavailable
 just build-test-images         # one-time: builds petstore + redis-configurable
@@ -81,9 +82,10 @@ const petstore = (cfg: PetstoreCfg) => bind(petstoreBlueprint, {
 
 Before declaring a change done:
 
-1. `just typecheck` — 0 errors.
-2. `just test` — all green. If a test fails because of your change, fix the root cause rather than loosen the assertion.
-3. `just check-no-leaks` — silent, exit 0. If it names containers, the `bun:test` preload teardown is broken; fix that before anything else. It filters on `cyanotype.substrate=docker` rather than `cyanotype=1`, because on a runtime shared with Kubernetes (OrbStack, Docker Desktop) Pods carry the same `cyanotype` labels and would read as Docker leaks.
+1. `just lint` — 0 diagnostics. `just lint-fix` applies the safe ones.
+2. `just typecheck` — 0 errors.
+3. `just test` — all green. If a test fails because of your change, fix the root cause rather than loosen the assertion.
+4. `just check-no-leaks` — silent, exit 0. If it names containers, the `bun:test` preload teardown is broken; fix that before anything else. It filters on `cyanotype.substrate=docker` rather than `cyanotype=1`, because on a runtime shared with Kubernetes (OrbStack, Docker Desktop) Pods carry the same `cyanotype` labels and would read as Docker leaks.
 
 ## What requires an ADR
 

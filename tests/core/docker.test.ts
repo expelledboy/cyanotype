@@ -37,7 +37,7 @@ const dockerCtor = (): Dockerode =>
   createRequire(import.meta.url)("dockerode") as Dockerode;
 
 const dockerOpts = (): { socketPath: string } => ({
-  socketPath: process.env["DOCKER_HOST"]?.replace("unix://", "") ?? "/var/run/docker.sock",
+  socketPath: process.env.DOCKER_HOST?.replace("unix://", "") ?? "/var/run/docker.sock",
 });
 
 const streamToString = async (raw: NodeJS.ReadableStream | Buffer): Promise<string> => {
@@ -251,7 +251,7 @@ describe("docker/adapter", () => {
 
   test("teardown stops labeled stragglers across adapters", async () => {
     if (!HAS_DOCKER) return;
-    const sid = "s-straggler-" + Math.random().toString(36).slice(2, 8);
+    const sid = `s-straggler-${Math.random().toString(36).slice(2, 8)}`;
     const a1 = createDockerAdapter({ sessionId: sid });
     await a1.connect();
     const r = await a1.start(

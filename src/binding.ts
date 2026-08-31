@@ -95,7 +95,6 @@ export const bind = <
 
 /** Extract the Blueprint type from a Binding. */
 export type BlueprintOf<B> =
-  // biome-ignore lint/suspicious/noExplicitAny: extractor walks any Blueprint shape
   B extends { readonly blueprint: infer BP } ? BP : never;
 
 /** Extract the config type from a Binding's Blueprint. */
