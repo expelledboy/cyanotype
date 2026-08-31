@@ -99,6 +99,16 @@ always on, carrying a `hint`) or an agreement between Cyanotype's own modules
 `tests/core/error-classification.test.ts` will fail until the new error is
 classified — that is intentional.
 
+### Auditing hints
+
+`just hints` prints every error, the condition that raises it, and the hint the
+reader gets. Two automatic layers guard them — `hint-claims.test.ts` fails if a
+hint references something that does not exist, `hint-remedies.test.ts` proves
+the advice works by performing it — but neither can judge whether prose advice
+is *sound*. That is what the catalogue is for: read it against the code when
+touching error paths, and when adding a hint you cannot prove, phrase it as
+something to check rather than a remedy to follow.
+
 ### Architectural changes
 
 Anything that touches a load-bearing concept (Blueprint shape, Adapter SPI, Environment composition, cross-process registry, event-bus typing) needs an ADR in `docs/decisions.md`.

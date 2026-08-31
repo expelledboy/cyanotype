@@ -167,7 +167,27 @@ programs; the `hint` addresses the person reading the failure.
   cannot write one, the error is probably internal and may want to be an
   `invariant()` instead.
 
-`tests/core/error-classification.test.ts` enforces all of this: every
+**A hint may only state what a test proves or the claim lint resolves. Anything
+else says what to CHECK, not what to do.** A hint that lies is worse than no
+hint — the reader acts on it, and the fix they try cannot work. Three shipped
+before this rule existed: advice to run a `just` recipe consumers do not have,
+a scope claim that was simply wrong, and a remedy (`stopAll()`) that exists but
+cannot do the thing it was offered for.
+
+Three layers keep hints honest, and they cover different failures:
+
+| layer | catches | run it |
+|---|---|---|
+| `tests/core/hint-claims.test.ts` | a hint naming something that does not exist — a renamed method, a dead config path, a moved doc, an unvetted shell command | automatic |
+| `tests/core/hint-remedies.test.ts` | advice that does not work: it triggers the error, performs the remedy, asserts it resolves | automatic |
+| `just hints` | everything else — whether the prose is *sound*. Prints every error, its trigger and its hint, so the set can be read in one pass | by a human or agent |
+
+The first two are the reason a hint may reference an API or a config path at
+all. If your advice cannot be proven by either, phrase it as something to
+check ("kubectl describe pod shows which") rather than a remedy to follow, and
+it stays honest without a test.
+
+`tests/core/error-classification.test.ts` enforces the rest: every
 `throw { kind: ... }` in `src/` must be listed as consumer-facing or internal,
 consumer-facing ones must carry a `hint`, internal ones must not, and no hint
 may mention our own tooling. Adding an error without classifying it fails the

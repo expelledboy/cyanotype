@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Three layers keeping hints honest, because a hint that lies is worse than no
+  hint: a claim lint that fails the build when a hint references something that
+  does not exist, remedy tests that trigger an error and then perform its hint's
+  advice to prove it resolves, and `just hints` — a rendered catalogue of every
+  error, its trigger and its hint — for the soundness review neither can
+  automate. See D-045.
 - Consumer-facing errors carry a `hint` explaining what was done, why it is
   wrong, and the fix. An audit of all 62 thrown kinds against their guard
   conditions put 54 in that category and 8 as internal: a test harness is

@@ -105,6 +105,11 @@ test-adapter-k8s-attach:
 test-petstore-k8s: load-k8s-images
     CYANOTYPE_ADAPTER=k8s CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun test tests/petstore-example
 
+# Print every error, its trigger, and the hint a consumer gets. Optional filter.
+[group('quality')]
+hints filter="":
+    bun scripts/hints.ts {{ filter }}
+
 # Petstore example suite attached to a cluster this recipe deploys and tears down.
 [group('kubernetes')]
 test-petstore-k8s-attach: deploy-petstore-k8s-attach derive-petstore-attach

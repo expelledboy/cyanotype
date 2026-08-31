@@ -48,6 +48,7 @@
 - [D-042 — Runtime invariants for cross-module agreements, enabled only for this repository's own suite](#d-042-runtime-invariants-for-cross-module-agreements-enabled-only-for-this-repositorys-own-suite)
 - [D-043 — Invariants defer their condition; consumer mistakes are errors with hints, not invariants](#d-043-invariants-defer-their-condition-consumer-mistakes-are-errors-with-hints-not-invariants)
 - [D-044 — Almost every failure a test harness raises is the consumer's to act on](#d-044-almost-every-failure-a-test-harness-raises-is-the-consumers-to-act-on)
+- [D-045 — A hint may only state what a test proves or the claim lint resolves](#d-045-a-hint-may-only-state-what-a-test-proves-or-the-claim-lint-resolves)
 
 ---
 
@@ -923,3 +924,23 @@ Hints on substrate failures say what to check rather than what to run, because t
 - The scanner in `tests/core/error-classification.test.ts` strips comments before matching, so documentation examples are no longer mistaken for error kinds.
 - The classification lists are long, and deliberately so: they are the enforcement, and a new error cannot be added without joining one.
 - This does not widen D-042 or D-043 — the rule is unchanged. What changed is that applying it properly turned out to reclassify most of the catalogue, which is itself the finding: for a library whose whole job is to run someone else's system, "internal" is a small category.
+
+## D-045. A hint may only state what a test proves or the claim lint resolves
+
+**Context:** D-043 and D-044 put a `hint` on 54 error kinds. Enforcing that a hint *exists* says nothing about whether it is *true*, and a false hint is worse than none: the reader acts on it, and the fix they try cannot work. Three shipped before anything guarded against it — advice to run a `just` recipe consumers do not have; a scope claim that was simply wrong ("the same file", when the cache is closed over by `createSharedEnvs`); and a remedy, `stopAll()`, that exists but cannot clean another process's containers, which is exactly what it was offered for.
+
+Those three are not one failure but three, and they need different mechanisms. The first is a dead reference. The second and third are behavioural claims that resolve to real symbols and are still false. Nothing static distinguishes them.
+
+**Decision:** Hints are guarded by three layers, and a rule that decides what may be written when none of them can help.
+
+1. **`tests/core/hint-claims.test.ts` — the claim lint.** Strips `${...}` interpolation from each hint (that is the hint's own code, not a claim about Cyanotype) and fails the build if an identifier-shaped claim does not resolve: a method name absent from `src`, an `adapter.*` config path whose segments do not exist, a `mode:` outside `SharedMode`, a file that is not on disk, a `CYANOTYPE_*` variable nothing reads. Commands for external tools (`docker compose`, `kubectl describe`) are detected by real subcommand — not by mentioning the tool in prose — and must appear in an allowlist with a written reason, since telling someone to run something is the advice they will follow verbatim.
+2. **`tests/core/hint-remedies.test.ts` — remedy proofs.** For the nine errors whose remedy is executable in-process, the test triggers the error, performs what the hint says, and asserts the second attempt succeeds. This is the only real proof of truthfulness and it covers the misuse class, where a false hint does most damage.
+3. **`just hints` — the catalogue.** Prints every error, the condition that raises it, and the hint, so the part no test can reach can be read in one pass rather than found across sixty throw sites.
+
+**The rule:** a hint may only state what layer 1 or 2 can back. Anything else says what to **check**, not what to do — "kubectl describe pod shows which" rather than a remedy to follow. That is what keeps a substrate hint honest without a test behind it.
+
+**Consequences:**
+- The claim lint is deliberately loose about *types* and strict about *existence*. TypeScript already checks code; a hint is a string, and the failure being guarded is the reference going stale, not being ill-typed.
+- Remedy tests couple a hint to a test: change the advice and the test must change with it. That coupling is the point, and it is why only nine exist — each is real work, and they were spent on the errors a consumer is most likely to act on.
+- What remains unguarded is whether prose advice is *sound*. This is stated rather than papered over: layers 1 and 2 shrink that surface, layer 3 makes reviewing it cheap, and the rule keeps unprovable advice modest in what it claims.
+- The catalogue reports 79 throw sites against the classification test's 62 distinct kinds — several kinds are raised from more than one place, and each site gets its own hint because the context differs.
