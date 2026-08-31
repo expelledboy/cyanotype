@@ -124,7 +124,7 @@ const petstoreBlueprint = defineBlueprint({
     }),
   }),
   events: petstoreEvents,
-  readiness: { interfaceName: "http", path: "/health" },
+  readiness: { kind: "http", interfaceName: "http", path: "/health" },
 });
 
 // 2. Write a Binding — substrate-bound instantiation, one per real/sim/version.

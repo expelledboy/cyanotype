@@ -71,7 +71,7 @@ const petstoreBlueprint = defineBlueprint({
     http: iface({ uri: `http://localhost:${ports.http}`, protocol: http(petstoreRoutes) }),
   }),
   events: petstoreEvents,
-  readiness: { interfaceName: "http", path: "/health" },
+  readiness: { kind: "http", interfaceName: "http", path: "/health" },
 });
 
 const petstore = (cfg: PetstoreCfg) => bind(petstoreBlueprint, {
