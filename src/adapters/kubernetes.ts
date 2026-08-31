@@ -544,7 +544,7 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
           namespace,
           stderr: ns.stderr,
           hint:
-            `kubectl could not read namespace "${namespace}". That is either genuinely absent or forbidden — \`stderr\` says which, and the two need opposite fixes. Attach mode never creates cluster resources, so if it is absent, create it and deploy your workloads there, or point the adapter at the namespace they already occupy. If it is forbidden, note that a request for a single namespace is authorized as a namespaced request, so a Role in that namespace granting get on namespaces is enough — docs/k8s-rbac.md does not currently include such a rule.`,
+            `kubectl could not read namespace "${namespace}". That is either genuinely absent or forbidden — \`stderr\` says which, and the two need opposite fixes. Attach mode never creates cluster resources, so if it is absent, create it and deploy your workloads there, or point the adapter at the namespace they already occupy. If it is forbidden, note that a request for a single namespace is authorized as a namespaced request, so a Role in that namespace granting get on namespaces is enough; docs/k8s-rbac.md carries that rule and explains why it belongs in a namespaced Role.`,
         };
       }
       const create = await k.run(["create", "namespace", namespace]);

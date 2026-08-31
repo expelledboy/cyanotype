@@ -13,6 +13,7 @@ Creates Pods, ConfigMaps, and one Service per binding (D-017, D-020, D-039 — t
 | `pods/portforward` | `create` |
 | `configmaps` | `create`, `get`, `list`, `watch`, `delete`, `deletecollection` |
 | `services` | `create`, `get`, `list`, `watch`, `delete`, `deletecollection` |
+| `namespaces` | `get` — see the note below |
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -30,7 +31,39 @@ rules:
   - apiGroups: [""]
     resources: ["pods/portforward"]
     verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
 ```
+
+### Why `namespaces: get` is in both tables
+
+`connect()` runs `kubectl get namespace <ns>` before anything else, in both
+modes. Without permission the request fails, and because the adapter cannot
+tell "absent" from "forbidden" it reports `k8s_namespace_missing` in attach
+mode — a namespace that exists, diagnosed as missing. This file previously
+granted nothing for it.
+
+`namespaces` is a cluster-scoped resource, so the rule looks misplaced in a
+namespaced `Role`. It is not: a request for one namespace *by name* is
+authorized as a namespaced request, so a `Role` in that namespace granting
+`get` on `namespaces` covers reading that namespace and no other. Verified
+against a live cluster with `kubectl auth can-i`:
+
+```
+get namespaces/<the Role's own namespace>   yes
+get namespaces/default                      no
+```
+
+`kubectl` prints `Warning: resource 'namespaces' is not namespace scoped` when
+you check this. The warning is about the resource, not about the grant.
+
+**Deploy mode additionally needs the namespace to exist already.** When the read
+fails, deploy mode tries `kubectl create namespace`, and a namespaced `Role`
+cannot authorize that — creating a namespace is not scoped to one, and
+`can-i create namespaces` returns `no` under the Role above. Either create the
+namespace ahead of time (the normal case, since the `Role` itself must live in
+it) or grant `create` on `namespaces` through a `ClusterRole`.
 
 Bind to a `ServiceAccount` in the same namespace:
 
@@ -58,6 +91,7 @@ Discovers pre-existing workloads via Services and EndpointSlices (D-018). Opens 
 |---|---|
 | `services` | `get`, `list`, `watch` |
 | `endpointslices` (discovery.k8s.io) | `get`, `list`, `watch` |
+| `namespaces` | `get` — see the note below |
 | `pods` | `get`, `list`, `watch` |
 | `pods/log` | `get` |
 | `pods/portforward` | `create` |
@@ -81,6 +115,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods/portforward"]
     verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
 ```
 
 No write verbs. The adapter's denylist enforces this at the call site, but the RBAC boundary is the durable defence — if an operator grants only this Role, no path through the adapter can mutate the cluster.

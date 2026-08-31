@@ -185,12 +185,14 @@ src/                    Library source
   reporter.ts           createConsoleReporter — built-in stream consumer
   runtime.ts            Runtime<E> + ChaosControls<E>
   shared.ts             createSharedEnvs — atomic file claim
+  invariants.ts         invariant() — cross-module agreements, off for consumers (D-042)
   compose.ts            reconcileComposeStack + FingerprintSpec (D-031)
   adapters/
     docker.ts           dockerode + SIGINT cleanup; onImageDrift policy (D-028)
     memory.ts           Factory-registry in-process adapter
     kubernetes.ts       K8s adapter (deploy + attach modes), reconnection layer
     kubectl.ts          kubectl subprocess wrapper (D-019)
+    composite.ts        Routes components/instances to different substrates (D-038)
   cli/
     index.ts            cyanotype derive CLI dispatch (bin entry) (D-030)
     derive.ts           deriveCompose / deriveK8s / loadDerivedCompose (D-030, D-032)
@@ -198,7 +200,8 @@ src/                    Library source
 
 tests/
   preload.ts            bun:test global setup + teardown (afterAll → shared.stopAll)
-  core/                 Harness self-tests (in-memory adapter)
+  core/                 Harness self-tests — pure, no daemon or cluster
+  substrate/            Adapter integration against real Docker and Kubernetes
   fakes/                Reusable in-process simulators for Blueprints
   petstore-example/     End-to-end SLA suite (runs across all five adapters)
   support/containers/   Dockerfiles for the test images
