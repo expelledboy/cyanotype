@@ -141,6 +141,24 @@ export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter =
     if (errors.length > 0) throw errors[0];
   };
 
+  // NO `reconnect` HERE, AND NOT BY OVERSIGHT (D-046, D-047).
+  //
+  // Routing one would be easy — `split()` already yields the member and the
+  // inner id, and the result just needs re-prefixing. The blocker is what to do
+  // for a member that does NOT implement it. `ReconnectSpec` carries port
+  // NAMES, not the numbers the snapshot recorded, so this adapter cannot answer
+  // "use the recorded ports for that one" and has nothing valid to return.
+  //
+  // The conservative fix — expose `reconnect` only when every member implements
+  // it — is inert here by construction. This adapter exists to run the
+  // component under test for real beside simulated dependencies (D-038), and
+  // the in-memory adapter cannot implement `reconnect` at all: its fakes live
+  // in this process, so there is nothing for another process to reconnect to.
+  // A composite doing its job therefore always has a member without it.
+  //
+  // Closing this properly means putting the recorded ports in `ReconnectSpec`,
+  // which is an SPI change and wants evidence that someone needs cross-process
+  // attach against a mixed-substrate Environment. Nobody has asked yet.
   return {
     name: `composite(${distinct.map((a) => a.name).join("+")})`,
 
