@@ -81,11 +81,13 @@ const doFetch = async (
       kind: "fetch_error",
       cause: err,
       hint:
-        `The ${method} request to "${url}" got no response. A malformed url or baseUrl is ` +
-        `reported here too, so check those first, then whether the target is still running ` +
-        `(a chaos test may have stopped it deliberately), then whether the call outlived its ` +
-        `${init?.timeoutMs ?? 30_000}ms timeout or an AbortSignal its caller passed. cause ` +
-        `carries the underlying error.`,
+        `The ${method} request to "${url}"${init?.baseUrl === undefined ? "" : ` against baseUrl "${init.baseUrl}"`} ` +
+        `got no response. cause discriminates: a TypeError means the request was never sent ` +
+        `— a malformed url or baseUrl, or an invalid header — so nothing about the target is ` +
+        `implicated. A network error or an AbortError means it was sent, in which case check ` +
+        `whether the target is still running (a chaos test may have stopped it deliberately) ` +
+        `and whether the call outlived its ${init?.timeoutMs ?? 30_000}ms timeout or an ` +
+        `AbortSignal its caller passed.`,
     };
   }
   clearTimeout(timer);

@@ -237,7 +237,6 @@ export const createHttpClient = <R extends HttpRouteMap>(
         typeof route.path === "function"
           ? (route.path as (...a: unknown[]) => string)(...pathArgs)
           : route.path;
-      const url = new URL(joinBase(basePath, routePath), opts.baseUrl);
 
       const headers: Record<string, string> = { ...defaultHeaders };
       const init: RequestInit = { method };
@@ -252,7 +251,15 @@ export const createHttpClient = <R extends HttpRouteMap>(
       init.signal = controller.signal;
 
       let res: Response;
+      // The URL is built INSIDE the try. Outside it, a malformed `baseUrl` threw
+      // a raw TypeError that escaped untagged — a consumer with a typo got
+      // `"/" cannot be parsed as a URL against "not-a-url"` and no `kind` to
+      // catch on, while the same mistake through `helpers.ts` (which already
+      // built its URL inside the try) produced a tagged `fetch_error`. Same
+      // library, same misuse, two different failure shapes.
+      let url: URL | undefined;
       try {
+        url = new URL(joinBase(basePath, routePath), opts.baseUrl);
         res = await fetch(url, init);
       } catch (err) {
         clearTimeout(timer);
@@ -261,11 +268,17 @@ export const createHttpClient = <R extends HttpRouteMap>(
           cause: err,
           route: name,
           hint:
-            `The HTTP request for route "${String(name)}" got no response at all, so this is ` +
-            `not an error status — nothing answered at "${url.origin}". Check whether that ` +
-            `component is still running (a chaos test may have stopped it deliberately) and ` +
-            `whether the request outlived this client's ${defaultTimeoutMs}ms timeout. cause ` +
-            `carries the underlying network error, which tells the two apart.`,
+            url === undefined
+              ? `The URL for route "${String(name)}" could not be built from baseUrl ` +
+                `"${String(opts.baseUrl)}" and this route's path, so no request was sent and ` +
+                `nothing about the target is implicated. cause carries the parse error.`
+              : `The ${method} request for route "${String(name)}" got no response at all, so ` +
+                `this is not an error status — nothing answered at "${url.origin}". cause ` +
+                `discriminates: a TypeError means the request was never sent (an invalid ` +
+                `header on this client, for instance), while a network error or an ` +
+                `AbortError means it was sent. For the latter, check whether that component ` +
+                `is still running — a chaos test may have stopped it deliberately — and ` +
+                `whether the call outlived this client's ${defaultTimeoutMs}ms timeout.`,
         };
       }
       clearTimeout(timer);
