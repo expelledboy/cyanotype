@@ -121,5 +121,14 @@ export const runProbe = async <I extends InterfaceRecord>(
     throw { kind: "probe_aborted", probe, elapsedMs: Date.now() - start, attempts };
   }
   emit?.({ type: "probe.timed_out", attempts, elapsedMs: Date.now() - start, error: lastError });
-  throw { kind: "probe_timeout", probe, lastError, elapsedMs: Date.now() - start, attempts };
+  throw {
+    kind: "probe_timeout",
+    probe, lastError, elapsedMs: Date.now() - start, attempts,
+    hint:
+      `The component started but never became ready within ${timeoutMs}ms (${attempts} ` +
+      `attempts). lastError carries what the final attempt saw: a connection refused usually ` +
+      `means the process is still booting or crashed — check its logs — while a non-2xx ` +
+      `status means it is serving but not healthy yet. Raise the Blueprint's readiness ` +
+      `timeoutMs if the component is simply slow to start.`,
+  };
 };

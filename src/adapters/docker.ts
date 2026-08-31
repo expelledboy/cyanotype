@@ -48,6 +48,8 @@ export type AttachImageDriftError = {
   readonly expected: string;
   readonly actual: string;
   readonly component: string;
+  /** Human-readable explanation of what went wrong and how to fix it (D-043). */
+  readonly hint: string;
 };
 
 declare module "../adapter.js" {
@@ -271,7 +273,16 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       pullStream = await c.pull(image);
     } catch (cause) {
       emit?.({ type: "image.pull_failed", image, error: cause });
-      throw { kind: "image_pull_failed", image, cause };
+      throw {
+        kind: "image_pull_failed",
+        image,
+        cause,
+        hint:
+          `Could not pull "${image}". Check the tag exists and is spelled as the Binding ` +
+          `declares it, that you are logged in if the registry is private, and that the ` +
+          `daemon has network access. For an image built locally, build it before the suite ` +
+          `runs — Cyanotype does not build images.`,
+      };
     }
     // Throttle per-layer progress: emit on every status transition, and at
     // most ~1.4×/s while a layer stays in the same status (e.g. Downloading).
@@ -305,7 +316,16 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       c.modem.followProgress(pullStream, (err) => (err ? reject(err) : resolve()), onProgress);
     }).catch((cause) => {
       emit?.({ type: "image.pull_failed", image, error: cause });
-      throw { kind: "image_pull_failed", image, cause };
+      throw {
+        kind: "image_pull_failed",
+        image,
+        cause,
+        hint:
+          `Could not pull "${image}". Check the tag exists and is spelled as the Binding ` +
+          `declares it, that you are logged in if the registry is private, and that the ` +
+          `daemon has network access. For an image built locally, build it before the suite ` +
+          `runs — Cyanotype does not build images.`,
+      };
     });
     emit?.({ type: "image.pulled", image, durationMs: Date.now() - pullStart });
   };
@@ -335,7 +355,15 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     for (const name of portKeys) {
       const arr = networkPorts[`${name}/tcp`];
       if (!arr || arr.length === 0 || !arr[0]) {
-        throw { kind: "port_not_bound", containerId, port: name };
+        throw {
+          kind: "port_not_bound",
+          containerId,
+          port: name,
+          hint:
+            `The container is running but Docker reports no host binding for container port ` +
+            `${name}. The image most likely does not EXPOSE it, or the process inside is ` +
+            `listening on a different port than the Binding declares.`,
+        };
       }
       ports[name] = Number(arr[0].HostPort);
     }
@@ -354,8 +382,12 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         const containerId = b.realId;
         throw {
           kind: "chaos_unsupported_in_attach_mode",
-          message: "chaos.stop on an attached binding requires adapter.compose.attach.allowChaos: true",
           containerId,
+          hint:
+            `Attach mode never mutates containers you own unless a Binding opts in, so chaos ` +
+            `is refused by default — this is what stops a suite from stopping your compose ` +
+            `stack. Set adapter.compose.attach.allowChaos: true on this Binding if disrupting ` +
+            `it is intended.`,
         };
       }
       // Chaos path: real outage via `docker stop`.
@@ -368,7 +400,15 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         if (err?.statusCode === 304 || (typeof err?.message === "string" && /already stopped|not modified/i.test(err.message))) {
           // Container was already stopped — that's fine; still mark paused.
         } else {
-          throw { kind: "docker_stop_failed", containerId: b.realId, cause: e };
+          throw {
+            kind: "docker_stop_failed",
+            containerId: b.realId,
+            cause: e,
+            hint:
+              `The Docker daemon refused to stop this container. It may already be gone, or ` +
+              `the daemon may be unhealthy — check "docker ps -a" for its state. cause carries ` +
+              `the daemon's own error.`,
+          };
         }
       }
       b.paused = true;
@@ -539,6 +579,12 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
             expected,
             actual,
             component: component ?? service,
+            hint:
+              `The running container for "${component ?? service}" uses image "${actual}", but ` +
+              `its Binding declares "${expected}" — the suite would be testing something other ` +
+              `than what it says. Bring the stack up from the image the Binding names, update ` +
+              `the Binding to match what is deployed, or set onImageDrift: "warn" to proceed ` +
+              `anyway.`,
           } satisfies AttachImageDriftError;
         }
         // "warn": surface and continue.
@@ -630,7 +676,16 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       emit?.({ type: "container.start_failed", image: imageRef, error: cause });
       try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
       try { await created.remove({ force: true }); } catch { /* ignore */ }
-      throw { kind: "container_start_failed", image: imageRef, cause };
+      throw {
+        kind: "container_start_failed",
+        image: imageRef,
+        cause,
+        hint:
+          `The container for "${imageRef}" was created but would not start, so the failure is ` +
+          `in the image or the Binding's env/mounts rather than in Cyanotype. cause carries ` +
+          `the daemon's error; running the image by hand with the same env usually reproduces ` +
+          `it immediately.`,
+      };
     }
 
     const inspected = await created.inspect();
@@ -639,7 +694,15 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     for (const name of Object.keys(spec.ports)) {
       const arr = networkPorts[`${name}/tcp`];
       if (!arr || arr.length === 0 || !arr[0]) {
-        throw { kind: "port_not_bound", containerId: created.id, port: name };
+        throw {
+          kind: "port_not_bound",
+          containerId: created.id,
+          port: name,
+          hint:
+            `The container started but Docker reports no host binding for container port ` +
+            `${name}. The image most likely does not EXPOSE it, or the process inside is ` +
+            `listening on a different port than the Binding declares.`,
+        };
       }
       ports[name] = Number(arr[0].HostPort);
     }

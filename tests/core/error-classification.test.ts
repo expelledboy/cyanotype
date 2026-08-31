@@ -25,26 +25,38 @@ import { join } from "node:path";
 /** Consumer's own code can cause these. Each MUST carry a `hint`. */
 const CONSUMER_FACING = new Set([
   // Their Environment / Binding / Blueprint definition
-  "binding_missing_declared_ports", "reserved_component_name",
+  "binding_missing_declared_ports", "reserved_component_name", "image_not_registered",
   // Their use of the shared-env handle
   "unknown_env", "wrong_target_env", "use_not_ensured",
+  "start_metadata_exists", "attach_no_metadata", "attach_state_not_running",
+  "ensure_loop_exhausted", "metadata_corrupt",
+  // Their environment drifted from the one Cyanotype persisted
+  "attach_dead_container", "attach_version_stale", "attach_substrate_mismatch",
+  "attach_image_drift", "container_gone",
+  "snapshot_unknown_component", "snapshot_shape_mismatch", "snapshot_unknown_instance",
   // Their chaos call
   "component_not_found", "invalid_chaos",
-  // Their Environment changed under a persisted one
-  "snapshot_unknown_component", "snapshot_shape_mismatch", "snapshot_unknown_instance",
-  // Their machine / daemon
-  "docker_connect_failed",
+  "chaos_not_supported_in_attach", "chaos_unsupported_in_attach_mode",
+  // Their service did not behave — the most-hit errors in the library
+  "probe_timeout", "attach_probe_failed", "wait_for_timeout", "sequence_timeout",
+  "fetch_error",
+  // Their machine, daemon, images
+  "docker_connect_failed", "docker_stop_failed", "image_pull_failed",
+  "container_start_failed", "port_not_bound", "chaos_stop_unverified",
   // Their derive step and its output
   "derived_compose_missing", "derived_compose_invalid", "derived_compose_missing_keys",
-  // Their cluster, their Binding's attach config, their RBAC
-  "k8s_attach_deployment_required", "k8s_attach_service_not_found",
-  "k8s_attach_no_ready_endpoints", "k8s_attach_scale_failed",
+  "stack_fingerprint_corrupt",
+  // Their compose stack
   "compose_attach_project_required", "compose_attach_service_not_found",
   "compose_attach_container_not_running",
+  // Their cluster, RBAC, and attach config
+  "kubectl_not_found", "k8s_namespace_missing", "k8s_namespace_create_failed",
+  "k8s_pod_not_ready", "k8s_pod_apply_failed", "k8s_configmap_apply_failed",
+  "k8s_service_apply_failed",
+  "k8s_attach_deployment_required", "k8s_attach_service_not_found",
+  "k8s_attach_no_ready_endpoints", "k8s_attach_scale_failed",
   // Their composite routing
   "composite_route_key_invalid", "composite_substrates_unreachable",
-  // Their assertion did not come true — the most-read errors in the library
-  "wait_for_timeout", "sequence_timeout",
 ]);
 
 /**
@@ -54,20 +66,15 @@ const CONSUMER_FACING = new Set([
  * cause.
  */
 const INTERNAL = new Set([
-  "invariant_violated", "metadata_corrupt", "start_metadata_exists", "ensure_loop_exhausted",
-  "attach_no_metadata", "attach_state_not_running", "attach_dead_container",
-  "attach_version_stale", "attach_substrate_mismatch", "attach_probe_failed",
-  "attach_mode_violation", "attach_image_drift",
-  "container_gone", "container_start_failed", "chaos_stop_unverified",
-  "chaos_not_supported_in_attach", "chaos_unsupported_in_attach_mode",
-  "missing_cyanotype_label", "image_not_registered", "image_pull_failed",
-  "port_not_bound", "probe_timeout", "probe_aborted", "fetch_error",
-  "docker_not_connected", "docker_stop_failed", "zero_ping_failed",
-  "stack_fingerprint_corrupt",
-  "kubectl_not_found", "k8s_namespace_missing", "k8s_namespace_create_failed",
-  "k8s_pod_apply_failed", "k8s_pod_not_ready", "k8s_configmap_apply_failed",
-  "k8s_service_apply_failed", "k8s_attach_endpoint_wait_timeout",
-  "k8s_attach_endpointslice_parse_failed", "k8s_attach_reconnect_failed",
+  // Cyanotype's own machinery, or an Adapter violating our SPI. A consumer
+  // cannot act on any of these, so a hint would be noise.
+  "invariant_violated",
+  "missing_cyanotype_label",     // the orchestrator always sets it (D-004)
+  "docker_not_connected",        // connect() ordering, ours to get right
+  "probe_aborted",               // our AbortController, not a failure of theirs
+  "attach_mode_violation",       // the non-destructive chokepoint refusing a write
+  "attach_reconnect_failed",
+  "k8s_attach_endpoint_wait_timeout", "k8s_attach_endpointslice_parse_failed",
 ]);
 
 const srcFiles = (dir: string): string[] =>
@@ -81,7 +88,12 @@ const srcFiles = (dir: string): string[] =>
 const throwSites = (): { file: string; kind: string; hasHint: boolean }[] => {
   const out: { file: string; kind: string; hasHint: boolean }[] = [];
   for (const file of srcFiles("src")) {
-    const text = readFileSync(file, "utf8");
+    // Strip comments first: JSDoc shows example throws (`throw { kind:
+    // "zero_ping_failed" }` in probe.ts documents a custom-probe convention)
+    // which are not error kinds this library raises.
+    const text = readFileSync(file, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
     for (const m of text.matchAll(/throw\s*\{/g)) {
       // Walk to the matching brace so a hint in a NEIGHBOURING throw cannot
       // be miscredited to this one.

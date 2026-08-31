@@ -77,7 +77,14 @@ const doFetch = async (
     res = await fetch(resolveUrl(url, init?.baseUrl), reqInit);
   } catch (err) {
     clearTimeout(timer);
-    throw { kind: "fetch_error", cause: err };
+    throw {
+      kind: "fetch_error",
+      cause: err,
+      hint:
+        `The request never completed. The component was reachable at readiness, so it has ` +
+        `since crashed, been stopped, or exceeded the timeout. cause carries the underlying ` +
+        `network error.`,
+    };
   }
   clearTimeout(timer);
 

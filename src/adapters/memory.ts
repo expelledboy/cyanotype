@@ -49,7 +49,19 @@ export const createInMemoryAdapter = (opts: InMemoryAdapterOptions): Adapter => 
 
   const start = async (spec: StartSpec, observe?: Emit): Promise<Started> => {
     const factory = opts.factories[spec.image];
-    if (!factory) throw { kind: "image_not_registered", image: spec.image };
+    if (!factory) {
+      throw {
+        kind: "image_not_registered",
+        image: spec.image,
+        registered: Object.keys(opts.factories),
+        hint:
+          `The in-memory adapter resolves a Binding's image string against its factory ` +
+          `registry, and "${spec.image}" is not in it. Registered: ` +
+          `[${Object.keys(opts.factories).join(", ") || "none"}]. Add a factory under that ` +
+          `exact image string, or point the Binding at one already registered — this is the ` +
+          `seam where a Binding becomes a simulator instead of a container.`,
+      };
+    }
     const containerId = randomId();
     observe?.({ type: "container.creating", image: spec.image });
     const entry: Entry = { handle: null as unknown as FakeHandle, lines: [], waiters: [], closed: false };

@@ -130,9 +130,27 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
     }
     let parsed: unknown;
     try { parsed = JSON.parse(raw); }
-    catch (cause) { throw { kind: "metadata_corrupt", path: filePath, cause }; }
+    catch (cause) {
+      throw {
+        kind: "metadata_corrupt",
+        path: filePath,
+        cause,
+        hint:
+          `The environment state file at ${filePath} is not valid JSON. It is written by ` +
+          `Cyanotype, so this usually means a run was killed mid-write. Delete the file and ` +
+          `stop any containers labelled cyanotype=1; the next ensure() rebuilds.`,
+      };
+    }
     if ((parsed as { schemaVersion?: number }).schemaVersion !== 1) {
-      throw { kind: "metadata_corrupt", path: filePath, cause: "schemaVersion_mismatch" };
+      throw {
+        kind: "metadata_corrupt",
+        path: filePath,
+        cause: "schemaVersion_mismatch",
+        hint:
+          `The state file at ${filePath} was written by a different major version of the ` +
+          `metadata schema. Delete it and stop any containers labelled cyanotype=1; the next ` +
+          `ensure() writes a current one.`,
+      };
     }
     return parsed as MetadataFile;
   };
@@ -250,8 +268,29 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
 
   const freshStart = async <K extends keyof R & string>(envKey: K): Promise<Runtime<R[K]>> => {
     const existing = readMetadataMaybe(envKey);
-    if (existing !== null) throw { kind: "start_metadata_exists", envKey };
-    if (!tryClaim(envKey)) throw { kind: "start_metadata_exists", envKey };
+    if (existing !== null) {
+      throw {
+        kind: "start_metadata_exists",
+        envKey,
+        hint:
+          `mode: "start" refuses to touch an environment that already exists, so it can never ` +
+          `adopt containers it did not create. Either those containers are still running — use ` +
+          `mode: "startOrAttach" to reuse them — or a previous run left state behind: ` +
+          `Delete the <envKey>.json under the stateDir you passed to createSharedEnvs and ` +
+          `stop the containers Cyanotype started (they carry the label cyanotype=1), ` +
+          `then re-run.`,
+      };
+    }
+    if (!tryClaim(envKey)) {
+      throw {
+        kind: "start_metadata_exists",
+        envKey,
+        hint:
+          `Another process claimed "${envKey}" first — the claim is atomic so exactly one ` +
+          `starts it. If you meant to share that environment use mode: "startOrAttach", which ` +
+          `waits for the winner and attaches.`,
+      };
+    }
     try {
       return await doStart(envKey);
     } catch (err) {
@@ -262,8 +301,27 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
 
   const freshAttach = async <K extends keyof R & string>(envKey: K): Promise<Runtime<R[K]>> => {
     const meta = readMetadataMaybe(envKey);
-    if (meta === null) throw { kind: "attach_no_metadata", envKey };
-    if (meta.state !== "running") throw { kind: "attach_state_not_running", envKey, state: meta.state };
+    if (meta === null) {
+      throw {
+        kind: "attach_no_metadata",
+        envKey,
+        hint:
+          `mode: "attach" only ever joins an environment another process started, and no state ` +
+          `file for "${envKey}" exists. Start it first, or use mode: "startOrAttach" so this ` +
+          `process starts it when nobody else has.`,
+      };
+    }
+    if (meta.state !== "running") {
+      throw {
+        kind: "attach_state_not_running",
+        envKey,
+        state: meta.state,
+        hint:
+          `Another process claimed "${envKey}" and is still starting it (state="${meta.state}"). ` +
+          `mode: "attach" does not wait. Use mode: "startOrAttach", which polls until the ` +
+          `starter finishes and then attaches.`,
+      };
+    }
     // Before `exists()`, deliberately. Asking this adapter about a container id
     // from another substrate is meaningless, and the `false` it returns would
     // surface as `attach_dead_container` — a confident, wrong diagnosis that
@@ -273,17 +331,45 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
         kind: "attach_substrate_mismatch",
         envKey,
         expected: options.adapter.name,
+        hint:
+          `This environment was started on a different substrate, and container ids only mean ` +
+          `something to the adapter that issued them. mode: "attach" refuses rather than ` +
+          `guessing. Switch back to the original adapter to reuse it, use ` +
+          `mode: "startOrAttach" to build a fresh one here, or stop the old containers ` +
+          `(labelled cyanotype=1) and delete the <envKey>.json under your stateDir.`,
         found: meta.adapter,
       };
     }
     const sample = pickSampleContainerId(meta);
     if (sample && !(await options.adapter.exists(sample))) {
-      throw { kind: "attach_dead_container", envKey };
+      throw {
+        kind: "attach_dead_container",
+        envKey,
+        hint:
+          `The state file describes containers that no longer exist — they were removed ` +
+          `outside Cyanotype, or a previous run was killed before it could clean up. ` +
+          `mode: "attach" will not rebuild; use mode: "startOrAttach" to have this process ` +
+          `start a fresh environment, or ` +
+          `Delete the <envKey>.json under the stateDir you passed to createSharedEnvs and ` +
+          `stop the containers Cyanotype started (they carry the label cyanotype=1), ` +
+          `then re-run.`,
+      };
     }
     // In pure attach mode there is nothing to rebuild — surface the version
     // drift instead of silently attaching to a stale environment.
     if (isVersionStale(envKey, meta)) {
-      throw { kind: "attach_version_stale", envKey };
+      throw {
+        kind: "attach_version_stale",
+        envKey,
+        hint:
+          `A Binding's version changed since these containers started, so they are running ` +
+          `something other than what this code declares. mode: "attach" refuses rather than ` +
+          `testing the wrong thing; mode: "startOrAttach" replaces them automatically. To do ` +
+          `it by hand: ` +
+          `Delete the <envKey>.json under the stateDir you passed to createSharedEnvs and ` +
+          `stop the containers Cyanotype started (they carry the label cyanotype=1), ` +
+          `then re-run.`,
+      };
     }
     return doAttach(envKey, meta);
   };
@@ -334,7 +420,19 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
       }
       return doAttach(envKey, meta);
     }
-    throw { kind: "ensure_loop_exhausted", envKey, attempts: MAX_ATTEMPTS };
+    throw {
+      kind: "ensure_loop_exhausted",
+      envKey,
+      attempts: MAX_ATTEMPTS,
+      hint:
+        `Waited ${MAX_ATTEMPTS} polls for another process to finish starting "${envKey}" and ` +
+        `it never reached "running". That process is probably hung or was killed without ` +
+        `clearing its claim; a claim older than 90s is treated as stale and reclaimed ` +
+        `automatically. If it persists: ` +
+        `Delete the <envKey>.json under the stateDir you passed to createSharedEnvs and ` +
+          `stop the containers Cyanotype started (they carry the label cyanotype=1), ` +
+          `then re-run.`,
+    };
   };
 
   const ensure = async <K extends keyof R & string>(envKey: K): Promise<Runtime<R[K]>> => {

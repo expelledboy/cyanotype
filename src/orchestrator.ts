@@ -380,7 +380,15 @@ export const startEnvironment = async <E extends Environment>(
       } catch { /* transient — keep polling */ }
       await new Promise((r) => setTimeout(r, 50));
     }
-    throw { kind: "chaos_stop_unverified", name, instance, containerId: id };
+    throw {
+      kind: "chaos_stop_unverified",
+      name, instance, containerId: id,
+      hint:
+        `The adapter's stop() returned, but the container was still reported as existing 5s ` +
+        `later, so chaos.stop() cannot promise the component is actually down. Usually the ` +
+        `substrate is slow or wedged — check the daemon or cluster. Asserting on a failure ` +
+        `mode that may not have been injected would be worse than failing here.`,
+    };
   };
 
   const chaosStart = async (name: string, instance?: string): Promise<void> => {
@@ -477,7 +485,16 @@ export const attachEnvironment = async <E extends Environment>(
     snap: ComponentSnapshot,
   ): Promise<void> => {
     if (!(await opts.adapter.exists(snap.containerId))) {
-      throw { kind: "container_gone", containerId: snap.containerId, componentName, instanceId };
+      throw {
+        kind: "container_gone",
+        containerId: snap.containerId, componentName, instanceId,
+        hint:
+          `The persisted environment lists a container for ` +
+          `"${instanceId === undefined ? componentName : `${componentName}.${instanceId}`}" ` +
+          `that no longer exists — removed outside Cyanotype, or replaced by a chaos restart ` +
+          `in another process whose new id this state file never saw. Stop the containers ` +
+          `labelled cyanotype=1, delete the <envKey>.json under your stateDir, and re-run.`,
+      };
     }
     // Attach mode never owns the container: the process that started it
     // (or the operator, for compose / pre-running pods) holds the lifecycle.
@@ -512,7 +529,17 @@ export const attachEnvironment = async <E extends Environment>(
         state.signal.abort();
         // runProbe's `probe_timeout` carries the probe and last error but no
         // component identity, and attach probes several components in a row.
-        throw { kind: "attach_probe_failed", componentName, instanceId, cause };
+        throw {
+          kind: "attach_probe_failed",
+          componentName, instanceId, cause,
+          hint:
+            `Attached to ` +
+            `"${instanceId === undefined ? componentName : `${componentName}.${instanceId}`}" ` +
+            `but its Blueprint readiness probe never passed, so the container is running ` +
+            `without serving. Attach probes deliberately (D-036) rather than handing back a ` +
+            `runtime that fails inside your first assertion. Check that component's logs; ` +
+            `cause carries the probe's own timeout with the last error it saw.`,
+        };
       }
     }
     finalizeApi(state);
@@ -588,7 +615,13 @@ export const attachEnvironment = async <E extends Environment>(
   rootEmit({ type: "environment.ready", durationMs: Date.now() - envStart });
 
   const notSupported = async (): Promise<void> => {
-    throw { kind: "chaos_not_supported_in_attach" };
+    throw {
+      kind: "chaos_not_supported_in_attach",
+      hint:
+        `This runtime was built by attaching to an environment another process started, so it ` +
+        `owns no containers and must not stop them — another worker is using them. Run chaos ` +
+        `from the process that started the environment, or give this one its own.`,
+    };
   };
   return finalizeRuntime(env, components, opts, emitter, notSupported, notSupported, notSupported);
 };

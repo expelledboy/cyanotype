@@ -47,6 +47,7 @@
 - [D-041 — Persisted environment metadata records its substrate; a mismatch rebuilds or refuses, never attaches](#d-041-persisted-environment-metadata-records-its-substrate-a-mismatch-rebuilds-or-refuses-never-attaches)
 - [D-042 — Runtime invariants for cross-module agreements, enabled only for this repository's own suite](#d-042-runtime-invariants-for-cross-module-agreements-enabled-only-for-this-repositorys-own-suite)
 - [D-043 — Invariants defer their condition; consumer mistakes are errors with hints, not invariants](#d-043-invariants-defer-their-condition-consumer-mistakes-are-errors-with-hints-not-invariants)
+- [D-044 — Almost every failure a test harness raises is the consumer's to act on](#d-044-almost-every-failure-a-test-harness-raises-is-the-consumers-to-act-on)
 
 ---
 
@@ -901,3 +902,24 @@ A third: the session-label invariants sat directly below the normalisation that 
 - **The classification is enforced, not documented.** `tests/core/error-classification.test.ts` scans every `throw { kind: ... }` in `src/` and fails unless it is listed as consumer-facing or internal; consumer-facing kinds must carry a `hint`, internal kinds must not, and no hint may reference this repository's own tooling. Adding an error without classifying it fails the suite — deliberately, so the decision happens while the author still knows who can trigger it. Applying it across all 62 thrown kinds moved fourteen more into the consumer-facing set, including `wait_for_timeout` and `sequence_timeout`, which are the errors a test author reads most often and had no guidance at all.
 - The three `derived_compose_*` errors are declared types, so adding `hint` to them made the compiler demand one at every throw site — which surfaced a third site the audit had missed. Where the type system can carry the convention, it should.
 - Hints must not name this repository's tooling: an early draft told consumers to run `just clean-containers`, which only exists here. Recovery advice is now phrased in terms the consumer controls — their stateDir, their container labels, their `docker compose`. The audit also corrected two inaccurate hints: `use()` is scoped to the `createSharedEnvs` handle rather than the file, and `stopAll()` cannot clean containers a previous process started, so it must not be offered as the recovery.
+
+## D-044. Almost every failure a test harness raises is the consumer's to act on
+
+**Context:** D-043 established the rule — ask who broke it — and classified the errors reachable from the eight paths that had been reasoned about. Auditing all 62 thrown kinds against their actual guard conditions showed the classification was badly skewed: 38 kinds had been filed as internal, and most were not.
+
+The mistake was reading "internal" as "raised by Cyanotype's own code" rather than "only Cyanotype can act on it". A test harness is almost entirely a boundary onto someone else's system, so the failures it raises are overwhelmingly about *their* system: their image will not pull, their pod will not schedule, their service never becomes ready, their kubectl is missing, their credentials lack a verb, their compose stack is down. Cyanotype raises the error; the consumer is the only one who can fix it.
+
+Two cases make the point. `probe_timeout` — the component started but never became ready — is among the most-hit errors in the library and had been filed as internal, so it offered nothing. `image_not_registered` is a pure configuration mistake: the in-memory adapter could not resolve a Binding's image against its factory registry, and the fix is one line the consumer writes.
+
+The audit also found `zero_ping_failed`, an error kind this library never raises. It appears in a JSDoc block documenting how a custom probe may throw its own tagged error. The classification scanner was matching inside comments.
+
+**Decision:** Classification follows *who can act*, not *who raised it*. That moves the split to 54 consumer-facing kinds and 8 internal ones, and every consumer-facing kind carries a `hint`.
+
+The 8 that remain internal are the honest cases: `invariant_violated`; `missing_cyanotype_label` (the orchestrator always sets it, so only a hand-built `StartSpec` reaches it); `docker_not_connected` (a `connect()` ordering bug of ours); `probe_aborted` (our own `AbortController`, not a failure of theirs); `attach_mode_violation` (the non-destructive chokepoint refusing a write — a safety net, not advice); `attach_reconnect_failed`; and the two EndpointSlice-parsing failures.
+
+Hints on substrate failures say what to check rather than what to run, because the reader's tooling is unknown: which pod phase means unschedulable versus crash-looping, that a missing host port binding usually means the image does not EXPOSE it, that `docs/k8s-rbac.md` lists the verbs when kubectl reports a permissions error.
+
+**Consequences:**
+- The scanner in `tests/core/error-classification.test.ts` strips comments before matching, so documentation examples are no longer mistaken for error kinds.
+- The classification lists are long, and deliberately so: they are the enforcement, and a new error cannot be added without joining one.
+- This does not widen D-042 or D-043 — the rule is unchanged. What changed is that applying it properly turned out to reclassify most of the catalogue, which is itself the finding: for a library whose whole job is to run someone else's system, "internal" is a small category.

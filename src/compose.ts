@@ -157,10 +157,25 @@ export const readStoredFingerprint = (
   try {
     parsed = JSON.parse(raw) as StoredFingerprint;
   } catch (cause) {
-    throw { kind: "stack_fingerprint_corrupt", path: fingerprintPath(stateDir, project), cause };
+    throw {
+      kind: "stack_fingerprint_corrupt",
+      path: fingerprintPath(stateDir, project),
+      cause,
+      hint:
+        `The Compose stack fingerprint is not valid JSON. Cyanotype writes it to decide ` +
+        `whether your stack needs rebuilding; delete the file and the next reconcile treats ` +
+        `the stack as stale and rebuilds it.`,
+    };
   }
   if (parsed.schemaVersion !== 1 || typeof parsed.fields !== "object") {
-    throw { kind: "stack_fingerprint_corrupt", path: fingerprintPath(stateDir, project), cause: "schema_mismatch" };
+    throw {
+      kind: "stack_fingerprint_corrupt",
+      path: fingerprintPath(stateDir, project),
+      cause: "schema_mismatch",
+      hint:
+        `The Compose stack fingerprint was written by a different version of its schema. ` +
+        `Delete the file; the next reconcile treats the stack as stale and rebuilds it.`,
+    };
   }
   return parsed.fields;
 };

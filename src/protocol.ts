@@ -256,7 +256,16 @@ export const createHttpClient = <R extends HttpRouteMap>(
         res = await fetch(url, init);
       } catch (err) {
         clearTimeout(timer);
-        throw { kind: "fetch_error", cause: err, route: name };
+        throw {
+          kind: "fetch_error",
+          cause: err,
+          route: name,
+          hint:
+            `The HTTP request for route "${String(name)}" never completed — the component was ` +
+            `reachable at readiness but is not now. It may have crashed or been stopped ` +
+            `(deliberately, if a chaos test is running), or the request exceeded its timeout. ` +
+            `cause carries the underlying network error.`,
+        };
       }
       clearTimeout(timer);
 

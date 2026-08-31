@@ -487,16 +487,40 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   const connect = async (): Promise<void> => {
     if (connected) return;
     const ver = await k.run(["version", "--client", "-o", "json"]);
-    if (ver.exit !== 0) throw { kind: "kubectl_not_found", stderr: ver.stderr };
+    if (ver.exit !== 0) {
+      throw {
+        kind: "kubectl_not_found",
+        stderr: ver.stderr,
+        hint:
+          `The Kubernetes adapter drives kubectl as a subprocess (D-019), and running it ` +
+          `failed. Install kubectl and make sure it is on PATH for the process running the ` +
+          `tests — in CI that means adding it to the image.`,
+      };
+    }
 
     const ns = await k.run(["get", "namespace", namespace, "-o", "name"]);
     if (ns.exit !== 0) {
       if (mode === "attach") {
-        throw { kind: "k8s_namespace_missing", namespace };
+        throw {
+          kind: "k8s_namespace_missing",
+          namespace,
+          hint:
+            `Namespace "${namespace}" does not exist. Attach mode never creates cluster ` +
+            `resources, so it will not create it for you: create the namespace and deploy your ` +
+            `workloads there first, or point the adapter at the namespace they already live in.`,
+        };
       }
       const create = await k.run(["create", "namespace", namespace]);
       if (create.exit !== 0 && !/already exists/i.test(create.stderr)) {
-        throw { kind: "k8s_namespace_create_failed", namespace, stderr: create.stderr };
+        throw {
+          kind: "k8s_namespace_create_failed",
+          namespace,
+          stderr: create.stderr,
+          hint:
+            `Deploy mode creates its namespace, and creating "${namespace}" failed — usually ` +
+            `the credentials kubectl is using cannot create namespaces. Either grant that, or ` +
+            `pre-create the namespace and pass its name to createK8sAdapter; ` + "see docs/k8s-rbac.md for the verbs the adapter needs; stderr carries kubectl's own message.",
+        };
       }
     }
     globalSessions.add(sessionEntry);
@@ -529,7 +553,15 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       const obj = JSON.parse(inspect.stdout) as { status?: { phase?: string } };
       lastPhase = obj.status?.phase ?? lastPhase;
     } catch { /* ignore */ }
-    throw { kind: "k8s_pod_not_ready", podName, lastPhase, elapsedMs: Date.now() - start, stderr: r.stderr };
+    throw {
+      kind: "k8s_pod_not_ready",
+      podName, lastPhase, elapsedMs: Date.now() - start, stderr: r.stderr,
+      hint:
+        `Pod ${podName} never became Ready (last phase "${lastPhase}"). This is the pod, not ` +
+        `Cyanotype: "Pending" usually means it cannot be scheduled or the image cannot be ` +
+        `pulled, "Running" but not Ready means a container is crash-looping. ` +
+        `kubectl describe pod ${podName} shows which.`,
+    };
   };
 
   const startPortForward = (podName: string, containerPort: number, requestedLocal: number | "auto"): Promise<{ proc: Subprocess; localPort: number }> => {
@@ -568,9 +600,13 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       if (!t.attach.allowChaos) {
         throw {
           kind: "chaos_unsupported_in_attach_mode",
-          message: "chaos.stop on an attached binding requires adapter.k8s.attach.allowChaos: true",
           service: t.attach.serviceName,
           namespace: t.namespace,
+          hint:
+            `Attach mode refuses every cluster write unless a Binding opts in, which is what ` +
+            `makes it safe to point at a shared or production namespace. To disrupt ` +
+            `"${t.attach.serviceName}" set adapter.k8s.attach.allowChaos: true on its Binding, ` +
+            `together with the Deployment name chaos needs to scale.`,
         };
       }
       const deployment = t.attach.deployment;
@@ -787,7 +823,15 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       const cmManifest = buildConfigMapManifest(cmName, spec, namespace);
       const cmRes = await k.run(["apply", "-f", "-"], { stdin: JSON.stringify(cmManifest) });
       if (cmRes.exit !== 0) {
-        throw { kind: "k8s_configmap_apply_failed", cmName, stderr: cmRes.stderr };
+        throw {
+          kind: "k8s_configmap_apply_failed",
+          cmName,
+          stderr: cmRes.stderr,
+          hint:
+            `Applying the ConfigMap that carries this Binding's mounts failed. Mount-as-content ` +
+            `becomes a ConfigMap, so the credentials in use need create on configmaps in this ` +
+            `namespace; ` + "see docs/k8s-rbac.md for the verbs the adapter needs; stderr carries kubectl's own message.",
+        };
       }
     }
 
@@ -810,7 +854,15 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       if (cmName) {
         await k.run(["delete", "configmap", cmName, "--wait=false", "--ignore-not-found=true"]);
       }
-      throw { kind: "k8s_pod_apply_failed", podName, stderr: podRes.stderr };
+      throw {
+        kind: "k8s_pod_apply_failed",
+        podName,
+        stderr: podRes.stderr,
+        hint:
+          `Applying Pod ${podName} was rejected by the API server. Common causes are missing ` +
+          `create permission on pods, a namespace quota or LimitRange, or an admission ` +
+          `controller rejecting the spec; ` + "see docs/k8s-rbac.md for the verbs the adapter needs; stderr carries kubectl's own message.",
+      };
     }
 
     try {
@@ -835,7 +887,15 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
         if (cmName) {
           await k.run(["delete", "configmap", cmName, "--wait=false", "--ignore-not-found=true"]);
         }
-        throw { kind: "k8s_service_apply_failed", serviceName, stderr: svcRes.stderr };
+        throw {
+          kind: "k8s_service_apply_failed",
+          serviceName,
+          stderr: svcRes.stderr,
+          hint:
+            `Applying Service "${serviceName}" failed. Each component with ports gets one so ` +
+            `other components can reach it by DNS, so the credentials in use need create on ` +
+            `services in this namespace; ` + "see docs/k8s-rbac.md for the verbs the adapter needs; stderr carries kubectl's own message.",
+        };
       }
     }
 
