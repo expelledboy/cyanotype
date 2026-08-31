@@ -96,10 +96,17 @@ export const shared = createSharedEnvs(
     stateDir: ".cyanotype-env",
     mode:     "startOrAttach",
     getTargetEnv: () => "petstore-sla",
-    // Every component here retries its dependencies (petstore reconnects to
-    // Redis, nginx proxies to petstores that may not be up yet), so there is
-    // nothing to gain from bringing them up one at a time.
-    startup: "concurrent",
+    // Sequential, deliberately. D-040's concurrent mode is only safe when every
+    // component tolerates a dependency that is not yet present, and nginx does
+    // not: it resolves its `upstream` hostnames once at config load and EXITS
+    // if one is missing (`[emerg] host not found in upstream "petstore-one"`).
+    // With `restartPolicy: Never` that pod stays dead and the environment fails.
+    //
+    // The Kubernetes adapter applies a component's Service only after its Pod
+    // is Ready (D-020), so under concurrent startup nginx routinely boots before
+    // any petstore Service exists and loses the race. Concurrent startup here
+    // was worth ~2s and cost an intermittently unstartable environment.
+    startup: "sequential",
     ...(observer ? { observer } : {}),
   },
 );
