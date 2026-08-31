@@ -167,16 +167,23 @@ export const readStoredFingerprint = (
         `the stack as stale and rebuilds it.`,
     };
   }
-  if (parsed.schemaVersion !== 1 || typeof parsed.fields !== "object") {
+  // Two holes closed together: a file containing `null` parsed fine and then
+  // threw a raw TypeError on property access, and `typeof null === "object"`
+  // let a record with `fields: null` through as though it were valid.
+  if (parsed === null || typeof parsed !== "object"
+    || parsed.schemaVersion !== 1
+    || parsed.fields === null || typeof parsed.fields !== "object") {
     throw {
       kind: "stack_fingerprint_corrupt",
       path: fingerprintPath(stateDir, project),
       cause: "schema_mismatch",
       hint:
-        `The Compose stack fingerprint is not a schema-version-1 record — either a different ` +
-        `Cyanotype version wrote it, or something else now occupies that path. Delete the ` +
-        `file; with no fingerprint stored, the next reconcile treats the stack as stale and ` +
-        `rebuilds it.`,
+        `The Compose stack fingerprint did not read back as an object with schemaVersion 1 ` +
+        `and a fields object — that check also covers a file parsing as null, and a fields ` +
+        `member that is missing or null. No released Cyanotype has written any other ` +
+        `schemaVersion, so this is most likely not Cyanotype's file or it was truncated. ` +
+        `Delete it; with no fingerprint stored the next reconcile treats the stack as stale ` +
+        `and rebuilds it.`,
     };
   }
   return parsed.fields;

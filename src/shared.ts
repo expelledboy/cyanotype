@@ -142,17 +142,22 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
           `mode: "startOrAttach" builds a fresh environment (mode: "attach" never builds one).`,
       };
     }
-    if ((parsed as { schemaVersion?: number }).schemaVersion !== 1) {
+    // `parsed` is whatever JSON.parse returned: a file containing `null`, a
+    // number or a string parses fine and is not an object. Reading a property
+    // off it threw a raw TypeError that escaped untagged, past this guard.
+    if (parsed === null || typeof parsed !== "object"
+      || (parsed as { schemaVersion?: number }).schemaVersion !== 1) {
       throw {
         kind: "metadata_corrupt",
         path: filePath,
         cause: "schemaVersion_mismatch",
         hint:
-          `The state file at ${filePath} does not carry schemaVersion 1, the only value ` +
-          `Cyanotype writes — so it came from a different major version of the metadata ` +
-          `schema, or it is not Cyanotype's file. Delete it and stop any containers labelled ` +
-          `cyanotype=1; the next ensure() in mode: "start" or mode: "startOrAttach" writes a ` +
-          `current one.`,
+          `The state file at ${filePath} did not read back as an object carrying ` +
+          `schemaVersion 1 — that check also covers a file that parsed as null, a number or ` +
+          `a string. No released Cyanotype has written any other schemaVersion, so this is ` +
+          `most likely not Cyanotype's file or it was truncated. Delete it and re-run: ` +
+          `ensure() in mode "start" or "startOrAttach" writes a fresh one, and mode "attach" ` +
+          `never builds one. Containers Cyanotype started carry the label cyanotype=1.`,
       };
     }
     return parsed as MetadataFile;

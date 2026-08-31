@@ -199,3 +199,41 @@ describe("metadata version invalidation (Feature 4)", () => {
     await s1.stopAll();
   });
 });
+
+describe("state file shapes that are not objects", () => {
+  // JSON.parse succeeds for "null", "42" and '"nope"' — none is an object.
+  //
+  // Only `null` was actually broken: reading schemaVersion off it threw a raw
+  // TypeError that escaped untagged, past metadata_corrupt and its hint, so the
+  // consumer got `null is not an object (evaluating 'parsed.schemaVersion')`
+  // about our internals with no kind to catch on. Property access on a number
+  // or a string yields undefined, which already reached the tagged error.
+  //
+  // The other two are kept as coverage of the widened guard, not as regression
+  // proof — reverting the fix fails one of these three, not all of them.
+  let stateDir: string;
+
+  beforeEach(async () => {
+    stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "spec-shape-"));
+  });
+  afterEach(async () => {
+    try { await fs.promises.rm(stateDir, { recursive: true, force: true }); } catch { /* noop */ }
+  });
+
+  for (const [label, body] of [["null", "null"], ["a number", "42"], ["a string", '"nope"']] as const) {
+    test(`${label} is reported as metadata_corrupt, not a raw TypeError`, async () => {
+      fs.writeFileSync(path.join(stateDir, "petstore.json"), body);
+      const shared = createSharedEnvs(registryForVersion("v1"), {
+        adapter: buildAdapter(), stateDir, mode: "attach",
+      });
+
+      let caught: unknown;
+      try { await shared.attach("petstore"); } catch (e) { caught = e; }
+
+      expect(caught).toBeDefined();
+      expect(caught instanceof Error).toBe(false);
+      expect((caught as { kind?: string }).kind).toBe("metadata_corrupt");
+      expect((caught as { hint?: string }).hint ?? "").not.toBe("");
+    });
+  }
+});
