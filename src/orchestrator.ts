@@ -364,7 +364,18 @@ export const startEnvironment = async <E extends Environment>(
     s.signal.abort();
     const id = s.containerId;
     chaosEmit({ type: "container.stopping", containerId: id });
-    try { await opts.adapter.stop(id); } catch (e) { console.error(e); }
+    // Do NOT swallow. D-034 replaced the Docker adapter's silent no-op with a
+    // thrown `chaos_unsupported_in_attach_mode` precisely to make "chaos call
+    // without allowChaos" a test-author error "surfaced loudly"; logging it to
+    // console.error buried it, and 5s later `chaos_stop_unverified` blamed the
+    // substrate for a stop the adapter had openly refused.
+    //
+    // The SPI documents stop() as idempotent — it must not throw if the
+    // container is already gone (adapter.ts) — so a throw is a real failure.
+    // Status therefore stays as it was: the component was not stopped, and
+    // marking it "stopped" anyway is what let a later chaos.start() look like
+    // it had resumed something.
+    await opts.adapter.stop(id);
     chaosEmit({ type: "container.stopped", containerId: id });
     s.containerId = "";
     s.status = "stopped";
@@ -384,11 +395,13 @@ export const startEnvironment = async <E extends Environment>(
       kind: "chaos_stop_unverified",
       name, instance, containerId: id,
       hint:
-        `The adapter's stop() returned, but for 5s afterwards exists() never reported the ` +
-        `container gone — it kept finding it, or kept erroring, and the poll cannot tell ` +
-        `those apart. chaos.stop() therefore cannot promise the component is down. Usually ` +
-        `the substrate is slow or wedged — check the daemon or cluster. Asserting on a ` +
-        `failure mode that may not have been injected would be worse than failing here.`,
+        `The adapter's stop() returned without error, but for 5s afterwards exists() never ` +
+        `reported the container gone — it kept finding it, or kept erroring, and the poll ` +
+        `cannot tell those apart. chaos.stop() therefore cannot promise the component is ` +
+        `down, and asserting on a failure mode that may not have been injected would be ` +
+        `worse than failing here. A stop the adapter refuses now propagates instead of ` +
+        `reaching this, so reaching it means the substrate accepted the stop and the ` +
+        `container outlived it — check the daemon or cluster.`,
     };
   };
 
