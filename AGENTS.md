@@ -87,6 +87,40 @@ Before declaring a change done:
 3. `just test` — all green. If a test fails because of your change, fix the root cause rather than loosen the assertion.
 4. `just check-no-leaks` — silent, exit 0. If it names containers, the `bun:test` preload teardown is broken; fix that before anything else. It filters on `cyanotype.substrate=docker` rather than `cyanotype=1`, because on a runtime shared with Kubernetes (OrbStack, Docker Desktop) Pods carry the same `cyanotype` labels and would read as Docker leaks.
 
+## Releasing
+
+Two workflows, and what actually triggers them:
+
+- `.github/workflows/ci.yml` runs on `pull_request` targeting `master` **and on nothing else** — there is deliberately no push trigger, because the pre-merge run already validates the merge result. It runs `bun install --frozen-lockfile`, `lint`, `typecheck`, `build`, `bun run test` (which is `tests/core/` only), and `bun pm pack --dry-run`.
+- `.github/workflows/release.yml` runs on pushing a tag matching `v*.*.*`. It runs `bun run prepublishOnly`, publishes to npm through Trusted Publishers OIDC (no token; provenance is automatic), then extracts the matching CHANGELOG section and creates a GitHub Release from it.
+
+**Therefore: a commit is only ever validated by CI as part of a pull request.** Never tag a branch. A tag on an unmerged branch publishes code CI has never run against, from a commit outside `master`'s history, and attests provenance to a ref nobody can find later.
+
+The cycle:
+
+1. Open a PR into `master`. CI runs here — this is the only automated validation the repository performs.
+2. Land the release prep *in that PR*: move `CHANGELOG.md` `[Unreleased]` entries into a `## [X.Y.Z] - YYYY-MM-DD` block, re-point the `[Unreleased]` link definition at the new tag, and set `version` in `package.json`.
+3. Merge to `master`.
+4. Tag `master`, not the branch: `git checkout master && git pull && git tag vX.Y.Z && git push --tags`.
+
+### Check these by hand before tagging — the automation does not
+
+- **The CHANGELOG section must exist and match the tag exactly.** `release.yml` validates it *after* `npm publish`, so a mismatch means the package is already on the registry when the workflow fails. npm forbids republishing a version ever, and unpublish is time-limited. Dry-run the workflow's own extraction first:
+  ```sh
+  awk -v v=X.Y.Z '$0 ~ "^## \\[" v "\\]" {i=1;next} i && /^## \[/{exit} i' CHANGELOG.md
+  ```
+- **`package.json` version must equal the tag.** Nothing compares them. Tagging `v0.6.0` while `package.json` says `0.5.0` publishes `0.5.0`, which fails late with a registry conflict — or silently ships the wrong version if that number was never published.
+- **Run the substrate suites.** Neither workflow runs `tests/petstore-example/` against Docker or Kubernetes; CI and release both stop at `tests/core/`. All five are a human responsibility before tagging:
+  ```sh
+  just test-petstore-memory         # no Docker, no cluster
+  just test-petstore-docker         # Cyanotype owns the containers
+  just test-petstore-docker-attach  # brings a Compose stack up, attaches, tears down
+  just test-petstore-k8s            # Cyanotype deploys the workloads
+  just test-petstore-k8s-attach     # deploys a fixture stack, attaches, deletes the namespace
+  ```
+- **Smoke the published CLI.** `bun run build` emits it to `dist/cli/index.js`, which is what `package.json`'s `bin.cyanotype` points at; run it as `bun dist/cli/index.js derive …`. `tests/core/cli-derive.test.ts` exercises `deriveCompose`/`deriveK8s` as pure functions and so cannot catch argv parsing or subcommand routing — 0.3.0 shipped a broken dispatcher for exactly that reason. The commands to run, with assertions that actually fail, are the pre-release checklist in `CONTRIBUTING.md`; work through the rest of that checklist too.
+- **`bun.lock` must be current.** Both workflows install with `--frozen-lockfile`; a drifted lockfile fails them before anything useful runs.
+
 ## What requires an ADR
 
 A change to: the Blueprint shape, the Binding shape, the Adapter SPI, the `Environment` reserved-name set, the event-bus model, the cross-process registry semantics, the mount-as-content contract.

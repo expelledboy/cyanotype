@@ -113,6 +113,11 @@ The ADR process:
 
 ## Pre-release checklist
 
+Tags go on `master`, never on a branch: CI runs only on pull requests, so a
+tag on an unmerged branch publishes code no CI has validated. Land the release
+prep in the PR, merge, then tag `master`. The full cycle and the checks the
+automation does not perform are in [`AGENTS.md`](./AGENTS.md#releasing).
+
 Before tagging any `v*.*.*` and triggering `release.yml`:
 
 - `just typecheck && bun run build && just test-core` must all be green.
