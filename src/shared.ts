@@ -136,10 +136,15 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
         path: filePath,
         cause,
         hint:
-          `The environment state file at ${filePath} is not valid JSON. It is written by ` +
-          `Cyanotype, so this usually means a run was killed mid-write. Delete the file and ` +
-          `stop any containers labelled cyanotype=1; the next ensure() in mode: "start" or ` +
-          `mode: "startOrAttach" builds a fresh environment (mode: "attach" never builds one).`,
+          `The state file at ${filePath} did not parse as JSON; \`cause\` carries the parse ` +
+          `error. Two causes, and the order to try them in matters. A claim file is created ` +
+          `empty and written a moment later, so a worker that loses the claim race and reads ` +
+          `in that window sees zero bytes — that is a healthy concurrent run and clears by ` +
+          `itself. A run killed mid-write leaves the same file truncated permanently. Re-run ` +
+          `first. Only if it survives a re-run is the file genuinely damaged: then delete it, ` +
+          `and stop any containers labelled cyanotype=1 that the dead run left behind. Do not ` +
+          `delete on the first occurrence — during the transient window that removes another ` +
+          `worker's live claim and lets two processes start the same environment.`,
       };
     }
     // `parsed` is whatever JSON.parse returned: a file containing `null`, a
@@ -281,12 +286,14 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
         kind: "start_metadata_exists",
         envKey,
         hint:
-          `mode: "start" refuses to touch an environment that already exists, so it can never ` +
-          `adopt containers it did not create. Either those containers are still running — use ` +
-          `mode: "startOrAttach" to reuse them — or a previous run left state behind: ` +
-          `Delete the <envKey>.json under the stateDir you passed to createSharedEnvs and ` +
-          `stop the containers Cyanotype started (they carry the label cyanotype=1), ` +
-          `then re-run.`,
+          `mode: "start" refuses to touch an environment that already exists, so it can ` +
+          `never adopt containers it did not create. A state file is present; what it ` +
+          `describes depends on its state. A "running" file means containers are up — use ` +
+          `mode: "startOrAttach" to reuse them. A "starting" file means another worker is ` +
+          `mid-claim and there may be no containers yet, so waiting is usually right. Only ` +
+          `if it is neither is it leftover state: delete the <envKey>.json under the ` +
+          `stateDir you passed to createSharedEnvs, stop any containers Cyanotype started ` +
+          `(they carry the label cyanotype=1), then re-run.`,
       };
     }
     if (!tryClaim(envKey)) {
@@ -314,10 +321,14 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
         kind: "attach_no_metadata",
         envKey,
         hint:
-          `Attaching only ever joins an environment another process started, and no state ` +
-          `file for "${envKey}" exists. Start it first, or call ensure() with ` +
-          `mode: "startOrAttach", so this process starts it when nobody else has. Changing ` +
-          `mode does nothing for attach(), which always takes this path.`,
+          `Attaching only ever joins an environment something else already started, and no ` +
+          `state file for "${envKey}" exists under the stateDir this handle was given. That ` +
+          `starter need not be another process — a second createSharedEnvs handle in this ` +
+          `one shares the stateDir but not the cache, so it qualifies too. Start it first, ` +
+          `or call ensure() with mode: "startOrAttach", so this process starts it when ` +
+          `nobody else has. Changing mode does nothing for attach(), which always takes ` +
+          `this path. Check the stateDir is the one you expect before assuming the starter ` +
+          `failed.`,
       };
     }
     if (meta.state !== "running") {
@@ -326,10 +337,15 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
         envKey,
         state: meta.state,
         hint:
-          `Another process claimed "${envKey}" and is still starting it (state="${meta.state}"). ` +
-          `Attaching does not wait. Call ensure() with mode: "startOrAttach", which polls for up ` +
-          `to about 30 seconds until the starter finishes, then attaches. Changing mode does ` +
-          `nothing for attach(), which always takes this path.`,
+          `The state file for "${envKey}" says \`state\` is "${meta.state}", not "running", ` +
+          `and attaching never waits. Whether a starter is still working or died holding the ` +
+          `claim is not checked here — this path has no staleness test, so an abandoned claim ` +
+          `looks identical to a live one. ensure() with mode: "startOrAttach" handles both, ` +
+          `but differently: it polls a fresh claim for up to ~30s (300 tries, 100ms apart) and ` +
+          `attaches when the starter finishes, whereas a claim older than 90s it deletes and ` +
+          `rebuilds from scratch. Those thresholds do not overlap, so an abandoned claim is ` +
+          `never reclaimed within the call that meets it — re-run once it has aged past 90s. ` +
+          `Changing mode does nothing for attach(), which always takes this path.`,
       };
     }
     // Before `exists()`, deliberately. Asking this adapter about a container id
@@ -347,9 +363,11 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
           `adapter that issued them, so attaching refuses rather than guessing. Point this ` +
           `handle back at the original adapter to reuse it, or call ensure() with ` +
           `mode: "startOrAttach" to build a fresh one here. To clear the old environment ` +
-          `instead: stop its containers from the substrate that started them (this adapter ` +
-          `cannot; they carry the label cyanotype=1) and delete the <envKey>.json under your ` +
-          `stateDir.`,
+          `instead, do it from the substrate named in \`found\` — this adapter cannot ` +
+          `address those containers at all. Whether they carry the label cyanotype=1 depends ` +
+          `on how that run got them: containers Cyanotype started carry it, but if that run ` +
+          `was itself attaching to a stack you own, they are yours and unlabelled. Then ` +
+          `delete the <envKey>.json under your stateDir.`,
         found: meta.adapter,
       };
     }
@@ -358,14 +376,22 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
       throw {
         kind: "attach_dead_container",
         envKey,
+        containerId: sample,
         hint:
-          `The state file names a container that no longer exists — it was removed outside ` +
-          `Cyanotype, or a previous run was killed before it could clean up. Attaching will ` +
-          `not rebuild; call ensure() with mode: "startOrAttach" to have this process start a ` +
-          `fresh environment, or ` +
-          `delete the <envKey>.json under the stateDir you passed to createSharedEnvs and ` +
-          `stop the containers Cyanotype started (they carry the label cyanotype=1), ` +
-          `then re-run.`,
+          `The adapter reported the sampled container in \`containerId\` as absent, so ` +
+          `attaching stopped rather than hand back a runtime pointing at nothing. What ` +
+          `"absent" means is the adapter's definition, and it is not always "gone": in ` +
+          `Docker attach mode a compose container that merely STOPPED reports absent by ` +
+          `design, and in Kubernetes attach mode a container this process did not itself ` +
+          `start reports absent — so a second worker attaching cross-process sees this for a ` +
+          `healthy pod. Check whether that container is actually running before treating it ` +
+          `as lost. If Cyanotype started it (containers it starts carry the label ` +
+          `cyanotype=1) it really is gone: stop any siblings still running, delete the ` +
+          `<envKey>.json under the stateDir you passed to createSharedEnvs, and re-run with ` +
+          `mode: "start" or "startOrAttach" — re-running in mode: "attach" only yields ` +
+          `attach_no_metadata. If you own the stack, bring the stopped service back up ` +
+          `instead. Only one container is sampled, so siblings may still hold fixed host ` +
+          `ports; stop them before rebuilding or the rebuild collides.`,
       };
     }
     // In pure attach mode there is nothing to rebuild — surface the version
@@ -375,13 +401,15 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
         kind: "attach_version_stale",
         envKey,
         hint:
-          `A Binding's version differs from the one recorded when these containers started, ` +
-          `so they are not the environment this code now declares. Attaching refuses rather ` +
-          `than testing the wrong thing; ensure() with mode: "startOrAttach" stops the ` +
-          `containers Cyanotype owns and rebuilds. To do it by hand: ` +
-          `delete the <envKey>.json under the stateDir you passed to createSharedEnvs and ` +
-          `stop the containers Cyanotype started (they carry the label cyanotype=1), ` +
-          `then re-run.`,
+          `A Binding's version differs from the one recorded when these containers started. ` +
+          `version is a declared cache key, so this says the declaration moved on — not that ` +
+          `the running image was checked and found different. Attaching refuses rather than ` +
+          `testing something the code no longer describes; ensure() with ` +
+          `mode: "startOrAttach" stops the containers Cyanotype owns and rebuilds. By hand: ` +
+          `delete the <envKey>.json under the stateDir you passed to createSharedEnvs, stop ` +
+          `the containers Cyanotype started (they carry the label cyanotype=1), and re-run ` +
+          `with mode: "start" or "startOrAttach" — re-running in mode: "attach" finds no ` +
+          `state file and raises attach_no_metadata instead.`,
       };
     }
     return doAttach(envKey, meta);
@@ -389,6 +417,7 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
 
   const startOrAttach = async <K extends keyof R & string>(envKey: K): Promise<Runtime<R[K]>> => {
     let attempt = 0;
+    const loopStart = Date.now();
     while (attempt < MAX_ATTEMPTS) {
       attempt += 1;
       if (tryClaim(envKey)) {
@@ -437,15 +466,20 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
       kind: "ensure_loop_exhausted",
       envKey,
       attempts: MAX_ATTEMPTS,
+      elapsedMs: Date.now() - loopStart,
       hint:
-        `Waited ${MAX_ATTEMPTS} polls, 100ms apart (about 30 seconds), for another process ` +
-        `to finish starting "${envKey}" and it never reached "running". That process is ` +
-        `probably hung or was killed without clearing its claim. A claim is only treated as ` +
-        `stale once it is 90 seconds old, which outlasts this loop — so re-running after ` +
-        `that reclaims it automatically. To clear it now: ` +
-        `delete the <envKey>.json under the stateDir you passed to createSharedEnvs and ` +
-        `stop the containers Cyanotype started (they carry the label cyanotype=1), ` +
-        `then re-run.`,
+        `Gave up after ${MAX_ATTEMPTS} attempts to settle "${envKey}". Read \`elapsedMs\` ` +
+        `first — it separates two very different failures, because only the branch that ` +
+        `waits on a starting claim sleeps (100ms); every other branch retries immediately. ` +
+        `Near 30s means another process holds a "starting" claim and never reached ` +
+        `"running": it is hung or was killed without clearing the claim. A claim is treated ` +
+        `as stale only once it is 90s old, which outlasts this loop, so re-running after ` +
+        `that reclaims it automatically. Far below 30s means the loop was spinning, not ` +
+        `waiting — invalidating and re-reading the state file every attempt, which happens ` +
+        `when another process keeps rewriting it, or when something the environment depends ` +
+        `on keeps failing the same check. To clear a claim by hand: delete the ` +
+        `<envKey>.json under the stateDir you passed to createSharedEnvs and stop the ` +
+        `containers Cyanotype started (they carry the label cyanotype=1), then re-run.`,
     };
   };
 
@@ -476,10 +510,13 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
         kind: "use_not_ensured",
         envKey,
         hint:
-          `use("${envKey}") returns the runtime a previous ensure() or attach() call cached on ` +
-          `this handle, and neither has run for "${envKey}" yet. Call await shared.ensure("${envKey}") ` +
-          `first — typically in a beforeAll — then use() anywhere that imports the same ` +
-          `createSharedEnvs handle in this process. use() never starts anything itself.`,
+          `use("${envKey}") returns the runtime a previous ensure() or attach() call cached ` +
+          `on this handle, and nothing is cached for "${envKey}". The cache is filled only ` +
+          `when one of those calls SUCCEEDS, and stopAll() empties it — so this also fires ` +
+          `after a call that threw, and after teardown, not only when neither was ever ` +
+          `called. Call await shared.ensure("${envKey}") first — typically in a beforeAll — ` +
+          `then use() anywhere that imports the same createSharedEnvs handle in this ` +
+          `process. use() never starts anything itself, so it cannot recover on its own.`,
       };
     }
     return cached as Runtime<R[K]>;

@@ -62,7 +62,7 @@ const collect = (): Entry[] => {
       const hint = hintRaw
         .replace(/`\s*\+\s*`/g, "")
         .replace(/\$\{([^}]*)\}/g, (_s, expr: string) => `<${expr.trim().split(/[.(\s]/)[0]}>`)
-        .replace(/[`"]/g, "")
+        .replace(/\\?[`"]/g, "")
         .replace(/\s+/g, " ")
         .trim();
 

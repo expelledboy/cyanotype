@@ -73,10 +73,13 @@ const sites = (): Site[] => {
       const hint = block.match(/hint:\s*([\s\S]*?)(?:,\n\s*\}|,\n\s*\w+:)/)?.[1];
       if (kind === undefined || hint === undefined) continue;
 
-      // Field names: everything before the hint, as `name:` or shorthand `name,`.
-      const head = block.slice(0, block.indexOf("hint:"));
+      // Field names come from the whole block with the hint's own value removed
+      // — a field may be declared after `hint:` (e.g. `found` on
+      // attach_substrate_mismatch), and reading only the head would call a real
+      // field bogus.
+      const withoutHint = block.replace(/hint:\s*[\s\S]*?(?=,\n\s*\}|,\n\s*[a-zA-Z_]\w*:)/, "");
       const fields = new Set(
-        [...head.matchAll(/([a-zA-Z_]\w*)\s*[,:]/g)].map((f) => f[1] ?? ""),
+        [...withoutHint.matchAll(/([a-zA-Z_]\w*)\s*[,:]/g)].map((f) => f[1] ?? ""),
       );
       out.push({ file, kind, fields, hint });
     }
@@ -96,7 +99,8 @@ describe("hint field references", () => {
     for (const { file, kind, fields, hint } of all) {
       // Only literal text: an interpolation is the hint's own code.
       const literal = hint.replace(/\$\{[^}]*\}/g, " ");
-      for (const m of literal.matchAll(/`([a-zA-Z_][a-zA-Z0-9_]*)`/g)) {
+      // Hints are template literals, so a backticked field is written \` in source.
+      for (const m of literal.matchAll(/\\?`([a-zA-Z_][a-zA-Z0-9_]*)\\?`/g)) {
         const name = m[1] ?? "";
         if (fields.has(name) || NOT_A_FIELD.has(name)) continue;
         bogus.push(`${kind}: \`${name}\` is not a field of this throw — ${file}`);
