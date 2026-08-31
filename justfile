@@ -4,8 +4,9 @@
 #   test-{petstore|adapter}-{substrate}  — the example suite, or an adapter suite
 # Recipes used only as build steps are hidden; read this file to see them.
 
-# Kubernetes context for every k8s recipe. Override: CYANOTYPE_K8S_CONTEXT=myctx just ...
-k8s_context := env("CYANOTYPE_K8S_CONTEXT", "orbstack")
+# Kubernetes context for every k8s recipe — the cluster `just kind-up` creates.
+# Override for a cluster you already have: CYANOTYPE_K8S_CONTEXT=myctx just ...
+k8s_context := env("CYANOTYPE_K8S_CONTEXT", "kind-cyanotype")
 
 [private]
 default:
@@ -90,6 +91,16 @@ clean-containers:
 
 # ─── kubernetes substrate ────────────────────────────────────────────────
 
+# Create the local cluster the k8s recipes default to. Safe to re-run.
+[group('kubernetes')]
+kind-up:
+    CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun scripts/kind-up.ts
+
+# Delete that cluster. kind leaves no kubectl current-context behind.
+[group('kubernetes')]
+kind-down:
+    kind delete cluster --name {{ trim_start_match(k8s_context, "kind-") }}
+
 # Kubernetes adapter suite. Needs kubectl + a reachable cluster.
 [group('kubernetes')]
 test-adapter-k8s:
@@ -100,7 +111,7 @@ test-adapter-k8s:
 test-adapter-k8s-attach:
     CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun test tests/substrate/kubernetes-attach.test.ts
 
-# Petstore example suite on OrbStack Kubernetes (Cyanotype deploys the workloads).
+# Petstore example suite on Kubernetes (Cyanotype deploys the workloads).
 [group('kubernetes')]
 test-petstore-k8s: load-k8s-images
     CYANOTYPE_ADAPTER=k8s CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun test tests/petstore-example
@@ -117,13 +128,10 @@ test-petstore-k8s-attach: deploy-petstore-k8s-attach derive-petstore-attach
 
 # ─── internal helpers (hidden from `just --list`) ────────────────────────
 
-# Build images and confirm the OrbStack k8s cluster can see them. OrbStack
-# shares its image store with host Docker, so no `kind load` / registry push.
+# Make the built images visible to whichever cluster k8s_context names.
 [private]
 load-k8s-images: build-test-images
-    @docker image inspect cyanotype/petstore-sla:latest >/dev/null 2>&1 || (echo "petstore-sla image missing"; exit 1)
-    @docker image inspect cyanotype/redis-configurable:latest >/dev/null 2>&1 || (echo "redis-configurable image missing"; exit 1)
-    @echo "OrbStack shares host Docker images with k8s — images present, no import needed."
+    CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun scripts/k8s-load-images.ts
 
 # Apply the petstore-attach fixture stack and wait for it to become Available.
 [private]

@@ -20,7 +20,7 @@ const SUBSTRATES = {
   k8s: {
     env: {
       CYANOTYPE_ADAPTER: "k8s-attach",
-      CYANOTYPE_K8S_CONTEXT: process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack",
+      CYANOTYPE_K8S_CONTEXT: process.env.CYANOTYPE_K8S_CONTEXT ?? "kind-cyanotype",
     },
     teardown: "teardown-petstore-k8s-attach",
   },

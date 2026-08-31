@@ -1,5 +1,8 @@
 /**
- * Kubernetes adapter smoke tests against OrbStack.
+ * Kubernetes adapter smoke tests against a real cluster.
+ *
+ * Defaults to the kind cluster `just kind-up` creates; set
+ * CYANOTYPE_K8S_CONTEXT to run against one you already have.
  *
  * When no cluster answers, both blocks below report as SKIPPED, not passed.
  * The probe therefore runs at module scope rather than in `beforeAll`, which
@@ -15,7 +18,7 @@ import { createK8sAdapter } from "../../src/adapters/kubernetes";
 import type { Adapter, StartSpec } from "../../src/adapter";
 import { k8sAvailable, requireSubstrate } from "../support/require-substrate";
 
-const CONTEXT = process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack";
+const CONTEXT = process.env.CYANOTYPE_K8S_CONTEXT ?? "kind-cyanotype";
 const NAMESPACE = "cyanotype-tests";
 const IMAGE = "cyanotype/petstore-sla:latest";
 const CONTAINER_PORT = "8080";

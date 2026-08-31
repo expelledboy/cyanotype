@@ -66,14 +66,14 @@ const adapter = adapterType === "docker"
   ? createK8sAdapter({
       mode: "deploy",
       sessionId,
-      context: process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack",
+      context: process.env.CYANOTYPE_K8S_CONTEXT ?? "kind-cyanotype",
       namespace: process.env.CYANOTYPE_K8S_NAMESPACE ?? "cyanotype-tests",
     })
   : adapterType === "k8s-attach"
   ? createK8sAdapter({
       mode: "attach",
       sessionId,
-      context: process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack",
+      context: process.env.CYANOTYPE_K8S_CONTEXT ?? "kind-cyanotype",
       namespace: process.env.CYANOTYPE_K8S_NAMESPACE ?? "cyanotype-petstore-attach",
     })
   : adapterType === "docker-attach"
