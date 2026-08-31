@@ -7,32 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- `createCompositeAdapter({ default, routes })` lets one Environment span more
-  than one substrate — the component under test running for real while its
-  dependencies are simulated. Routes key on component name or
-  `component.instance`, so a real "stable" instance and a simulated "canary"
-  instance of the *same* component can coexist. Realization is fixed at harness
-  construction and cannot be changed from a test. See D-038.
-- `just check-no-leaks` is a gate: silent and exit 0 when clean, and on failure
-  it names the surviving containers and exits non-zero.
-
-### Fixed
-- Container cleanup is scoped to the substrate that created it. Both adapters
-  stamped `cyanotype=1` and `cyanotype.session`, and the Kubernetes adapter puts
-  them on Pod metadata — so where one container runtime is shared between Docker
-  and Kubernetes (OrbStack, Docker Desktop), the leak check counted Pod
-  sandboxes as leaked Docker containers, and `just clean-containers` could
-  `docker rm -f` live Pods. Each adapter now stamps `cyanotype.substrate`, and
-  the Docker teardown scan, `clean-containers` and the leak check all filter on
-  it. Containers created before this labelling need clearing once by hand with
-  `docker rm -f $(docker ps -aq --filter label=cyanotype=1)`.
-
 ## [0.6.0] - 2026-08-30
 
-Contract restoration. Four surfaces that type-checked, looked declared, and
-could not work. No new capability; each item makes an existing promise true or
-makes it fail to compile.
+Contract restoration, plus the first multi-substrate Environment.
+
+The bulk of this release closes four surfaces that type-checked, looked
+declared, and could not work — each item below either makes an existing promise
+true or makes it fail to compile. Alongside that, `createCompositeAdapter` lifts
+the real-vs-simulated choice from per-Environment to per-component, which is the
+isolation case the Blueprint contract was designed around.
 
 ### Changed (BREAKING)
 - `attachEnvironment` now runs the Blueprint's `readiness` probe before
@@ -77,6 +60,14 @@ makes it fail to compile.
   bodies were Zod-checked while error bodies crossed the boundary unvalidated.
   A body that violates the schema keeps its raw value and reports
   `errorSchemaIssues` rather than being reshaped.
+- `createCompositeAdapter({ default, routes })` lets one Environment span more
+  than one substrate — the component under test running for real while its
+  dependencies are simulated. Routes key on component name or
+  `component.instance`, so a real "stable" instance and a simulated "canary"
+  instance of the *same* component can coexist. Realization is fixed at harness
+  construction and cannot be changed from a test. See D-038.
+- `just check-no-leaks` is a gate: silent and exit 0 when clean, and on failure
+  it names the surviving containers and exits non-zero.
 
 ### Fixed
 - Events ingested by the orchestrator now carry `instance` on the event object
@@ -91,6 +82,15 @@ makes it fail to compile.
   attached so far. Previously attach could only fail before those streams
   started, so nothing needed closing; adding the readiness probe above
   introduced a failure point after they open.
+- Container cleanup is scoped to the substrate that created it. Both adapters
+  stamped `cyanotype=1` and `cyanotype.session`, and the Kubernetes adapter puts
+  them on Pod metadata — so where one container runtime is shared between Docker
+  and Kubernetes (OrbStack, Docker Desktop), the leak check counted Pod
+  sandboxes as leaked Docker containers, and `just clean-containers` could
+  `docker rm -f` live Pods. Each adapter now stamps `cyanotype.substrate`, and
+  the Docker teardown scan, `clean-containers` and the leak check all filter on
+  it. Containers created before this labelling need clearing once by hand with
+  `docker rm -f $(docker ps -aq --filter label=cyanotype=1)`.
 
 ## [0.5.0] - 2026-08-12
 
@@ -363,7 +363,14 @@ Initial public release. Developer preview — pre-1.0, expect minor-version brea
 - Only HTTP and Opaque protocols implemented; TCP/gRPC/SOAP deferred
 - OrbStack K8s degrades under prolonged port-forward + rollout-restart load (kind/remote recommended for sustained CI)
 
-[Unreleased]: https://github.com/expelledboy/cyanotype/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/expelledboy/cyanotype/compare/v0.5.0...HEAD
+[0.6.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.6.0
+[0.5.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.5.0
+[0.4.2]: https://github.com/expelledboy/cyanotype/releases/tag/v0.4.2
+[0.4.1]: https://github.com/expelledboy/cyanotype/releases/tag/v0.4.1
+[0.4.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.4.0
+[0.3.1]: https://github.com/expelledboy/cyanotype/releases/tag/v0.3.1
+[0.3.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.3.0
 [0.2.1]: https://github.com/expelledboy/cyanotype/releases/tag/v0.2.1
 [0.2.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.2.0
 [0.1.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.1.0
