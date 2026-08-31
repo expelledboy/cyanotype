@@ -177,3 +177,99 @@ describe("kubernetes/adapter", () => {
     expect(r.containerId.length).toBeGreaterThan(0);
   }, 180_000);
 });
+
+/**
+ * D-047 — reconnect resolves the component's CURRENT Pod.
+ *
+ * The gap this closes: a chaos restart in the process that owns the
+ * environment replaces the Pod and never updates the shared metadata (D-007),
+ * so an attaching worker holds a name that no longer exists while the
+ * component itself is healthy. Resolving by `cyanotype.env` + component +
+ * instance finds the replacement; trusting the recorded id cannot.
+ *
+ * The load-bearing case is the third one. The first two would pass against an
+ * implementation that simply re-forwarded the id it was handed.
+ */
+describe("k8s/reconnect resolves by label (D-047)", () => {
+  const SESSION = "s-reconcile";
+  const ENVKEY = "recon-env";
+  const started: Array<{ adapter: Adapter; id: string }> = [];
+
+  afterEach(async () => {
+    for (const { adapter, id } of started.splice(0)) {
+      try { await adapter.stop(id); } catch { /* best effort */ }
+    }
+  });
+
+  const specFor = (component: string, instance?: string): StartSpec => ({
+    image: IMAGE,
+    env: {},
+    ports: { [CONTAINER_PORT]: "auto" },
+    mounts: {},
+    labels: {
+      cyanotype: "1",
+      "cyanotype.session": SESSION,
+      "cyanotype.env": ENVKEY,
+      "cyanotype.component": component,
+      ...(instance !== undefined ? { "cyanotype.instance": instance } : {}),
+    },
+    ...(instance !== undefined ? { instance } : {}),
+  });
+
+  test("re-establishes ports for a Pod this process did not start", async () => {
+    if (!HAS_K8S) return;
+    const adapter = createK8sAdapter({ mode: "deploy", sessionId: SESSION, context: CONTEXT, namespace: NAMESPACE });
+    await adapter.connect();
+    const r = await adapter.start(specFor("solo"));
+    started.push({ adapter, id: r.containerId });
+
+    const again = await adapter.reconnect?.({
+      containerId: r.containerId, envKey: ENVKEY, component: "solo", ports: [CONTAINER_PORT],
+    });
+    expect(again?.containerId).toBe(r.containerId);
+    // A second, independent forward — a different local port to the same Pod.
+    expect(again?.ports[CONTAINER_PORT]).not.toBe(r.ports[CONTAINER_PORT]);
+    expect(await tcpConnect(again?.ports[CONTAINER_PORT] as number)).toBe(true);
+    await adapter.disconnect();
+  }, 90_000);
+
+  test("a single-instance lookup does not match an instance-labelled Pod", async () => {
+    if (!HAS_K8S) return;
+    const adapter = createK8sAdapter({ mode: "deploy", sessionId: SESSION, context: CONTEXT, namespace: NAMESPACE });
+    await adapter.connect();
+    const r = await adapter.start(specFor("dual", "one"));
+    started.push({ adapter, id: r.containerId });
+
+    // Same component name, no instance: must NOT resolve to the instance Pod,
+    // which is why the selector requires the label's ABSENCE rather than
+    // simply omitting it.
+    let caught: unknown;
+    try {
+      await adapter.reconnect?.({ containerId: r.containerId, envKey: ENVKEY, component: "dual", ports: [CONTAINER_PORT] });
+    } catch (e) { caught = e; }
+    expect((caught as { kind: string }).kind).toBe("k8s_reconcile_no_match");
+    await adapter.disconnect();
+  }, 90_000);
+
+  test("finds the REPLACEMENT after the recorded Pod is gone", async () => {
+    if (!HAS_K8S) return;
+    const adapter = createK8sAdapter({ mode: "deploy", sessionId: SESSION, context: CONTEXT, namespace: NAMESPACE });
+    await adapter.connect();
+
+    const first = await adapter.start(specFor("churn"));
+    const staleId = first.containerId;
+    await adapter.stop(staleId);                      // what a chaos restart does
+
+    const second = await adapter.start(specFor("churn"));   // same labels, new Pod
+    started.push({ adapter, id: second.containerId });
+    expect(second.containerId).not.toBe(staleId);
+
+    // Hand reconnect the STALE id, as a worker reading old metadata would.
+    const resolved = await adapter.reconnect?.({
+      containerId: staleId, envKey: ENVKEY, component: "churn", ports: [CONTAINER_PORT],
+    });
+    expect(resolved?.containerId).toBe(second.containerId);
+    expect(await tcpConnect(resolved?.ports[CONTAINER_PORT] as number)).toBe(true);
+    await adapter.disconnect();
+  }, 120_000);
+});

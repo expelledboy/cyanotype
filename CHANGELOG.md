@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Attach now resolves a **component**, not a container id, for adapters that
+  implement `reconnect`. A chaos restart in the process that owns an
+  environment replaces containers without updating the shared metadata, so an
+  attaching worker held names that no longer existed — measured at three of six
+  after one run of the reference suite — and was rejected with `container_gone`
+  despite every component being healthy. The Kubernetes adapter now resolves
+  `cyanotype.env` + component + instance. No SPI change. See D-047.
 - `Adapter.reconnect` — one optional SPI method, for adapters whose reported
   ports do not outlive the process that opened them. Kubernetes deploy mode
   reports `kubectl port-forward` locals, so a second process attaching from

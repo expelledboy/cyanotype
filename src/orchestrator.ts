@@ -508,7 +508,13 @@ export const attachEnvironment = async <E extends Environment>(
     binding: AnyBinding,
     snap: ComponentSnapshot,
   ): Promise<void> => {
-    if (!(await opts.adapter.exists(snap.containerId))) {
+    // D-047. `exists()` asks about the RECORDED id, which is the thing that goes
+    // stale: a chaos restart in the owning process replaces the container and
+    // never updates the shared metadata (D-007). An adapter that can reconnect
+    // resolves the component itself, so asking this first would reject a
+    // healthy component for having been restarted — the precheck would answer
+    // the wrong question and answer it before anyone could correct it.
+    if (opts.adapter.reconnect === undefined && !(await opts.adapter.exists(snap.containerId))) {
       throw {
         kind: "container_gone",
         containerId: snap.containerId, componentName, instanceId,

@@ -50,6 +50,7 @@
 - [D-044 — Almost every failure a test harness raises is the consumer's to act on](#d-044-almost-every-failure-a-test-harness-raises-is-the-consumers-to-act-on)
 - [D-045 — A hint may only state what a test proves or the claim lint resolves](#d-045-a-hint-may-only-state-what-a-test-proves-or-the-claim-lint-resolves)
 - [D-046 — `Adapter.reconnect`: one optional SPI method, for adapters whose reported ports are process-local](#d-046-adapterreconnect--one-optional-spi-method-for-adapters-whose-reported-ports-are-process-local)
+- [D-047 — Attach resolves a COMPONENT, not a container id: `reconnect` reconciles by label](#d-047-attach-resolves-a-component-not-a-container-id--reconnect-reconciles-by-label)
 
 ---
 
@@ -975,3 +976,30 @@ reconnect?(spec: ReconnectSpec): Promise<Reconnected>;
 - **Warm attach still cannot survive a chaos-running suite.** `reconnect` re-establishes a connection to the *recorded* container; it does not resolve which container a component currently is. A chaos restart replaces the Pod, `exists()` fails on the stale id, and attach raises `container_gone` — whose hint already describes exactly this case. This is D-007's stated gap ("chaos restarts during a session that produce new container IDs aren't seen by attached workers"), unchanged.
 - **That gap is what the returned `containerId` is for.** Resolving a component to its current container — matching on `cyanotype.env` + `cyanotype.component` + `cyanotype.instance`, which is why the selector deliberately excludes the session label — is a natural extension that would close it. It needs its own decision: it changes what attach *means*, from "this container" to "this component", and brings failure modes reconnect does not have (zero matches, and the mid-chaos window where an old terminating container and its replacement both match — the window D-020 worried about and D-039 accepted). Not taken here; the shape is left open so it does not require another SPI change.
 - Adapters that do not implement it are unaffected — Docker, Compose, in-memory and the composite adapter compile and behave exactly as before, which is what "optional" is buying.
+
+## D-047. Attach resolves a COMPONENT, not a container id — `reconnect` reconciles by label
+
+**Context:** D-046 gave adapters a way to re-establish ports for a container another process started, and left a bound in place: it reconnects to the *recorded* container. D-007 named the same bound years earlier — "chaos restarts during a session that produce new container IDs aren't seen by attached workers".
+
+That bound is not an edge case; it is the normal state of any environment whose suite exercises chaos. Measured on the reference example: after one full run including the resilience tests, **three of six recorded container ids no longer existed**, while all six components were healthy. A second process reading that metadata saw half an environment gone.
+
+The failure was also the wrong shape. `attachOne` asked `exists(snap.containerId)` before anything else, so a component that had been restarted — and was serving perfectly — was rejected as `container_gone`. The precheck answered a question about an identifier at a point where nobody could correct it.
+
+**Decision:** For adapters that implement `reconnect`, a component's identity is its **labels**, not the container id the metadata happens to hold.
+
+- The Kubernetes adapter resolves `cyanotype.env` + `cyanotype.component` + `cyanotype.instance` and forwards to whatever Pod that selects, ignoring the recorded name.
+- **The selector deliberately excludes `cyanotype.session`.** Since D-042's label fix that names the adapter instance that *created* the Pod, so a later process never matches it. `cyanotype.env` is the identity that crosses a process boundary, which is what makes this possible at all.
+- **Single-instance components require the instance label to be ABSENT** (`!cyanotype.instance`), not merely omitted from the selector. Omitting it would make a single-instance lookup match every instance of a same-named multi-instance slot.
+- **Pods with a `deletionTimestamp` are excluded even while they report `Running`.** This is what keeps the mid-chaos window — old terminating, new starting — from reading as two live candidates. It is the window D-020 worried about and D-039 accepted; here it is handled rather than accepted.
+- Zero matches, more than one live match, and a failed query are distinct internal errors (`k8s_reconcile_no_match`, `k8s_reconcile_ambiguous`, `k8s_reconcile_query_failed`), all surfaced to the consumer through `attach_reconnect_failed`.
+- **`attachOne` skips the `exists()` precheck when the adapter can reconnect.** For those adapters `reconnect` is the resolver and it either produces a live container or fails. Adapters without it are completely unchanged: `exists()` still runs and `container_gone` still means what it meant.
+
+No SPI change. D-046 shaped `ReconnectSpec` to carry `envKey`, `component` and `instance`, and allowed the returned `containerId` to differ from the one supplied, precisely so this could arrive without one.
+
+**Consequences:**
+
+- Warm attach now survives a chaos-running suite. Against the environment described above — three stale ids out of six — the attaching process completes in **2509ms with 12 tests passing**. The control is exact: the same code resolving `spec.containerId` instead of the label query gives **0 pass, 1 fail, `attach_reconnect_failed`**.
+- **`container_gone` is no longer reachable on the Kubernetes deploy path.** A component that is genuinely absent now surfaces as `attach_reconnect_failed` wrapping `k8s_reconcile_no_match`. That is a behaviour change in error identity, taken because the alternative — asking about a stale id first — rejects healthy components.
+- **Attach means something different for these adapters, and it is a widening.** Previously it meant "re-attach to exactly these containers"; now it means "attach to whatever is currently serving this environment's components". A caller who wanted the first meaning cannot express it. Nothing in the codebase wanted it: the recorded id was a convenience, and its staleness was a documented defect rather than a guarantee anyone relied on.
+- Docker, Compose, in-memory and composite are untouched, since none implements `reconnect`. The composite adapter therefore loses reconcile for members that could support it — a real gap, left open deliberately rather than solved by routing an id through a wrapper whose members disagree about what identity means.
+- The mid-chaos ambiguity is handled by excluding terminating Pods, but two simultaneously-Ready Pods for one component remains an error rather than a choice. If that ever fires in practice it means the environment is not what it claims, and picking one silently would hide it.

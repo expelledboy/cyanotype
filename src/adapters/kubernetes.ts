@@ -1058,12 +1058,61 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
    * `stop(id)`, deleting the Pod. A reconnecting process created nothing.
    */
   const reconnect = async (spec: ReconnectSpec): Promise<Reconnected> => {
-    const podName = spec.containerId;
-    const check = await k.run(["get", "pod", podName, "-o", "jsonpath={.status.phase}"]);
-    const phase = check.stdout.trim();
-    if (check.exit !== 0 || phase !== "Running") {
-      throw { kind: "k8s_reconnect_pod_not_running", podName, phase, stderr: check.stderr };
+    // D-047. Resolve the component's CURRENT Pod by label rather than trusting
+    // the recorded id. A chaos restart in the process that owns the environment
+    // replaces the Pod and never updates the shared metadata (D-007), so the
+    // recorded name goes stale while the component itself is perfectly healthy.
+    //
+    // The selector is deliberately `cyanotype.env` + component + instance, and
+    // deliberately NOT `cyanotype.session`: since D-042 the session label names
+    // the adapter instance that CREATED the Pod, so a later process never
+    // matches it. `cyanotype.env` is the identity that crosses the boundary.
+    const selector = [
+      "cyanotype=1",
+      `cyanotype.env=${spec.envKey}`,
+      `cyanotype.component=${spec.component}`,
+      // Single-instance components carry no instance label, so an equality
+      // match cannot express them; require its ABSENCE or a single-instance
+      // lookup would also match every instance of a same-named multi-slot.
+      spec.instance !== undefined ? `cyanotype.instance=${spec.instance}` : "!cyanotype.instance",
+    ].join(",");
+
+    const found = await k.run(["get", "pods", "-l", selector, "-o", "json"]);
+    if (found.exit !== 0) {
+      throw { kind: "k8s_reconcile_query_failed", selector, stderr: found.stderr };
     }
+    type PodItem = {
+      metadata?: { name?: string; deletionTimestamp?: string };
+      status?: { phase?: string };
+    };
+    let items: PodItem[] = [];
+    try {
+      items = (JSON.parse(found.stdout) as { items?: PodItem[] }).items ?? [];
+    } catch (cause) {
+      throw { kind: "k8s_reconcile_query_failed", selector, stderr: found.stdout, cause };
+    }
+    // A Pod being deleted still reports Running until it goes. Excluding it is
+    // what keeps the mid-chaos window — old terminating, new starting — from
+    // reading as two live candidates.
+    const live = items.filter(
+      (it) => it.status?.phase === "Running" && it.metadata?.deletionTimestamp === undefined,
+    );
+    if (live.length === 0) {
+      throw {
+        kind: "k8s_reconcile_no_match",
+        selector,
+        matched: items.length,
+        phases: items.map((it) => it.status?.phase ?? "unknown"),
+      };
+    }
+    if (live.length > 1) {
+      throw {
+        kind: "k8s_reconcile_ambiguous",
+        selector,
+        pods: live.map((it) => it.metadata?.name ?? "unknown"),
+      };
+    }
+    const podName = live[0]?.metadata?.name ?? "";
     const ports: Record<string, number> = {};
     const forwards: Subprocess[] = [];
     try {
@@ -1076,9 +1125,20 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       for (const fp of forwards) { try { fp.kill(); } catch { /* ignore */ } }
       throw e;
     }
-    const t: Tracked = { podName, namespace, context, forwards, serviceName: null };
-    tracked.set(podName, t);
-    globalTracked.set(podName, t);
+    // MERGE, do not replace. A process that already started this Pod has a
+    // tracked entry holding its forwards; overwriting it orphans them, and
+    // nothing kills them afterwards because `stop()` and `disconnect()` both
+    // work from this map. Cross-process attach never hits this — the attaching
+    // process started nothing — but a process that starts and later reconnects
+    // to the same Pod does, and it leaks one child per port when it does.
+    const existing = tracked.get(podName);
+    if (existing !== undefined) {
+      existing.forwards.push(...forwards);
+    } else {
+      const t: Tracked = { podName, namespace, context, forwards, serviceName: null };
+      tracked.set(podName, t);
+      globalTracked.set(podName, t);
+    }
     return { containerId: podName, ports };
   };
 

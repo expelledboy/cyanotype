@@ -71,7 +71,7 @@ const CONSUMER_FACING = new Set([
 const INTERNAL = new Set([
   // Reached only through `attach_reconnect_failed`, which wraps it with the
   // component identity and the hint. Bare here so the reader gets one story.
-  "k8s_reconnect_pod_not_running",
+  "k8s_reconcile_query_failed", "k8s_reconcile_no_match", "k8s_reconcile_ambiguous",
   // Cyanotype's own machinery, or an Adapter violating our SPI. A consumer
   // cannot act on any of these, so a hint would be noise.
   "invariant_violated",
