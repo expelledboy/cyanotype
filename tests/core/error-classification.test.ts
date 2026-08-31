@@ -145,6 +145,20 @@ describe("error classification (D-042, D-043)", () => {
     expect(noisy).toEqual([]);
   });
 
+  /**
+   * `just <recipe>` where <recipe> is a real recipe in this repo's justfile.
+   *
+   * Matching a bare /just \s+\w+/ fires on the ordinary English adverb — it
+   * rejected "renaming just the key" — and a check that cries wolf on prose is
+   * one someone eventually disables. Reading the recipe names keeps it exact
+   * and needs no maintenance when they change.
+   */
+  const RECIPE_INVOCATION = (() => {
+    const recipes = [...readFileSync("justfile", "utf8")
+      .matchAll(/^([a-z][\w-]*)(?:\s+[\w"'=]+)*:/gm)].map((m) => m[1]);
+    return new RegExp(`\\bjust\\s+(?:${recipes.join("|")})\\b`);
+  })();
+
   test("hints do not reference this repository's own tooling", () => {
     // A consumer has no justfile of ours. Advice must be expressed in terms of
     // their code, their config, or their container runtime.
@@ -152,7 +166,7 @@ describe("error classification (D-042, D-043)", () => {
     for (const file of srcFiles("src")) {
       const text = readFileSync(file, "utf8");
       for (const m of text.matchAll(/hint:[\s\S]{0,900}?`,\n/g)) {
-        if (/\bjust\s+[a-z-]+|bun run |npm run /.test(m[0])) offenders.push(file);
+        if (RECIPE_INVOCATION.test(m[0]) || /bun run |npm run /.test(m[0])) offenders.push(file);
       }
     }
     expect([...new Set(offenders)]).toEqual([]);

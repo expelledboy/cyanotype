@@ -83,11 +83,7 @@ export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter =
         kind: "composite_route_key_invalid",
         key,
         hint:
-          `Route key "${key}" contains "${SEP}", which the composite adapter uses to prefix ` +
-          `container ids so it can route stop/logs/exists back to the substrate that started ` +
-          `them. A route key has to match a component name exactly, or "component.instance", ` +
-          `so rename the component in your Environment and use the new name as the key — ` +
-          `renaming only the key leaves that component on the default substrate.`,
+          `Route key "${key}" contains "${SEP}", which the composite adapter reserves to prefix container ids so it can route stop, logs and exists back to the substrate that started them. The usual cause is writing an instance with the wrong separator — the accepted forms are the component name alone, or component.instance with a DOT. Another is pasting a container id, which already carries this prefix, where a route key was wanted. Only if the component itself is genuinely named with "${SEP}" is renaming the component the fix, and note that renaming just the key without matching a real component silently leaves that component on the default substrate.`,
       };
     }
   }

@@ -298,10 +298,7 @@ export const loadDerivedCompose = (
         kind: "derived_compose_missing",
         path,
         hint:
-          `No derived config at "${path}". Attach mode reads a file your derive step writes: ` +
-          `run "cyanotype derive compose --compose <your compose file> --out ${path}" (or your ` +
-          `own derive script) before the suite runs. It must be the compose subcommand — this ` +
-          `loader validates compose adapter config only.`,
+          `No derived config at "${path}". Attach mode reads a file your derive step writes: run cyanotype derive compose --compose <your compose file> --out <path> before the suite, or produce the equivalent from your own script. Add --project unless the consumer passes project to createDockerAdapter, or the entries will carry no project and fail later with compose_attach_project_required. Use the compose subcommand: this loader validates compose config, but every field is optional, so k8s-derived output would load cleanly here and only fail much later.`,
       } satisfies DerivedComposeMissingError;
     }
     throw e;
@@ -342,11 +339,7 @@ export const loadDerivedCompose = (
         path,
         cause: { key, issues: result.error.issues },
         hint:
-          `The entry for "${key}" in "${path}" is not a valid compose adapter config. See ` +
-          `cause.issues for the exact fields. The shipped "cyanotype derive compose" CLI ` +
-          `validates every entry against this same schema before writing, so a failing entry ` +
-          `was hand-edited or came from a derive script of your own — regenerate the file, or ` +
-          `fix that script to emit compose.attach fields.`,
+          `The entry for "${key}" in "${path}" has a compose.attach field of the wrong type or shape — \`cause\` carries the exact field and what was expected (port must be a number, onImageDrift one of warn|fail|ignore). Note an entry with NO compose fields at all is accepted, so this is never "you forgot to emit them": something emitted the wrong type. The shipped derive CLI validates against this same schema before writing, so a failing entry was hand-edited or produced by a derive script of your own.`,
       } satisfies DerivedComposeInvalidError;
     }
   }
@@ -358,11 +351,7 @@ export const loadDerivedCompose = (
       path,
       missing,
       hint:
-        `"${path}" is missing [${missing.join(", ")}]. These are the expectedKeys you passed ` +
-        `to loadDerivedCompose. Derive keys come from each service's cyanotype.component ` +
-        `label, suffixed with .<cyanotype.instance> when that label carries a value, and a service ` +
-        `carrying no component label is skipped entirely — check those labels in the manifest ` +
-        `your derive step walks, or update the key list if your topology changed.`,
+        `"${path}" is missing [${missing.join(", ")}]. These are the expectedKeys passed to loadDerivedCompose, so the list and the file disagree — either could be the stale one. If this file came from the shipped cyanotype derive CLI, its keys are each service\u2019s cyanotype.component label, suffixed with .<cyanotype.instance> when that label carries a value, and services with no component label are skipped — so check those labels in the manifest it walked. If your own derive step wrote it, the keys are whatever that script chose and only it can tell you.`,
     } satisfies DerivedComposeMissingKeysError;
   }
 
