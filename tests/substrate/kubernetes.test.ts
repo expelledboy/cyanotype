@@ -1,33 +1,27 @@
 /**
  * Kubernetes adapter smoke tests against OrbStack.
  *
- * If `kubectl --context orbstack get nodes` fails, the entire suite skips —
- * we don't fail when the cluster isn't available.
+ * When no cluster answers, both blocks below report as SKIPPED, not passed.
+ * The probe therefore runs at module scope rather than in `beforeAll`, which
+ * Bun runs after registration and so too late for `describe.skipIf` to see.
+ * Set `CYANOTYPE_REQUIRE_K8S=1` — continuous integration does — to make an
+ * unreachable cluster fail instead of skip. See
+ * `tests/support/require-substrate.ts`.
  */
 
-import { describe, test, expect, beforeAll, afterEach } from "bun:test";
+import { describe, test, expect, afterEach } from "bun:test";
 import net from "node:net";
 import { createK8sAdapter } from "../../src/adapters/kubernetes";
 import type { Adapter, StartSpec } from "../../src/adapter";
+import { k8sAvailable, requireSubstrate } from "../support/require-substrate";
 
 const CONTEXT = process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack";
 const NAMESPACE = "cyanotype-tests";
 const IMAGE = "cyanotype/petstore-sla:latest";
 const CONTAINER_PORT = "8080";
 
-const k8sAvailable = async (): Promise<boolean> => {
-  try {
-    const proc = Bun.spawn(["kubectl", "--context", CONTEXT, "get", "nodes"], {
-      stdout: "ignore", stderr: "ignore",
-    });
-    return (await proc.exited) === 0;
-  } catch {
-    return false;
-  }
-};
-
-let HAS_K8S = false;
-beforeAll(async () => { HAS_K8S = await k8sAvailable(); });
+const HAS_K8S = requireSubstrate(
+  await k8sAvailable(CONTEXT), "k8s", `kubectl --context ${CONTEXT} get nodes`);
 
 const tcpConnect = (port: number): Promise<boolean> =>
   new Promise((resolve) => {
@@ -58,12 +52,12 @@ const mkSpec = (sessionId: string, overrides: Partial<StartSpec> = {}): StartSpe
   ...overrides,
 });
 
-describe("kubernetes/adapter", () => {
+describe.skipIf(!HAS_K8S)("kubernetes/adapter", () => {
   let adapter: Adapter | null = null;
   const started: string[] = [];
 
   afterEach(async () => {
-    if (!HAS_K8S || !adapter) return;
+    if (!adapter) return;
     for (const id of started.splice(0)) {
       try { await adapter.stop(id); } catch { /* ignore */ }
     }
@@ -73,7 +67,6 @@ describe("kubernetes/adapter", () => {
   });
 
   test("connect creates namespace if missing", async () => {
-    if (!HAS_K8S) return;
     const sid = `ns-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
@@ -87,7 +80,6 @@ describe("kubernetes/adapter", () => {
   }, 30_000);
 
   test("start returns Started with reachable port", async () => {
-    if (!HAS_K8S) return;
     const sid = `start-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
@@ -100,7 +92,6 @@ describe("kubernetes/adapter", () => {
   }, 120_000);
 
   test("exists returns true for started, false for never-existed", async () => {
-    if (!HAS_K8S) return;
     const sid = `exists-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
@@ -111,7 +102,6 @@ describe("kubernetes/adapter", () => {
   }, 120_000);
 
   test("logs yields at least one line", async () => {
-    if (!HAS_K8S) return;
     const sid = `logs-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
@@ -140,7 +130,6 @@ describe("kubernetes/adapter", () => {
   }, 120_000);
 
   test("stop removes the pod and exists returns false", async () => {
-    if (!HAS_K8S) return;
     const sid = `stop-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
@@ -153,7 +142,6 @@ describe("kubernetes/adapter", () => {
   }, 120_000);
 
   test("teardown removes all session-labelled pods/configmaps", async () => {
-    if (!HAS_K8S) return;
     const sid = `td-${Math.random().toString(36).slice(2, 8)}`;
     adapter = createK8sAdapter({ mode: "deploy", sessionId: sid, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
@@ -190,7 +178,7 @@ describe("kubernetes/adapter", () => {
  * The load-bearing case is the third one. The first two would pass against an
  * implementation that simply re-forwarded the id it was handed.
  */
-describe("k8s/reconnect resolves by label (D-047)", () => {
+describe.skipIf(!HAS_K8S)("k8s/reconnect resolves by label (D-047)", () => {
   const SESSION = "s-reconcile";
   const ENVKEY = "recon-env";
   const started: Array<{ adapter: Adapter; id: string }> = [];
@@ -217,7 +205,6 @@ describe("k8s/reconnect resolves by label (D-047)", () => {
   });
 
   test("re-establishes ports for a Pod this process did not start", async () => {
-    if (!HAS_K8S) return;
     const adapter = createK8sAdapter({ mode: "deploy", sessionId: SESSION, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
     const r = await adapter.start(specFor("solo"));
@@ -234,7 +221,6 @@ describe("k8s/reconnect resolves by label (D-047)", () => {
   }, 90_000);
 
   test("a single-instance lookup does not match an instance-labelled Pod", async () => {
-    if (!HAS_K8S) return;
     const adapter = createK8sAdapter({ mode: "deploy", sessionId: SESSION, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
     const r = await adapter.start(specFor("dual", "one"));
@@ -252,7 +238,6 @@ describe("k8s/reconnect resolves by label (D-047)", () => {
   }, 90_000);
 
   test("finds the REPLACEMENT after the recorded Pod is gone", async () => {
-    if (!HAS_K8S) return;
     const adapter = createK8sAdapter({ mode: "deploy", sessionId: SESSION, context: CONTEXT, namespace: NAMESPACE });
     await adapter.connect();
 
