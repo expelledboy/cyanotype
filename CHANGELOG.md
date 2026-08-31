@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-08-30
+## [0.6.0] - 2026-08-31
 
 Contract restoration, plus the first multi-substrate Environment.
 
@@ -363,7 +363,7 @@ Initial public release. Developer preview — pre-1.0, expect minor-version brea
 - Only HTTP and Opaque protocols implemented; TCP/gRPC/SOAP deferred
 - OrbStack K8s degrades under prolonged port-forward + rollout-restart load (kind/remote recommended for sustained CI)
 
-[Unreleased]: https://github.com/expelledboy/cyanotype/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/expelledboy/cyanotype/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.6.0
 [0.5.0]: https://github.com/expelledboy/cyanotype/releases/tag/v0.5.0
 [0.4.2]: https://github.com/expelledboy/cyanotype/releases/tag/v0.4.2
