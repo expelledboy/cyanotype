@@ -58,7 +58,9 @@ const collect = (): Entry[] => {
         if (/^(if|} else if)\s*\(/.test(L) || /^\}?\s*catch\b/.test(L)) { guard = L; break; }
       }
 
-      const hintRaw = block.match(/hint:\s*([\s\S]*?)(?:,\n\s*\}|,\n\s*\w+:)/)?.[1] ?? "";
+      // Stop at a shorthand property (`names,`) as well as `name:` — otherwise
+      // extraction runs past the hint and prints trailing field names as prose.
+      const hintRaw = block.match(/hint:\s*([\s\S]*?)(?:,\n\s*\}|,\n\s*\w+\s*[,:])/)?.[1] ?? "";
       const hint = hintRaw
         .replace(/`\s*\+\s*`/g, "")
         .replace(/\$\{([^}]*)\}/g, (_s, expr: string) => `<${expr.trim().split(/[.(\s]/)[0]}>`)

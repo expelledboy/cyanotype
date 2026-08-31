@@ -77,7 +77,7 @@ const sites = (): Site[] => {
       // — a field may be declared after `hint:` (e.g. `found` on
       // attach_substrate_mismatch), and reading only the head would call a real
       // field bogus.
-      const withoutHint = block.replace(/hint:\s*[\s\S]*?(?=,\n\s*\}|,\n\s*[a-zA-Z_]\w*:)/, "");
+      const withoutHint = block.replace(/hint:\s*[\s\S]*?(?=,\n\s*\}|,\n\s*[a-zA-Z_]\w*\s*[,:])/, "");
       const fields = new Set(
         [...withoutHint.matchAll(/([a-zA-Z_]\w*)\s*[,:]/g)].map((f) => f[1] ?? ""),
       );

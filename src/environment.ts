@@ -92,9 +92,11 @@ const checkDeclaredPorts = (componentName: string, slot: unknown): void => {
         `The Blueprint bound at "${where}" declares portNames [${declared.join(", ")}] but its ` +
         `Binding assigns [${Object.keys(assigned).join(", ") || "nothing"}], leaving ` +
         `[${missing.join(", ")}] unset. Add ${missing.map((m) => `${m}: "auto"`).join(", ")} to ` +
-        `that Binding's ports, or drop the name from the Blueprint's portNames. Left unset, the ` +
-        `port resolves to undefined and your interface URI becomes ` +
-        `"http://host:undefined", which surfaces later as a readiness timeout.`,
+        `that Binding's ports. Removing the name from the Blueprint's portNames only silences ` +
+        `this check — it is the right fix ONLY if nothing in that Blueprint's interface() ` +
+        `reads the port, otherwise the same failure returns unguarded. Left unset, the port ` +
+        `resolves to undefined and your interface URI becomes "http://host:undefined", which ` +
+        `surfaces later as a readiness timeout apparently against your own service.`,
     };
   }
 };
@@ -123,9 +125,10 @@ export const createEnvironment = <
             ? `"start" is reserved defensively: runtime.start is not exposed today, but ` +
               `reserving the name means adding an environment-level start later cannot ` +
               `silently shadow a component. Rename the component in createEnvironment().`
-            : `"${name}" is a system operation on the runtime (runtime.${name}), and a ` +
-              `component of that name would shadow it. Rename the component in ` +
-              `createEnvironment().`,
+            : `"${name}" is a system operation on the runtime (runtime.${name}). The runtime ` +
+              `assigns components first and system operations last, so the operation would ` +
+              `overwrite your component and leave it unreachable — the shadowing runs that ` +
+              `way round, not the other. Rename the component in createEnvironment().`,
       };
     }
     checkDeclaredPorts(name, env[name]);
