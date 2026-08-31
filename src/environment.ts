@@ -51,6 +51,64 @@ export const RESERVED_COMPONENT_NAMES = ["start", "stop", "snapshot", "metadata"
  * Validation is at construction (boundary), not throughout the orchestrator
  * (interior) — CONVENTIONS.md "parse at boundaries, trust internally".
  */
+/**
+ * Every port a Blueprint declares must be assigned by the Binding that
+ * instantiates it.
+ *
+ * `Binding.ports` is `Record<string, "auto" | number>` rather than a key-for-key
+ * mapping of `Blueprint.portNames`, so a Binding that omits one type-checks. The
+ * omission is not inert: the orchestrator hands the resolved map to
+ * `blueprint.interface(...)`, the missing entry reads `undefined`, and it lands
+ * in a URI as `http://127.0.0.1:undefined`. What the author then sees is a
+ * readiness timeout against their own service — a failure that points at the
+ * system under test rather than at the Binding.
+ *
+ * Checked here rather than as a runtime invariant because this is consumer
+ * misconfiguration, not an agreement between Cyanotype's own modules: it must
+ * fail for everyone, at construction, naming the port.
+ */
+const checkDeclaredPorts = (componentName: string, slot: unknown): void => {
+  const bindings: [string | undefined, AnyBindingLike][] =
+    isBindingLike(slot)
+      ? [[undefined, slot]]
+      : Object.entries(slot as Record<string, AnyBindingLike>)
+          .filter((e): e is [string, AnyBindingLike] => isBindingLike(e[1]))
+          .map(([k, v]) => [k, v]);
+
+  for (const [instance, binding] of bindings) {
+    const declared = binding.blueprint?.portNames ?? [];
+    const assigned = binding.ports ?? {};
+    const missing = declared.filter((n) => assigned[n] === undefined);
+    if (missing.length === 0) continue;
+    const where = instance === undefined ? componentName : `${componentName}.${instance}`;
+    throw {
+      kind: "binding_missing_declared_ports",
+      component: componentName,
+      ...(instance !== undefined ? { instance } : {}),
+      missing,
+      declared,
+      assigned: Object.keys(assigned),
+      hint:
+        `The Blueprint bound at "${where}" declares portNames [${declared.join(", ")}] but its ` +
+        `Binding assigns [${Object.keys(assigned).join(", ") || "nothing"}], leaving ` +
+        `[${missing.join(", ")}] unset. Add ${missing.map((m) => `${m}: "auto"`).join(", ")} to ` +
+        `that Binding's ports. Removing the name from the Blueprint's portNames only silences ` +
+        `this check — it is the right fix ONLY if nothing in that Blueprint's interface() ` +
+        `reads the port, otherwise the same failure returns unguarded. Left unset, the port ` +
+        `resolves to undefined and your interface URI becomes "http://host:undefined", which ` +
+        `surfaces later as a readiness timeout apparently against your own service.`,
+    };
+  }
+};
+
+type AnyBindingLike = {
+  blueprint?: { portNames?: readonly string[] };
+  ports?: Record<string, "auto" | number>;
+};
+
+const isBindingLike = (v: unknown): v is AnyBindingLike =>
+  typeof v === "object" && v !== null && "blueprint" in v;
+
 export const createEnvironment = <
   const E extends Environment,
 >(
@@ -62,8 +120,18 @@ export const createEnvironment = <
         kind: "reserved_component_name",
         name,
         reserved: RESERVED_COMPONENT_NAMES,
+        hint:
+          name === "start"
+            ? `"start" is reserved defensively: runtime.start is not exposed today, but ` +
+              `reserving the name means adding an environment-level start later cannot ` +
+              `silently shadow a component. Rename the component in createEnvironment().`
+            : `"${name}" is a system operation on the runtime (runtime.${name}). The runtime ` +
+              `assigns components first and system operations last, so the operation would ` +
+              `overwrite your component and leave it unreachable — the shadowing runs that ` +
+              `way round, not the other. Rename the component in createEnvironment().`,
       };
     }
+    checkDeclaredPorts(name, env[name]);
   }
   return env;
 };

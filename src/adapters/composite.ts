@@ -42,6 +42,7 @@
 
 import type { Adapter, StartSpec, Started } from "../adapter.js";
 import type { Emit } from "../observer.js";
+import { invariant } from "../invariants.js";
 
 const SEP = "::";
 
@@ -78,7 +79,12 @@ const IN_CLUSTER_SUBSTRATES = new Set(["kubernetes", "k8s"]);
 export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter => {
   for (const key of Object.keys(opts.routes)) {
     if (key.includes(SEP)) {
-      throw { kind: "composite_route_key_invalid", key, reason: `must not contain "${SEP}"` };
+      throw {
+        kind: "composite_route_key_invalid",
+        key,
+        hint:
+          `Route key "${key}" contains "${SEP}", which the composite adapter reserves to prefix container ids so it can route stop, logs and exists back to the substrate that started them. The usual cause is writing an instance with the wrong separator — the accepted forms are the component name alone, or component.instance with a DOT. Another is pasting a container id, which already carries this prefix, where a route key was wanted. Only if the component itself is genuinely named with "${SEP}" is renaming the component the fix, and note that renaming just the key without matching a real component silently leaves that component on the default substrate.`,
+      };
     }
   }
 
@@ -91,10 +97,12 @@ export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter =
       throw {
         kind: "composite_substrates_unreachable",
         hostBound, inCluster,
-        reason:
-          "an in-process simulator binds the test host's loopback, which an "
-          + "in-cluster Pod cannot generally reach. Set allowUnreachableSubstrates "
-          + "if this cluster can route to the host.",
+        hint:
+          "This composite routes some components to a host-bound substrate (an in-process "
+          + "simulator binds the test host's loopback) and others into a cluster, which cannot "
+          + "generally reach that loopback — so the in-cluster components would fail to talk to "
+          + "the simulated ones. Either route both sides to the same substrate, or set "
+          + "allowUnreachableSubstrates: true if this cluster can route to your host.",
       };
     }
   }
@@ -133,6 +141,24 @@ export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter =
     if (errors.length > 0) throw errors[0];
   };
 
+  // NO `reconnect` HERE, AND NOT BY OVERSIGHT (D-046, D-047).
+  //
+  // Routing one would be easy — `split()` already yields the member and the
+  // inner id, and the result just needs re-prefixing. The blocker is what to do
+  // for a member that does NOT implement it. `ReconnectSpec` carries port
+  // NAMES, not the numbers the snapshot recorded, so this adapter cannot answer
+  // "use the recorded ports for that one" and has nothing valid to return.
+  //
+  // The conservative fix — expose `reconnect` only when every member implements
+  // it — is inert here by construction. This adapter exists to run the
+  // component under test for real beside simulated dependencies (D-038), and
+  // the in-memory adapter cannot implement `reconnect` at all: its fakes live
+  // in this process, so there is nothing for another process to reconnect to.
+  // A composite doing its job therefore always has a member without it.
+  //
+  // Closing this properly means putting the recorded ports in `ReconnectSpec`,
+  // which is an SPI change and wants evidence that someone needs cross-process
+  // attach against a mixed-substrate Environment. Nobody has asked yet.
   return {
     name: `composite(${distinct.map((a) => a.name).join("+")})`,
 
@@ -144,7 +170,13 @@ export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter =
       const key = resolveKey(spec);
       const adapter = key === undefined ? opts.default : opts.routes[key]!;
       const started = await adapter.start(spec, emit);
-      return { ...started, containerId: `${key ?? ""}${SEP}${started.containerId}` };
+      const containerId = `${key ?? ""}${SEP}${started.containerId}`;
+      // I9: every id this adapter mints must route back. An unroutable id does
+      // not throw — `stop` becomes a no-op and `exists` reports false, so a
+      // container silently outlives the suite.
+      invariant( () => split(containerId) !== null, "a minted composite id routes back",
+        () => ({ containerId, key, routes: Object.keys(opts.routes) }));
+      return { ...started, containerId };
     },
 
     stop: async (containerId: string): Promise<void> => {

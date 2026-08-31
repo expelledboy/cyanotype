@@ -22,6 +22,7 @@
  */
 
 import type { Adapter, StartSpec } from "./adapter.js";
+import { invariant } from "./invariants.js";
 import type { Environment } from "./environment.js";
 import type { Runtime, RuntimeSnapshot, Running } from "./runtime.js";
 import type { Binding } from "./binding.js";
@@ -57,6 +58,22 @@ export type OrchestratorOptions = {
    * deliberately and the wrong one on a shared CI runner.
    */
   readonly attachReadinessTimeoutMs?: number;
+  /**
+   * How component slots are brought up.
+   *
+   * `"sequential"` (default) starts one slot at a time in declaration order, so
+   * total startup is the SUM of every slot's readiness time. `"concurrent"`
+   * starts them all at once, making it the length of the longest dependency
+   * chain instead — readiness probes poll, so a component whose dependency is
+   * still coming up simply retries until it is there.
+   *
+   * Sequential remains the default because the ordering it provides, while
+   * incidental — it is object key order, not a declared dependency graph — is
+   * what existing environments have been running against. Opt in when your
+   * components tolerate starting before their dependencies, which is the normal
+   * case for anything that retries its connections.
+   */
+  readonly startup?: "sequential" | "concurrent";
 };
 
 type Emitter = ReturnType<typeof createEmitter>;
@@ -119,6 +136,12 @@ const stateKey = (componentName: string, instanceId: string | undefined): string
   instanceId === undefined ? componentName : `${componentName}:${instanceId}`;
 
 /** Source attribution stamped onto every ingested event. Omits `instance` for single-instance slots. */
+/**
+ * I8: an event's `instance` must be present exactly when the component has one.
+ * `EventFilter.instance` was a public filter that could never match in a real
+ * environment because this stamp was dropped — the failure was a wait that
+ * timed out with no indication why.
+ */
 const eventMeta = (componentName: string, instanceId: string | undefined) =>
   instanceId === undefined
     ? { component: componentName }
@@ -284,13 +307,25 @@ export const startEnvironment = async <E extends Environment>(
   };
 
   try {
-    for (const [name, slot] of Object.entries(env)) {
+    const startSlot = async ([name, slot]: [string, unknown]): Promise<void> => {
       if (isSingleBinding(slot)) {
         await startOne(name, undefined, slot);
-      } else {
-        const entries = Object.entries(slot as Record<string, AnyBinding>);
-        await Promise.all(entries.map(([instanceId, binding]) => startOne(name, instanceId, binding)));
+        return;
       }
+      const entries = Object.entries(slot as Record<string, AnyBinding>);
+      await Promise.all(entries.map(([instanceId, binding]) => startOne(name, instanceId, binding)));
+    };
+
+    const slots = Object.entries(env);
+    if (opts.startup === "concurrent") {
+      // allSettled, not all: a rejection from `all` would leave the other slots
+      // starting in the background with nobody holding their handles, which is
+      // how a failed start leaks containers.
+      const results = await Promise.allSettled(slots.map(startSlot));
+      const failed = results.find((r) => r.status === "rejected");
+      if (failed && failed.status === "rejected") throw failed.reason;
+    } else {
+      for (const entry of slots) await startSlot(entry);
     }
   } catch (e) {
     rootEmit({ type: "environment.failed", phase: "start", error: e });
@@ -301,7 +336,29 @@ export const startEnvironment = async <E extends Environment>(
   const resolveState = (name: string, instance?: string): ComponentState => {
     const key = stateKey(name, instance);
     const s = components.get(key);
-    if (!s) throw { kind: "component_not_found", name, instance };
+    if (!s) {
+      // Report the addressable form, NOT `components.keys()`. Those are internal
+      // map keys joined with a colon (`redis:primary`), while every user-facing
+      // key in the library — composite route keys, derive binding keys — is
+      // dot-joined (`redis.primary`). Printing the colon form invited copying it
+      // into `createCompositeAdapter({ routes })`, where it matches nothing and
+      // silently falls through to the default substrate instead of erroring.
+      const addressable = Array.from(components.values()).map((c) =>
+        c.instanceId === undefined ? c.componentName : `${c.componentName}.${c.instanceId}`);
+      throw {
+        kind: "component_not_found",
+        name,
+        instance,
+        known: addressable,
+        hint:
+          `No component "${instance === undefined ? name : `${name}.${instance}`}" in this ` +
+          `environment. Known: ${addressable.join(", ")}. For a multi-instance component the ` +
+          `instance is required (chaos.stop("redis", "primary")); for a single-instance one it ` +
+          `must be omitted. ChaosArgs normally makes that a compile error, so reaching this at ` +
+          `runtime usually means a dynamic or cast call site. These names are also the form ` +
+          `composite route keys and derive binding keys take.`,
+      };
+    }
     return s;
   };
 
@@ -313,10 +370,27 @@ export const startEnvironment = async <E extends Environment>(
     if (s.status === "stopped") return;
     const chaosEmit = chaosScope(name, instance);
     chaosEmit({ type: "chaos.stopping" });
-    s.signal.abort();
     const id = s.containerId;
     chaosEmit({ type: "container.stopping", containerId: id });
-    try { await opts.adapter.stop(id); } catch (e) { console.error(e); }
+    // Do NOT swallow. D-034 replaced the Docker adapter's silent no-op with a
+    // thrown `chaos_unsupported_in_attach_mode` precisely to make "chaos call
+    // without allowChaos" a test-author error "surfaced loudly"; logging it to
+    // console.error buried it, and 5s later `chaos_stop_unverified` blamed the
+    // substrate for a stop the adapter had openly refused.
+    //
+    // The SPI documents stop() as idempotent — it must not throw if the
+    // container is already gone (adapter.ts) — so a throw is a real failure.
+    // Status therefore stays as it was: the component was not stopped, and
+    // marking it "stopped" anyway is what let a later chaos.start() look like
+    // it had resumed something.
+    await opts.adapter.stop(id);
+    // Abort the log stream only once the stop has actually happened. Aborting
+    // first meant a REFUSED stop — the throw above is deliberate, see D-034 —
+    // left a running component with a closed stream, and only `chaos.start`
+    // re-arms it. Nobody calls start after a stop that was refused, so the
+    // component ran on with a dead event bus and later waits timed out blaming
+    // it rather than the refusal.
+    s.signal.abort();
     chaosEmit({ type: "container.stopped", containerId: id });
     s.containerId = "";
     s.status = "stopped";
@@ -332,12 +406,36 @@ export const startEnvironment = async <E extends Environment>(
       } catch { /* transient — keep polling */ }
       await new Promise((r) => setTimeout(r, 50));
     }
-    throw { kind: "chaos_stop_unverified", name, instance, containerId: id };
+    throw {
+      kind: "chaos_stop_unverified",
+      name, instance, containerId: id,
+      hint:
+        `The adapter's stop() returned without error, but for 5s afterwards exists() never ` +
+        `reported the container gone — it kept finding it, or kept erroring, and the poll ` +
+        `cannot tell those apart. chaos.stop() therefore cannot promise the component is ` +
+        `down, and asserting on a failure mode that may not have been injected would be ` +
+        `worse than failing here. A stop the adapter refuses now propagates instead of ` +
+        `reaching this, so reaching it means the substrate accepted the stop and the ` +
+        `container outlived it — check the daemon or cluster.`,
+    };
   };
 
   const chaosStart = async (name: string, instance?: string): Promise<void> => {
     const s = resolveState(name, instance);
-    if (s.status !== "stopped") throw { kind: "invalid_chaos", reason: "not_stopped" };
+    if (s.status !== "stopped") {
+      throw {
+        kind: "invalid_chaos",
+        reason: "not_stopped",
+        component: s.componentName,
+        instance: s.instanceId,
+        status: s.status,
+        hint:
+          `chaos.start() resumes a component that chaos.stop() stopped, but this one is ` +
+          `"${s.status}". Use chaos.restart() to cycle a running component, or await the ` +
+          `chaos.stop() first. A stop marks the component stopped even when the substrate ` +
+          `errors, so reaching this means none ran, or its promise was never awaited.`,
+      };
+    }
     const chaosEmit = chaosScope(name, instance);
     chaosEmit({ type: "chaos.starting" });
     const spec = buildSpec(s.componentName, s.instanceId, s.binding);
@@ -416,15 +514,79 @@ export const attachEnvironment = async <E extends Environment>(
     binding: AnyBinding,
     snap: ComponentSnapshot,
   ): Promise<void> => {
-    if (!(await opts.adapter.exists(snap.containerId))) {
-      throw { kind: "container_gone", containerId: snap.containerId, componentName, instanceId };
+    // D-047. `exists()` asks about the RECORDED id, which is the thing that goes
+    // stale: a chaos restart in the owning process replaces the container and
+    // never updates the shared metadata (D-007). An adapter that can reconnect
+    // resolves the component itself, so asking this first would reject a
+    // healthy component for having been restarted — the precheck would answer
+    // the wrong question and answer it before anyone could correct it.
+    if (opts.adapter.reconnect === undefined && !(await opts.adapter.exists(snap.containerId))) {
+      throw {
+        kind: "container_gone",
+        containerId: snap.containerId, componentName, instanceId,
+        hint:
+          `The adapter reported the container in \`containerId\` as absent while re-attaching ` +
+          `"${instanceId === undefined ? componentName : `${componentName}.${instanceId}`}". ` +
+          `Absent is the adapter's definition and does not always mean gone: Docker attach ` +
+          `mode reports absent for a compose container that is merely stopped, and ` +
+          `Kubernetes attach mode reports absent for one this process did not itself start. ` +
+          `If Cyanotype started it, it really is gone — removed externally, or replaced by a ` +
+          `chaos restart in another process whose new id this state file never saw — so stop ` +
+          `the containers labelled cyanotype=1, delete the <envKey>.json under your ` +
+          `stateDir, and re-run under mode: "start" or "startOrAttach". If you own the ` +
+          `stack, those containers carry no Cyanotype label and deleting state will not help: ` +
+          `bring the stopped service back up instead.`,
+      };
     }
     // Attach mode never owns the container: the process that started it
     // (or the operator, for compose / pre-running pods) holds the lifecycle.
     // `runtime.stop()` here detaches without removing.
+    // D-046. The ports in the snapshot are only durable if the adapter says so.
+    // An adapter exposing `reconnect` is declaring it can re-establish them for
+    // THIS process — Kubernetes deploy mode records `kubectl port-forward`
+    // locals, which died with the process that wrote them.
+    let attachId = snap.containerId;
+    let attachPorts: Record<string, number> = { ...snap.ports };
+    if (opts.adapter.reconnect) {
+      try {
+        const re = await opts.adapter.reconnect({
+          containerId: snap.containerId,
+          envKey: opts.envKey,
+          component: componentName,
+          ...(instanceId !== undefined ? { instance: instanceId } : {}),
+          ports: Object.keys(binding.ports ?? {}),
+          ...(binding.adapter !== undefined ? { adapterConfig: binding.adapter } : {}),
+        });
+        attachId = re.containerId;
+        attachPorts = { ...re.ports };
+      } catch (cause) {
+        throw {
+          kind: "attach_reconnect_failed",
+          componentName, instanceId, containerId: snap.containerId, cause,
+          hint:
+            `The container in \`containerId\` exists, but this process could not open its own ` +
+            `connection to it while re-attaching ` +
+            `"${instanceId === undefined ? componentName : `${componentName}.${instanceId}`}". ` +
+            `\`cause\` carries the adapter's error. On Kubernetes the recorded ports belong to ` +
+            `the process that started the environment — they are port-forwards, not host ` +
+            `bindings — so this step re-opens them here, and it fails when the Pod is no longer ` +
+            `Running even though it still exists. A Pod that a chaos restart replaced leaves the ` +
+            `old one briefly present but not Running; kubectl get pod shows the phase. If the ` +
+            `Pod is gone for good, stop the containers labelled cyanotype=1, delete the ` +
+            `<envKey>.json under your stateDir, and re-run under mode: "start" or ` +
+            `"startOrAttach" to rebuild.`,
+        };
+      }
+    }
     const state = buildComponentRuntime(
-      opts.adapter, componentName, instanceId, binding, snap.containerId, { ...snap.ports }, false,
+      opts.adapter, componentName, instanceId, binding, attachId, attachPorts, false,
     );
+    // D-034: the process that called `attachEnvironment` did not start these
+    // containers, so its `runtime.stop` must not stop them. Upheld today by the
+    // literal `false` above — this pins it against a future refactor that
+    // threads the snapshot's `owned` through instead.
+    invariant( () => state.owned === false, "attach never produces an owned component",
+      () => ({ component: componentName, instance: instanceId, containerId: attachId }));
     // `exists()` above proves the container is present, not that it serves.
     // Attaching to a warm stack is the case readiness was written for: the
     // component may be mid-restart, or a sibling worker may have written
@@ -446,7 +608,20 @@ export const attachEnvironment = async <E extends Environment>(
         state.signal.abort();
         // runProbe's `probe_timeout` carries the probe and last error but no
         // component identity, and attach probes several components in a row.
-        throw { kind: "attach_probe_failed", componentName, instanceId, cause };
+        throw {
+          kind: "attach_probe_failed",
+          componentName, instanceId, cause,
+          hint:
+            `Attached to ` +
+            `"${instanceId === undefined ? componentName : `${componentName}.${instanceId}`}" ` +
+            `but its Blueprint readiness probe never passed. The container was found — ` +
+            `nothing more: exists() is true for a container that is present but STOPPED, so ` +
+            `check its status and exit code before assuming a running process that will not ` +
+            `serve. Attach probes deliberately (D-036) rather than handing back a runtime ` +
+            `that fails inside your first assertion. \`cause\` carries the probe's own ` +
+            `failure — probe_timeout with the last error it saw, or probe_aborted if ` +
+            `attachReadinessTimeoutMs capped the whole attach.`,
+        };
       }
     }
     finalizeApi(state);
@@ -456,16 +631,55 @@ export const attachEnvironment = async <E extends Environment>(
   try {
     for (const [componentName, slotSnap] of Object.entries(snapshot.components)) {
       const slot = env[componentName];
-      if (slot === undefined) throw { kind: "snapshot_unknown_component", componentName };
+      if (slot === undefined) {
+        throw {
+          kind: "snapshot_unknown_component",
+          componentName,
+          hint:
+            `The persisted environment contains "${componentName}", but the Environment in ` +
+            `this code does not -- the definition changed since those containers started. ` +
+            `Add it back to the Environment to re-attach to those containers. Otherwise discard the environment: Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run under mode: "start" or "startOrAttach". Re-running in mode: "attach" finds no state file and raises attach_no_metadata instead. If you called attachEnvironment directly there is no stateDir to clear -- fix the Environment or the snapshot you passed it. shared.stopAll() will NOT clear this for you: it stops what THIS process started, and those containers belong to an earlier one.`,
+        };
+      }
       if (slotSnap.kind === "single") {
-        if (!isSingleBinding(slot)) throw { kind: "snapshot_shape_mismatch", componentName };
+        if (!isSingleBinding(slot)) {
+          throw {
+            kind: "snapshot_shape_mismatch",
+            componentName,
+            persisted: "single",
+            current: "multi-instance",
+            hint:
+              `"${componentName}" was persisted as a single-instance component but is now ` +
+              `multi-instance. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run under mode: "start" or "startOrAttach". Re-running in mode: "attach" finds no state file and raises attach_no_metadata instead. If you called attachEnvironment directly there is no stateDir to clear -- fix the Environment or the snapshot you passed it. shared.stopAll() will NOT clear this for you: it stops what THIS process started, and those containers belong to an earlier one.`,
+          };
+        }
         await attachOne(componentName, undefined, slot, slotSnap.snapshot);
       } else {
-        if (isSingleBinding(slot)) throw { kind: "snapshot_shape_mismatch", componentName };
+        if (isSingleBinding(slot)) {
+          throw {
+            kind: "snapshot_shape_mismatch",
+            componentName,
+            persisted: "multi-instance",
+            current: "single",
+            hint:
+              `"${componentName}" was persisted as multi-instance but is now single-instance. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run under mode: "start" or "startOrAttach". Re-running in mode: "attach" finds no state file and raises attach_no_metadata instead. If you called attachEnvironment directly there is no stateDir to clear -- fix the Environment or the snapshot you passed it. shared.stopAll() will NOT clear this for you: it stops what THIS process started, and those containers belong to an earlier one.`,
+          };
+        }
         const map = slot as Record<string, AnyBinding>;
         for (const [instanceId, compSnap] of Object.entries(slotSnap.instances)) {
           const binding = map[instanceId];
-          if (!binding) throw { kind: "snapshot_unknown_instance", componentName, instanceId };
+          if (!binding) {
+            throw {
+              kind: "snapshot_unknown_instance",
+              componentName,
+              instanceId,
+              known: Object.keys(map),
+              hint:
+                `The persisted environment has "${componentName}.${instanceId}", but this code ` +
+                `defines only [${Object.keys(map).join(", ")}]. An instance was renamed or ` +
+                `removed. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run under mode: "start" or "startOrAttach". Re-running in mode: "attach" finds no state file and raises attach_no_metadata instead. If you called attachEnvironment directly there is no stateDir to clear -- fix the Environment or the snapshot you passed it. shared.stopAll() will NOT clear this for you: it stops what THIS process started, and those containers belong to an earlier one.`,
+            };
+          }
           await attachOne(componentName, instanceId, binding, compSnap);
         }
       }
@@ -483,7 +697,17 @@ export const attachEnvironment = async <E extends Environment>(
   rootEmit({ type: "environment.ready", durationMs: Date.now() - envStart });
 
   const notSupported = async (): Promise<void> => {
-    throw { kind: "chaos_not_supported_in_attach" };
+    throw {
+      kind: "chaos_not_supported_in_attach",
+      hint:
+        `Chaos is not implemented on this path. A runtime rebuilt from a persisted snapshot ` +
+        `wires stop, start and restart to a refusal — it is the re-attach path that lacks ` +
+        `them, not a rule about ownership: chaos works fine against containers this process ` +
+        `does not own, which is how attach-mode disruption is supported when a Binding sets ` +
+        `allowChaos. Run chaos from the process whose ensure() actually built the ` +
+        `environment. Note a different envKey does not buy you ownership if the adapter is ` +
+        `in attach mode — it re-adopts the same operator-owned containers.`,
+    };
   };
   return finalizeRuntime(env, components, opts, emitter, notSupported, notSupported, notSupported);
 };
@@ -538,6 +762,7 @@ const finalizeRuntime = <E extends Environment>(
       schemaVersion: 1,
       envKey: opts.envKey,
       savedAt: new Date().toISOString(),
+      adapter: opts.adapter.name,
       components: out,
     };
   };
@@ -554,6 +779,12 @@ const finalizeRuntime = <E extends Environment>(
           adapter: opts.adapter.name, envKey: opts.envKey,
           component: c.componentName, instance: c.instanceId,
         });
+        // I6: D-034's central promise. Chaos is the *only* path allowed to stop
+        // a non-owned container, and this is not it — suite teardown reaching
+        // `adapter.stop` here is what once ran `docker stop` against an
+        // operator's compose stack at the end of every run.
+        invariant( () => c.owned === true, "teardown stops only owned containers",
+          () => ({ component: c.componentName, instance: c.instanceId, containerId: c.containerId }));
         stopEmit({ type: "container.stopping", containerId: c.containerId });
         try { await opts.adapter.stop(c.containerId); } catch (e) { console.error(e); }
         stopEmit({ type: "container.stopped", containerId: c.containerId });

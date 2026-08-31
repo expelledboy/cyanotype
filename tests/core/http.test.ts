@@ -260,3 +260,27 @@ describe("http/declaration holes", () => {
     expect(err.body.code).toBe("bad_input");
   });
 });
+
+describe("request-construction failures are tagged, not raw", () => {
+  // `protocol.ts` built its URL OUTSIDE the try, so a malformed baseUrl threw a
+  // raw TypeError with no `kind` — while the identical mistake through
+  // `helpers.ts`, which built its URL inside, produced a tagged `fetch_error`.
+  // Same library, same misuse, two different failure shapes, and only one of
+  // them catchable.
+  const routes = { ping: { method: "GET", path: "/", response: z.object({}) } } as const;
+
+  test("a malformed baseUrl yields fetch_error, not a TypeError", async () => {
+    const client = createHttpClient(routes as never, { baseUrl: "not-a-url" } as never) as {
+      ping: () => Promise<unknown>;
+    };
+    let caught: unknown;
+    try { await client.ping(); } catch (e) { caught = e; }
+
+    expect(caught).toBeDefined();
+    expect(caught instanceof Error).toBe(false);
+    expect((caught as { kind?: string }).kind).toBe("fetch_error");
+    // The hint must say the request was never sent, rather than implicating the
+    // target — nothing was contacted.
+    expect((caught as { hint?: string }).hint ?? "").toContain("no request was sent");
+  });
+});

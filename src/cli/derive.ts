@@ -58,8 +58,18 @@ const selectorMatches = (
   return true;
 };
 
-const bindingKey = (component: string, instance: string | undefined): string =>
-  instance === undefined ? component : `${component}.${instance}`;
+/**
+ * `component`, or `component.instance` when the instance label carries a value.
+ *
+ * Absence is checked for falsiness, not `undefined`. YAML parses a valueless
+ * `cyanotype.instance:` as null and Compose's array label form (`- cyanotype.instance`,
+ * no `=`) as the empty string; testing `=== undefined` let both through and
+ * produced the keys `redis.null` and `redis.` — which then read as an expected
+ * key MISSING, while the labels the author is sent to inspect look correct.
+ * Instance names are non-empty strings, so no legitimate value is falsy.
+ */
+const bindingKey = (component: string, instance: string | undefined | null): string =>
+  instance ? `${component}.${instance}` : component;
 
 // ---------------------------------------------------------------------------
 // K8s derive
@@ -234,18 +244,24 @@ export const deriveCompose = (
 export type DerivedComposeMissingError = {
   readonly kind: "derived_compose_missing";
   readonly path: string;
+  /** Human-readable explanation of what went wrong and how to fix it (D-043). */
+  readonly hint: string;
 };
 /** Parse failure or per-entry schema validation failure. */
 export type DerivedComposeInvalidError = {
   readonly kind: "derived_compose_invalid";
   readonly path: string;
   readonly cause: unknown;
+  /** Human-readable explanation of what went wrong and how to fix it (D-043). */
+  readonly hint: string;
 };
 /** One or more `expectedKeys` were absent from the loaded map. */
 export type DerivedComposeMissingKeysError = {
   readonly kind: "derived_compose_missing_keys";
   readonly path: string;
   readonly missing: readonly string[];
+  /** Human-readable explanation of what went wrong and how to fix it (D-043). */
+  readonly hint: string;
 };
 
 /**
@@ -278,7 +294,12 @@ export const loadDerivedCompose = (
     raw = readFileSync(path, "utf8");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      throw { kind: "derived_compose_missing", path } satisfies DerivedComposeMissingError;
+      throw {
+        kind: "derived_compose_missing",
+        path,
+        hint:
+          `No derived config at "${path}". Attach mode reads a file your derive step writes: run cyanotype derive compose --compose <your compose file> --out <path> before the suite, or produce the equivalent from your own script. Add --project unless the consumer passes project to createDockerAdapter, or the entries will carry no project and fail later with compose_attach_project_required. Use the compose subcommand: this loader validates compose config, but every field is optional, so k8s-derived output would load cleanly here and only fail much later.`,
+      } satisfies DerivedComposeMissingError;
     }
     throw e;
   }
@@ -287,13 +308,25 @@ export const loadDerivedCompose = (
   try {
     parsed = JSON.parse(raw);
   } catch (cause) {
-    throw { kind: "derived_compose_invalid", path, cause } satisfies DerivedComposeInvalidError;
+    throw {
+      kind: "derived_compose_invalid",
+      path,
+      cause,
+      hint:
+        `"${path}" is not valid JSON. A derive step writes it — the shipped ` +
+        `"cyanotype derive compose" CLI, or your own script — so re-run that step rather than ` +
+        `hand-editing, and check nothing truncated the file.`,
+    } satisfies DerivedComposeInvalidError;
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw {
       kind: "derived_compose_invalid",
       path,
       cause: "expected a JSON object at top level",
+      hint:
+        `"${path}" parsed as JSON but is not an object. A derive step writes a map of binding ` +
+        `key — component, or component.instance — to adapter config; re-run yours rather than ` +
+        `hand-editing.`,
     } satisfies DerivedComposeInvalidError;
   }
 
@@ -305,6 +338,8 @@ export const loadDerivedCompose = (
         kind: "derived_compose_invalid",
         path,
         cause: { key, issues: result.error.issues },
+        hint:
+          `The entry for "${key}" in "${path}" has a compose.attach field of the wrong type or shape — \`cause\` carries the exact field and what was expected (port must be a number, onImageDrift one of warn|fail|ignore). Note an entry with NO compose fields at all is accepted, so this is never "you forgot to emit them": something emitted the wrong type. The shipped derive CLI validates against this same schema before writing, so a failing entry was hand-edited or produced by a derive script of your own.`,
       } satisfies DerivedComposeInvalidError;
     }
   }
@@ -315,6 +350,8 @@ export const loadDerivedCompose = (
       kind: "derived_compose_missing_keys",
       path,
       missing,
+      hint:
+        `"${path}" is missing [${missing.join(", ")}]. These are the expectedKeys passed to loadDerivedCompose, so the list and the file disagree — either could be the stale one. If this file came from the shipped cyanotype derive CLI, its keys are each service\u2019s cyanotype.component label, suffixed with .<cyanotype.instance> when that label carries a value, and services with no component label are skipped — so check those labels in the manifest it walked. If your own derive step wrote it, the keys are whatever that script chose and only it can tell you.`,
     } satisfies DerivedComposeMissingKeysError;
   }
 

@@ -95,12 +95,18 @@ const dockerAvailable = async (): Promise<boolean> => {
 let HAS_DOCKER = false;
 beforeAll(async () => { HAS_DOCKER = await dockerAvailable(); });
 
-const mkSpec = (overrides: Partial<StartSpec> = {}): StartSpec => ({
+/**
+ * `session` must be the sessionId of the adapter this spec is handed to: the
+ * label stamped on a container is what that adapter's `teardown()` sweeps, and
+ * a disagreement leaves anything not in `known` uncollectable. Pinned by a
+ * runtime invariant in the adapter (see src/invariants.ts).
+ */
+const mkSpec = (session: string, overrides: Partial<StartSpec> = {}): StartSpec => ({
   image: IMAGE,
   env: {},
   ports: { "6379": "auto" },
   mounts: {},
-  labels: { cyanotype: "1", "cyanotype.session": "test" },
+  labels: { cyanotype: "1", "cyanotype.session": session },
   ...overrides,
 });
 
@@ -140,7 +146,7 @@ describe("docker/adapter", () => {
     if (!HAS_DOCKER) return;
     adapter = createDockerAdapter({ sessionId: "s-lifecycle" });
     await adapter.connect();
-    const r = await adapter.start(mkSpec());
+    const r = await adapter.start(mkSpec("s-lifecycle"));
     started.push(r.containerId);
     expect(await adapter.exists(r.containerId)).toBe(true);
     await adapter.stop(r.containerId);
@@ -152,7 +158,7 @@ describe("docker/adapter", () => {
     if (!HAS_DOCKER) return;
     adapter = createDockerAdapter({ sessionId: "s-auto" });
     await adapter.connect();
-    const r = await adapter.start(mkSpec({ ports: { "6379": "auto" } }));
+    const r = await adapter.start(mkSpec("s-auto", { ports: { "6379": "auto" } }));
     started.push(r.containerId);
     expect(r.ports["6379"]).toBeGreaterThan(0);
   }, 60_000);
@@ -161,7 +167,7 @@ describe("docker/adapter", () => {
     if (!HAS_DOCKER) return;
     adapter = createDockerAdapter({ sessionId: "s-fixed" });
     await adapter.connect();
-    const r = await adapter.start(mkSpec({ ports: { "6379": 36379 } }));
+    const r = await adapter.start(mkSpec("s-fixed", { ports: { "6379": 36379 } }));
     started.push(r.containerId);
     expect(r.ports["6379"]).toBe(36379);
   }, 60_000);
@@ -172,7 +178,7 @@ describe("docker/adapter", () => {
     adapter = createDockerAdapter({ sessionId: "s-mount" });
     await adapter.connect();
     const r = await adapter.start(
-      mkSpec({
+      mkSpec("s-mount", {
         mounts: { "/etc/cyanotype/test.txt": "hello-cyanotype" },
         ports: { "6379": 36380 },
       })
@@ -255,7 +261,7 @@ describe("docker/adapter", () => {
     const a1 = createDockerAdapter({ sessionId: sid });
     await a1.connect();
     const r = await a1.start(
-      mkSpec({ labels: { cyanotype: "1", "cyanotype.session": sid } })
+      mkSpec(sid, { labels: { cyanotype: "1", "cyanotype.session": sid } })
     );
     // Intentionally do NOT call a1.stop — orphan it.
     await a1.disconnect();

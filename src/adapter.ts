@@ -2,9 +2,10 @@
  * Adapter — the runtime SPI.
  *
  * The IO boundary, and the only IO boundary. Docker, Kubernetes, podman,
- * in-memory all implement this. Seven methods: three lifecycle (`connect`,
- * `disconnect`, `teardown`) and four per-container (`start`, `stop`,
- * `logs`, `exists`).
+ * in-memory all implement this. Seven required methods: three lifecycle
+ * (`connect`, `disconnect`, `teardown`) and four per-container (`start`,
+ * `stop`, `logs`, `exists`) — plus one optional, `reconnect`, for adapters
+ * whose reported ports do not outlive the process that opened them (D-046).
  *
  * Substrate seam: the Adapter is the single point in the system where
  * real-vs-fake (and Docker-vs-Kubernetes-vs-in-memory) is decided. Bindings
@@ -74,6 +75,66 @@ export type Adapter = {
 
   /** Whether a container with this id currently exists (running or stopped). */
   exists(containerId: string): Promise<boolean>;
+
+  /**
+   * OPTIONAL, and the only optional method (D-046). Re-establish THIS process's
+   * connection to a container another process started, returning ports valid
+   * here.
+   *
+   * `Started.ports` is not always durable. Where it is a real host binding
+   * (Docker, Compose) it outlives the process that opened it, so a second
+   * process attaching from persisted metadata can use the recorded numbers. The
+   * Kubernetes deploy adapter instead reports `kubectl port-forward` locals,
+   * which die with their parent — so the recorded numbers are closed ports, and
+   * an attaching process would burn its whole readiness budget against them.
+   *
+   * PRESENCE MEANS CAPABILITY, NOT DURABILITY. Implementing this says "I can
+   * re-establish ports for another process". Omitting it says only that this
+   * adapter cannot — which is true both for adapters whose ports are already
+   * durable and for adapters that simply have no way to re-open them. The
+   * distinction is not currently representable; see D-046.
+   *
+   * The returned `containerId` may differ from the one supplied. Today no
+   * adapter changes it, but the shape is deliberate: resolving a component to
+   * its CURRENT container (after a chaos restart replaced it) is the natural
+   * extension, and it should not require another SPI change.
+   *
+   * There is no `owned` in the return. A process that reconnects created
+   * nothing and must never claim ownership — `teardown()` acts on what an
+   * adapter claims it created, so a claim here would delete another process's
+   * workloads. Leaving the field out makes that unrepresentable rather than
+   * merely forbidden.
+   */
+  reconnect?(spec: ReconnectSpec): Promise<Reconnected>;
+};
+
+/**
+ * What `reconnect` is given. Every field is something the caller genuinely
+ * holds at attach time — deliberately not a synthesised `StartSpec`, whose
+ * `env` and `mounts` would have to be invented and would then be read as fact.
+ */
+export type ReconnectSpec = {
+  /** The container id the metadata recorded. */
+  readonly containerId: string;
+  /**
+   * `cyanotype.env` — the environment key, stamped as a label and stable
+   * ACROSS processes. `cyanotype.session` is not: it identifies the adapter
+   * instance that created the container, so a later process never matches it.
+   */
+  readonly envKey: string;
+  readonly component: string;
+  readonly instance?: string;
+  /** The port names to re-establish — the keys of the Binding's `ports`. */
+  readonly ports: readonly string[];
+  /** The Binding's adapter-specific config, for adapters that need it to resolve. */
+  readonly adapterConfig?: AdapterConfig;
+};
+
+export type Reconnected = {
+  /** The container these ports reach. May differ from the id supplied. */
+  readonly containerId: string;
+  /** Container port name → host port valid in THIS process. */
+  readonly ports: Record<string, number>;
 };
 
 /**

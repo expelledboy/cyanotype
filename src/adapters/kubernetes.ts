@@ -13,8 +13,9 @@
 import net from "node:net";
 import type { Subprocess } from "bun";
 import { z } from "zod";
-import type { Adapter, StartSpec, Started } from "../adapter.js";
+import type { Adapter, StartSpec, Started, ReconnectSpec, Reconnected } from "../adapter.js";
 import { createKubectl, type KubectlClient, type KubectlMode } from "./kubectl.js";
+import { invariant } from "../invariants.js";
 
 declare module "../adapter.js" {
   interface AdapterConfig {
@@ -98,16 +99,29 @@ const pausedAttaches = new Map<string, {
 
 const ENDPOINT_WAIT_TIMEOUT_MS = 30_000;
 
-const countReadyEndpoints = async (k: KubectlClient, serviceName: string): Promise<number> => {
+/**
+ * Ready endpoint count, or `null` when the cluster could not be asked.
+ *
+ * "Could not tell" and "zero" must not be the same value. This returned 0 for
+ * both, and `chaos.stop` waits for `n === 0`: a listing that failed on RBAC or
+ * an unreachable API server satisfied that predicate instantly, so chaos
+ * reported the workload down without ever having looked. A resilience test then
+ * asserts behaviour "while the service is down" against a service that is fully
+ * up — a false green, which is the one failure a chaos library must not have.
+ *
+ * The `n >= 1` direction did not have the bug: 0 kept it waiting until it threw.
+ * That asymmetry is why this went unnoticed.
+ */
+const countReadyEndpoints = async (k: KubectlClient, serviceName: string): Promise<number | null> => {
   const r = await k.run([
     "get", "endpointslices",
     "-l", `kubernetes.io/service-name=${serviceName}`,
     "-o", "json",
   ]);
-  if (r.exit !== 0) return 0;
+  if (r.exit !== 0) return null;
   type Slice = { endpoints?: Array<{ conditions?: { ready?: boolean } }> };
   let parsed: { items?: Slice[] };
-  try { parsed = JSON.parse(r.stdout) as { items?: Slice[] }; } catch { return 0; }
+  try { parsed = JSON.parse(r.stdout) as { items?: Slice[] }; } catch { return null; }
   let n = 0;
   for (const slice of parsed.items ?? []) {
     for (const ep of slice.endpoints ?? []) {
@@ -124,11 +138,16 @@ const waitForEndpoints = async (
   timeoutMs = ENDPOINT_WAIT_TIMEOUT_MS,
 ): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
+  let unreadable = 0;
   while (Date.now() < deadline) {
-    if (predicate(await countReadyEndpoints(k, serviceName))) return;
+    const n = await countReadyEndpoints(k, serviceName);
+    // Only a real count can satisfy the predicate. An unreadable cluster keeps
+    // polling and ultimately times out loudly, in BOTH directions.
+    if (n !== null && predicate(n)) return;
+    if (n === null) unreadable++;
     await new Promise((r) => setTimeout(r, 200));
   }
-  throw { kind: "k8s_attach_endpoint_wait_timeout", service: serviceName, timeoutMs };
+  throw { kind: "k8s_attach_endpoint_wait_timeout", service: serviceName, timeoutMs, unreadable };
 };
 
 const killForwards = (t: Tracked) => {
@@ -151,7 +170,15 @@ const claimLocalPort = (): Promise<number> =>
       const addr = srv.address();
       if (!addr || typeof addr === "string") {
         srv.close();
-        reject({ kind: "k8s_local_port_claim_failed" });
+        reject({
+          kind: "k8s_local_port_claim_failed",
+          hint:
+            "The OS accepted a bind on port 0 but then reported no usable address for the socket, " +
+            "which should not happen. Note this is NOT the port-exhaustion case: when no ephemeral " +
+            "port is available the bind itself fails and surfaces as an untagged socket error, not " +
+            "as this. If you are seeing repeated port trouble, look for leaked kubectl port-forward " +
+            "processes from earlier runs holding ports open.",
+        });
         return;
       }
       const p = addr.port;
@@ -257,9 +284,30 @@ const buildServiceName = (spec: StartSpec): string | null => {
   return sanitiseDnsLabel(raw);
 };
 
+/**
+ * Select the *binding*, not one pod. `cyanotype.component` + optional
+ * `cyanotype.instance`, scoped to the session, identify a slot across pod
+ * replacement, so the Service survives chaos and its endpoints follow the new
+ * pod automatically.
+ *
+ * WHY this matters beyond tidiness: selecting on a per-pod label forced chaos
+ * to delete the Service with the pod, which deletes the cluster-internal DNS
+ * name. Dependents then hit NXDOMAIN — a different, slower-to-recover failure
+ * than the connection-refused a real pod death produces, since resolvers cache
+ * negative answers and clients back off against a name that no longer exists.
+ * A dead pod behind a live Service is what production actually does. (D-039)
+ */
+const buildServiceSelector = (spec: StartSpec): Record<string, string> => {
+  const selector: Record<string, string> = {};
+  for (const key of ["cyanotype.component", "cyanotype.instance", "cyanotype.session"]) {
+    const value = spec.labels[key];
+    if (value !== undefined) selector[key] = value;
+  }
+  return selector;
+};
+
 const buildServiceManifest = (
   serviceName: string,
-  podName: string,
   spec: StartSpec,
   namespace: string,
 ): unknown => {
@@ -278,7 +326,7 @@ const buildServiceManifest = (
     },
     spec: {
       type: "ClusterIP",
-      selector: { "cyanotype.podname": podName },
+      selector: buildServiceSelector(spec),
       ports,
     },
   };
@@ -301,7 +349,13 @@ const resolveReadyPod = async (
     "-o", "json",
   ]);
   if (r.exit !== 0) {
-    throw { kind: "k8s_attach_no_ready_endpoints", service: serviceName, stderr: r.stderr };
+    throw {
+      kind: "k8s_attach_no_ready_endpoints",
+      service: serviceName,
+      stderr: r.stderr,
+      hint:
+        `Listing EndpointSlices for Service "${serviceName}" failed — this is the query erroring, not a Service with no endpoints yet. The credentials need list on endpointslices in the discovery.k8s.io group, and the context and namespace must be the workload\u2019s. See docs/k8s-rbac.md; \`stderr\` carries what kubectl said.`,
+    };
   }
   type Slice = {
     endpoints?: Array<{
@@ -319,7 +373,12 @@ const resolveReadyPod = async (
       }
     }
   }
-  throw { kind: "k8s_attach_no_ready_endpoints", service: serviceName };
+  throw {
+    kind: "k8s_attach_no_ready_endpoints",
+    service: serviceName,
+    hint:
+      `Service "${serviceName}" resolves to no ready Pod endpoint, so there is nothing to port-forward to. Its selector may match no pods, the pods it matches may be failing readiness, or their endpoints may not target a Pod — only Pod-backed ready endpoints count here. Describe the Service to see its selector and current endpoints, remembering to pass the namespace and context the adapter uses: a bare kubectl reads your current ones, which are usually not the same.`,
+  };
 };
 
 type ResumableForward = ReconnectForward & { resume(initialPod: string): Promise<void> };
@@ -350,8 +409,12 @@ const startReconnectForward = async (
     },
     resume: async (pod: string) => {
       state.currentPod = pod;
-      state.paused = false;
+      // Clear `paused` only AFTER the new child exists. The supervisor polls
+      // this flag; if it were cleared first, the supervisor could wake while
+      // `state.proc` still referenced the dead child, see it already exited,
+      // and race into its own respawn.
       await spawnOnce(pod);
+      state.paused = false;
     },
   };
 
@@ -361,7 +424,13 @@ const startReconnectForward = async (
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         try { handle.kill(); } catch { /* ignore */ }
-        reject({ kind: "k8s_port_forward_timeout", podName: pod, containerPort });
+        reject({
+          kind: "k8s_port_forward_timeout",
+          podName: pod,
+          containerPort,
+        hint:
+          `kubectl port-forward produced no local listener for pod ${pod} within ${PORT_READY_TIMEOUT_MS}ms. kubectl port-forward reports "Forwarding from ..." as soon as it has opened the LOCAL listener; it does not dial the container port first, so a container that is not listening cannot cause this timeout and checking it will not fix it. The tunnel runs through the API server, so this is reachability or authorization for the pods/portforward subresource. Note the pod was observed Ready earlier, not now.`,
+        });
       }, PORT_READY_TIMEOUT_MS);
       (async () => {
         try {
@@ -373,7 +442,15 @@ const startReconnectForward = async (
             }
           }
           clearTimeout(timer);
-          reject({ kind: "k8s_port_forward_exited", podName: pod, containerPort });
+          reject({
+            kind: "k8s_port_forward_exited",
+            podName: pod,
+            containerPort,
+            hint:
+              `kubectl port-forward for pod ${pod} exited instead of forwarding port ` +
+              `${containerPort}. Usually the pod went away underneath it, or the credentials lack ` +
+              `create on pods/portforward in this namespace — see docs/k8s-rbac.md. No stderr is captured on this path.`,
+          });
         } catch (e) { clearTimeout(timer); reject(e); }
       })();
     });
@@ -392,6 +469,12 @@ const startReconnectForward = async (
           await new Promise((r) => setTimeout(r, 100));
         }
         if (state.stopped) break;
+        // `resume()` has already spawned the replacement and published it as
+        // `state.proc`. Falling through to the respawn path below would spawn a
+        // SECOND child and overwrite the reference to the first, orphaning a
+        // `kubectl port-forward` that nothing can subsequently kill — one leaked
+        // process per chaos cycle. Re-enter instead and supervise the new child.
+        continue;
       }
       let attempts = 0;
       let newPod: string | null = null;
@@ -428,25 +511,68 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   const tracked = new Map<string, Tracked>();
   const sessionEntry = { namespace, sessionId, context };
 
+  // `connect` is called once by the orchestrator and again by the shared
+  // registry on each of its paths — five call sites in all. The Docker adapter
+  // already short-circuits a repeat (`if (client) return`); this one re-ran a
+  // `kubectl version --client` that cannot change during a session, plus a
+  // namespace get and a possible create, every time. Same contract, ~120ms per
+  // redundant call reclaimed. `disconnect` clears it so a later reconnect works.
+  let connected = false;
+
   const connect = async (): Promise<void> => {
+    if (connected) return;
     const ver = await k.run(["version", "--client", "-o", "json"]);
-    if (ver.exit !== 0) throw { kind: "kubectl_not_found", stderr: ver.stderr };
+    if (ver.exit !== 0) {
+      throw {
+        kind: "kubectl_not_found",
+        stderr: ver.stderr,
+        hint:
+          `The Kubernetes adapter shells out to kubectl, and the client-version check it runs ` +
+          `first exited non-zero. A kubectl was found and executed, so this is not an empty ` +
+          `PATH (a missing binary fails earlier, as a spawn ENOENT): what is on PATH is not a ` +
+          `usable client — commonly a wrapper script that failed, or a build too old for the ` +
+          `flags the adapter passes. Check which kubectl the test process resolves; stderr ` +
+          `carries its own message.`,
+      };
+    }
 
     const ns = await k.run(["get", "namespace", namespace, "-o", "name"]);
     if (ns.exit !== 0) {
       if (mode === "attach") {
-        throw { kind: "k8s_namespace_missing", namespace };
+        throw {
+          kind: "k8s_namespace_missing",
+          namespace,
+          stderr: ns.stderr,
+          hint:
+            `kubectl could not read namespace "${namespace}". That is either genuinely absent or forbidden — \`stderr\` says which, and the two need opposite fixes. Attach mode never creates cluster resources, so if it is absent, create it and deploy your workloads there, or point the adapter at the namespace they already occupy. If it is forbidden, note that a request for a single namespace is authorized as a namespaced request, so a Role in that namespace granting get on namespaces is enough; docs/k8s-rbac.md carries that rule and explains why it belongs in a namespaced Role.`,
+        };
       }
       const create = await k.run(["create", "namespace", namespace]);
       if (create.exit !== 0 && !/already exists/i.test(create.stderr)) {
-        throw { kind: "k8s_namespace_create_failed", namespace, stderr: create.stderr };
+        throw {
+          kind: "k8s_namespace_create_failed",
+          namespace,
+          stderr: create.stderr,
+          hint:
+            `Creating namespace "${namespace}" failed. Deploy mode creates its own namespace, and namespaces are cluster-scoped, so this needs a ClusterRole granting create on namespaces — docs/k8s-rbac.md documents only the namespaced Roles and does not cover this, so do not expect to find it there. The simpler route is to pre-create the namespace and pass its name to createK8sAdapter. \`stderr\` carries what the API server said.`,
+        };
       }
     }
     globalSessions.add(sessionEntry);
     registerExitHandler();
+    connected = true;
   };
 
   const disconnect = async (): Promise<void> => {
+    connected = false;
+    // Release the port-forwards this process opened. `stop()` already does it
+    // for containers we stop, but a process that only ATTACHED never stops
+    // anything, so without this it leaks one `kubectl port-forward` child per
+    // port on a clean exit. The signal handler covers SIGINT/SIGTERM only, and
+    // a normally-terminating `bun test` fires neither. Measured against the
+    // k8s-attach suite: two orphaned children before, none after.
+    for (const t of tracked.values()) killForwards(t);
+    tracked.clear();
     for (const [key, p] of Array.from(pausedAttaches.entries())) {
       if (p.namespace === namespace) {
         for (const r of p.reconnects) { try { r.kill(); } catch { /* ignore */ } }
@@ -470,7 +596,12 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       const obj = JSON.parse(inspect.stdout) as { status?: { phase?: string } };
       lastPhase = obj.status?.phase ?? lastPhase;
     } catch { /* ignore */ }
-    throw { kind: "k8s_pod_not_ready", podName, lastPhase, elapsedMs: Date.now() - start, stderr: r.stderr };
+    throw {
+      kind: "k8s_pod_not_ready",
+      podName, lastPhase, elapsedMs: Date.now() - start, stderr: r.stderr,
+      hint:
+        `Pod ${podName} never became Ready (last phase "${lastPhase}"). This is the pod, not Cyanotype: "Pending" means it cannot be scheduled or its image cannot be pulled, and "Failed" or "Succeeded" mean the container already exited — the pod spec sets restartPolicy: Never, so nothing restarted it and there is no crash loop to watch. Inspect it with the adapter\u2019s own namespace and context, which a bare kubectl will not use: kubectl --context ${context ?? "<current>"} -n ${namespace} describe pod ${podName}.`,
+    };
   };
 
   const startPortForward = (podName: string, containerPort: number, requestedLocal: number | "auto"): Promise<{ proc: Subprocess; localPort: number }> => {
@@ -479,7 +610,14 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         handle.kill();
-        reject({ kind: "k8s_port_forward_timeout", podName, containerPort, elapsedMs: PORT_READY_TIMEOUT_MS });
+        reject({
+          kind: "k8s_port_forward_timeout",
+          podName,
+          containerPort,
+          elapsedMs: PORT_READY_TIMEOUT_MS,
+        hint:
+          `kubectl port-forward produced no local listener for pod ${podName} within ${PORT_READY_TIMEOUT_MS}ms. kubectl port-forward reports "Forwarding from ..." as soon as it has opened the LOCAL listener; it does not dial the container port first, so a container that is not listening cannot cause this timeout and checking it will not fix it. The tunnel runs through the API server, so this is reachability or authorization for the pods/portforward subresource. Note the pod was observed Ready earlier, not now.`,
+        });
       }, PORT_READY_TIMEOUT_MS);
       (async () => {
         try {
@@ -494,7 +632,16 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
           clearTimeout(timer);
           let stderr = "";
           try { stderr = await new Response(handle.proc.stderr as unknown as ReadableStream).text(); } catch { /* ignore */ }
-          reject({ kind: "k8s_port_forward_exited", podName, containerPort, stderr });
+          reject({
+            kind: "k8s_port_forward_exited",
+            podName,
+            containerPort,
+            stderr,
+            hint:
+              `kubectl port-forward for pod ${podName} exited instead of forwarding port ` +
+              `${containerPort}. Usually the pod went away underneath it, or the credentials lack ` +
+              `create on pods/portforward in this namespace — see docs/k8s-rbac.md. stderr carries the message kubectl printed.`,
+          });
         } catch (e) {
           clearTimeout(timer);
           reject(e);
@@ -509,20 +656,23 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       if (!t.attach.allowChaos) {
         throw {
           kind: "chaos_unsupported_in_attach_mode",
-          message: "chaos.stop on an attached binding requires adapter.k8s.attach.allowChaos: true",
           service: t.attach.serviceName,
           namespace: t.namespace,
+          hint:
+            `Chaos is refused for "${t.attach.serviceName}" because its Binding did not opt in. Attach mode blocks cluster writes at the kubectl chokepoint unless a Binding asks for them, which is what makes it safe to point at a shared namespace — with one exception worth knowing: the SIGINT/SIGTERM handler issues a session-scoped delete outside that chokepoint. To disrupt this component set adapter.k8s.attach.allowChaos: true on its Binding, together with the Deployment name chaos scales.`,
         };
       }
       const deployment = t.attach.deployment;
-      if (!deployment) {
-        throw {
-          kind: "k8s_attach_deployment_required",
-          message: `adapter.k8s.attach.deployment is required when allowChaos: true (service=${t.attach.serviceName})`,
-          service: t.attach.serviceName,
-          namespace: t.namespace,
-        };
-      }
+      // `startAttach` refuses `allowChaos` without a deployment, and it is the
+      // only place an AttachState is built — so reaching here with `allowChaos`
+      // true and no deployment would mean that agreement broke. This was a
+      // thrown error carrying advice ("set adapter.k8s.attach.deployment") for a
+      // configuration the reader cannot be in: they would have been stopped at
+      // start time. A hint nobody can reach is not a hint.
+      invariant(() => deployment !== null,
+        "an AttachState that allows chaos names a Deployment",
+        () => ({ service: t.attach?.serviceName, namespace: t.namespace }));
+      if (!deployment) return;
       t.attach.paused = true;
       for (const r of t.attach.reconnects) r.pause();
       // D-023 (rewritten): real cluster mutation. Scale the Deployment to 0
@@ -533,7 +683,12 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
         "scale", `deployment/${deployment}`, "--replicas=0",
       ]);
       if (scaleRes.exit !== 0) {
-        throw { kind: "k8s_attach_scale_failed", deployment, replicas: 0, stderr: scaleRes.stderr };
+        throw {
+          kind: "k8s_attach_scale_failed",
+          deployment, replicas: 0, stderr: scaleRes.stderr,
+          hint:
+            `Scaling deployment/${deployment} down to 0 failed, so chaos could not take the component down. The likeliest cause is no Deployment by that name in this namespace — adapter.k8s.attach.deployment must name the Deployment, not the Service. Otherwise it is permissions: there is no "scale" verb in Kubernetes RBAC, so granting one does nothing; the credentials need get and patch on deployments/scale in the apps group. See docs/k8s-rbac.md, and \`stderr\` for what kubectl said.`,
+        };
       }
       await waitForEndpoints(ak, t.attach.serviceName, (n) => n === 0);
       pausedAttaches.set(`${t.namespace}/${t.attach.serviceName}`, {
@@ -564,9 +719,11 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
         k.run(["delete", "pod", containerId, "--wait=false", "--ignore-not-found=true", "--grace-period=0", "--force"]),
         k.run(["delete", "configmap", `${containerId}-mounts`, "--wait=false", "--ignore-not-found=true"]),
       ];
-      if (t?.serviceName) {
-        tasks.push(k.run(["delete", "service", t.serviceName, "--wait=false", "--ignore-not-found=true"]));
-      }
+      // The Service is deliberately left in place. Deleting it would remove the
+      // cluster-internal DNS name along with the pod, which is a compound fault
+      // production never produces: a dead pod leaves a live Service with no
+      // endpoints, so dependents get connection-refused and recover promptly.
+      // Suite teardown removes it by label. (D-039)
       await Promise.all(tasks);
     }
   };
@@ -579,7 +736,12 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     if (allowChaos && !deployment) {
       throw {
         kind: "k8s_attach_deployment_required",
-        message: `adapter.k8s.attach.deployment is required when allowChaos: true (binding=${spec.labels["cyanotype.component"] ?? "<unknown>"})`,
+        hint:
+          `Chaos in attach mode scales a Deployment to 0 and back, so it needs the ` +
+          `Deployment's name — a Service alone cannot be scaled. Set ` +
+          `adapter.k8s.attach.deployment alongside allowChaos: true on the Binding for ` +
+          `"${spec.labels["cyanotype.component"] ?? "<unknown>"}", or drop allowChaos if this ` +
+          `component should not be disrupted.`,
         component: spec.labels["cyanotype.component"],
         instance: spec.labels["cyanotype.instance"],
       };
@@ -592,7 +754,16 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     });
     const serviceName = override?.service ?? buildServiceName(spec);
     if (!serviceName) {
-      throw { kind: "k8s_attach_service_not_found", service: null, namespace: attachNamespace, reason: "missing cyanotype.component label and no adapter.k8s.attach.service override" };
+      throw {
+        kind: "k8s_attach_service_not_found",
+        service: null,
+        namespace: attachNamespace,
+        hint:
+          `Cyanotype resolves a Service name from the component name by convention, but this ` +
+          `StartSpec carries no cyanotype.component label to derive one from. Set ` +
+          `adapter.k8s.attach.service on the Binding to name the Service in namespace ` +
+          `"${attachNamespace}" explicitly.`,
+      };
     }
     const pausedKey = `${attachNamespace}/${serviceName}`;
     const paused = pausedAttaches.get(pausedKey);
@@ -605,7 +776,12 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
           "scale", `deployment/${paused.deployment}`, "--replicas=1",
         ]);
         if (scaleRes.exit !== 0) {
-          throw { kind: "k8s_attach_scale_failed", deployment: paused.deployment, replicas: 1, stderr: scaleRes.stderr };
+          throw {
+            kind: "k8s_attach_scale_failed",
+            deployment: paused.deployment, replicas: 1, stderr: scaleRes.stderr,
+            hint:
+              `Scaling deployment/${paused.deployment} back to 1 failed, so the component chaos stopped is still down and nothing will bring it back on its own — you may need to scale it up by hand. On permissions: there is no "scale" verb in Kubernetes RBAC, so granting one does nothing; the credentials need get and patch on deployments/scale in the apps group. See docs/k8s-rbac.md, and \`stderr\` for what kubectl said.`,
+          };
         }
         await waitForEndpoints(paused.k, serviceName, (n) => n >= 1);
       }
@@ -627,7 +803,12 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     }
     const svc = await attachK.run(["get", "svc", serviceName, "-o", "json"]);
     if (svc.exit !== 0) {
-      throw { kind: "k8s_attach_service_not_found", service: serviceName, namespace: attachNamespace, stderr: svc.stderr };
+      throw {
+        kind: "k8s_attach_service_not_found",
+        service: serviceName, namespace: attachNamespace, stderr: svc.stderr,
+        hint:
+          `kubectl could not read Service "${serviceName}" in namespace "${attachNamespace}" — \`stderr\` says whether it is absent, forbidden, or the API server was unreachable, and those need different fixes. If you did not set adapter.k8s.attach.service, this name was derived from the component name by convention and your cluster may simply spell it differently; set that option to name it explicitly. If you did set it, the name is yours and the namespace or permissions are the thing to check.`,
+      };
     }
     const initialPod = await resolveReadyPod(attachK, serviceName);
     const attach: AttachState = { serviceName, namespace: attachNamespace, allowChaos, deployment, k: attachK, currentPod: initialPod, paused: false, reconnects: [] };
@@ -655,7 +836,20 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     return { containerId, ports, owned: false };
   };
 
-  const start = async (spec: StartSpec): Promise<Started> => {
+  const start = async (rawSpec: StartSpec): Promise<Started> => {
+    // The adapter is authoritative for `cyanotype.session`: `teardown()` sweeps
+    // by this label, so whatever the caller handed in is replaced with the id
+    // this adapter will actually look for. Normalised once here so the Pod,
+    // ConfigMap and Service all carry the same value and are swept together.
+    //
+    // Before this, `createSharedEnvs` stamped `${process.pid}-${Date.now()}`,
+    // recomputed per call — so the label meant to group a session was unique
+    // per container — while teardown selected on the adapter's own id. D-016's
+    // backstop could never match anything. (I1)
+    const spec: StartSpec = {
+      ...rawSpec,
+      labels: { ...rawSpec.labels, "cyanotype.session": sessionId },
+    };
     if (spec.labels.cyanotype !== "1") {
       throw { kind: "missing_cyanotype_label", labels: spec.labels };
     }
@@ -670,17 +864,46 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       const cmManifest = buildConfigMapManifest(cmName, spec, namespace);
       const cmRes = await k.run(["apply", "-f", "-"], { stdin: JSON.stringify(cmManifest) });
       if (cmRes.exit !== 0) {
-        throw { kind: "k8s_configmap_apply_failed", cmName, stderr: cmRes.stderr };
+        throw {
+          kind: "k8s_configmap_apply_failed",
+          cmName,
+          stderr: cmRes.stderr,
+          hint:
+            `Applying the ConfigMap that carries this Binding's mounts failed. Mount-as-content ` +
+            `becomes a ConfigMap, so the credentials in use need create on configmaps in this ` +
+            `namespace; ` + "see docs/k8s-rbac.md for the verbs the adapter needs; stderr carries kubectl's own message.",
+        };
       }
     }
 
     const podManifest = buildPodManifest(podName, cmName, spec, namespace, { "cyanotype.podname": podName });
+    // I4: a Service whose selector is not a subset of its Pod's labels never
+    // gets endpoints. Nothing errors; dependents simply hang until a probe
+    // times out somewhere unrelated.
+    invariant( () =>
+      Object.entries(buildServiceSelector(spec)).every(
+        ([k, v]) => (podManifest as { metadata: { labels: Record<string, string> } }).metadata.labels[k] === v,
+      ),
+      "Service selector is a subset of the Pod labels",
+      () => ({
+        selector: buildServiceSelector(spec),
+        podLabels: (podManifest as { metadata: { labels: Record<string, string> } }).metadata.labels,
+      }),
+    );
     const podRes = await k.run(["apply", "-f", "-"], { stdin: JSON.stringify(podManifest) });
     if (podRes.exit !== 0) {
       if (cmName) {
         await k.run(["delete", "configmap", cmName, "--wait=false", "--ignore-not-found=true"]);
       }
-      throw { kind: "k8s_pod_apply_failed", podName, stderr: podRes.stderr };
+      throw {
+        kind: "k8s_pod_apply_failed",
+        podName,
+        stderr: podRes.stderr,
+        hint:
+          `Applying Pod ${podName} was rejected by the API server. Common causes are missing ` +
+          `create permission on pods, a namespace quota or LimitRange, or an admission ` +
+          `controller rejecting the spec; ` + "see docs/k8s-rbac.md for the verbs the adapter needs; stderr carries kubectl's own message.",
+      };
     }
 
     try {
@@ -698,14 +921,20 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     // each Service points to exactly one Pod.
     const serviceName = Object.keys(spec.ports).length > 0 ? buildServiceName(spec) : null;
     if (serviceName) {
-      const svcManifest = buildServiceManifest(serviceName, podName, spec, namespace);
+      const svcManifest = buildServiceManifest(serviceName, spec, namespace);
       const svcRes = await k.run(["apply", "-f", "-"], { stdin: JSON.stringify(svcManifest) });
       if (svcRes.exit !== 0) {
         await k.run(["delete", "pod", podName, "--wait=false", "--ignore-not-found=true"]);
         if (cmName) {
           await k.run(["delete", "configmap", cmName, "--wait=false", "--ignore-not-found=true"]);
         }
-        throw { kind: "k8s_service_apply_failed", serviceName, stderr: svcRes.stderr };
+        throw {
+          kind: "k8s_service_apply_failed",
+          serviceName,
+          stderr: svcRes.stderr,
+          hint:
+            `Applying Service "${serviceName}" failed. Each component with ports gets one so other components can reach it by DNS. The Service name is stable per component and deliberately outlives a chaos stop, so on any run after the first this apply is a get-then-patch, not a create — credentials with only create on services will fail here. docs/k8s-rbac.md lists the full set; \`stderr\` carries what the API server said.`,
+        };
       }
     }
 
@@ -815,8 +1044,107 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     known.clear();
   };
 
+  /**
+   * D-046. Re-open port-forwards to a Pod another process started.
+   *
+   * Deploy mode only, and the adapter exposes it only in deploy mode — in
+   * attach mode a component's ports are Service-anchored reconnect wrappers
+   * whose Service name can be overridden per Binding, so re-establishing them
+   * is the reconcile-shaped work D-046 defers rather than a re-forward.
+   *
+   * Creates nothing in the cluster. Registers in `tracked` — the port-forward
+   * cleanup set — and deliberately NOT in `known`, which means "containers this
+   * session created and must remove": `teardown()` walks `known` and calls
+   * `stop(id)`, deleting the Pod. A reconnecting process created nothing.
+   */
+  const reconnect = async (spec: ReconnectSpec): Promise<Reconnected> => {
+    // D-047. Resolve the component's CURRENT Pod by label rather than trusting
+    // the recorded id. A chaos restart in the process that owns the environment
+    // replaces the Pod and never updates the shared metadata (D-007), so the
+    // recorded name goes stale while the component itself is perfectly healthy.
+    //
+    // The selector is deliberately `cyanotype.env` + component + instance, and
+    // deliberately NOT `cyanotype.session`: since D-042 the session label names
+    // the adapter instance that CREATED the Pod, so a later process never
+    // matches it. `cyanotype.env` is the identity that crosses the boundary.
+    const selector = [
+      "cyanotype=1",
+      `cyanotype.env=${spec.envKey}`,
+      `cyanotype.component=${spec.component}`,
+      // Single-instance components carry no instance label, so an equality
+      // match cannot express them; require its ABSENCE or a single-instance
+      // lookup would also match every instance of a same-named multi-slot.
+      spec.instance !== undefined ? `cyanotype.instance=${spec.instance}` : "!cyanotype.instance",
+    ].join(",");
+
+    const found = await k.run(["get", "pods", "-l", selector, "-o", "json"]);
+    if (found.exit !== 0) {
+      throw { kind: "k8s_reconcile_query_failed", selector, stderr: found.stderr };
+    }
+    type PodItem = {
+      metadata?: { name?: string; deletionTimestamp?: string };
+      status?: { phase?: string };
+    };
+    let items: PodItem[] = [];
+    try {
+      items = (JSON.parse(found.stdout) as { items?: PodItem[] }).items ?? [];
+    } catch (cause) {
+      throw { kind: "k8s_reconcile_query_failed", selector, stderr: found.stdout, cause };
+    }
+    // A Pod being deleted still reports Running until it goes. Excluding it is
+    // what keeps the mid-chaos window — old terminating, new starting — from
+    // reading as two live candidates.
+    const live = items.filter(
+      (it) => it.status?.phase === "Running" && it.metadata?.deletionTimestamp === undefined,
+    );
+    if (live.length === 0) {
+      throw {
+        kind: "k8s_reconcile_no_match",
+        selector,
+        matched: items.length,
+        phases: items.map((it) => it.status?.phase ?? "unknown"),
+      };
+    }
+    if (live.length > 1) {
+      throw {
+        kind: "k8s_reconcile_ambiguous",
+        selector,
+        pods: live.map((it) => it.metadata?.name ?? "unknown"),
+      };
+    }
+    const podName = live[0]?.metadata?.name ?? "";
+    const ports: Record<string, number> = {};
+    const forwards: Subprocess[] = [];
+    try {
+      for (const name of spec.ports) {
+        const { proc, localPort } = await startPortForward(podName, Number(name), "auto");
+        forwards.push(proc);
+        ports[name] = localPort;
+      }
+    } catch (e) {
+      for (const fp of forwards) { try { fp.kill(); } catch { /* ignore */ } }
+      throw e;
+    }
+    // MERGE, do not replace. A process that already started this Pod has a
+    // tracked entry holding its forwards; overwriting it orphans them, and
+    // nothing kills them afterwards because `stop()` and `disconnect()` both
+    // work from this map. Cross-process attach never hits this — the attaching
+    // process started nothing — but a process that starts and later reconnects
+    // to the same Pod does, and it leaks one child per port when it does.
+    const existing = tracked.get(podName);
+    if (existing !== undefined) {
+      existing.forwards.push(...forwards);
+    } else {
+      const t: Tracked = { podName, namespace, context, forwards, serviceName: null };
+      tracked.set(podName, t);
+      globalTracked.set(podName, t);
+    }
+    return { containerId: podName, ports };
+  };
+
   return {
     name: "kubernetes",
+    ...(mode === "deploy" ? { reconnect } : {}),
     connect,
     disconnect,
     teardown,

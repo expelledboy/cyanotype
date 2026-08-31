@@ -18,6 +18,7 @@
  */
 
 import type { z } from "zod";
+import { invariant } from "./invariants.js";
 
 /** A blueprint declares one of these per event it emits. */
 export type EventSchema = z.ZodTypeAny;
@@ -216,7 +217,13 @@ export const createEventBus = <Cat extends EventCatalog>(
       component: meta.component,
       ...(meta.instance !== undefined ? { instance: meta.instance } : {}),
     } as Event<Cat>;
+    const previous = lastSeq;
     lastSeq += 1;
+    // I7: `clear()` empties the buffer but must NOT reset this counter. If it
+    // did, a checkpoint taken before a chaos restart would silently address an
+    // unrelated event afterwards — a wrong pass, not a failure.
+    invariant( () => lastSeq > previous, "event sequence is strictly increasing",
+      () => ({ previous, next: lastSeq, name: evt.name }));
     events.push({ seq: lastSeq, evt });
   };
 
@@ -247,6 +254,16 @@ export const createEventBus = <Cat extends EventCatalog>(
       const elapsedMs = Date.now() - start;
       if (elapsedMs >= timeoutMs) {
         const sameName = events.filter((e) => e.evt.name === name);
+        // Whether the CHECKPOINT is to blame, rather than the filter. The old
+        // branch tested only name and sequence, so it told a reader to widen the
+        // window whenever a same-named event sat before it — even when the
+        // attribute or instance filter excluded that event anyway, in which case
+        // widening provably changes nothing and the next attempt times out in a
+        // different branch. Ask instead whether a pre-checkpoint event would have
+        // matched everything else.
+        const missedByWindow = sameName.filter(
+          (e) => e.seq <= from && eventMatches(e.evt, name, filter),
+        ).length;
         throw {
           kind: "wait_for_timeout",
           eventName: name,
@@ -257,6 +274,32 @@ export const createEventBus = <Cat extends EventCatalog>(
           // Distinguishes "never emitted" from "emitted before you waited" —
           // the failure mode the from-now default introduces.
           beforeCheckpoint: sameName.filter((e) => e.seq <= from).length,
+          hint:
+            sameName.length === 0
+              ? `No "${name}" event is in this component's buffer. It was never emitted; or ` +
+                `this Binding has no logParser, so nothing is ever ingested for it; or the ` +
+                `parser did not map the log line onto that catalog name; or ingest dropped it ` +
+                `— a drop logs "[events] dropping" with the reason, either a name absent from ` +
+                `the Blueprint's catalog or attributes its schema rejected. Check the parser ` +
+                `against a raw log line from this component. Restarting a component empties ` +
+                `its buffer, so events from before a chaos restart are no longer here.`
+              : missedByWindow > 0
+                ? `"${name}" was ingested and matched your filter, but only at or before the ` +
+                  `stream position this wait searched from — \`beforeCheckpoint\` counts the ` +
+                  `same-named events there. waitFor deliberately matches only what arrives ` +
+                  `after that position. Take a checkpoint with mark() BEFORE the action that ` +
+                  `triggers the event and pass it as the filter's after field — ` +
+                  `waitFor(name, { after: checkpoint }) — or pass { after: FROM_START } to ` +
+                  `search the whole buffer.`
+                : sameName.filter((e) => e.seq > from).length === 0
+                  ? `"${name}" is in the buffer but every occurrence is at or before the ` +
+                    `position this wait searched from AND none of them matches your filter, ` +
+                    `so widening the window would not have helped. \`beforeCheckpoint\` ` +
+                    `counts them; compare their attributes and instance against what you ` +
+                    `filtered on first.`
+                  : `"${name}" arrived after that position but nothing matched the filter. ` +
+                    `\`candidates\` holds the most recent three; compare their attributes ` +
+                    `and instance against what you filtered on.`,
         };
       }
       await sleep(100);
@@ -283,8 +326,23 @@ export const createEventBus = <Cat extends EventCatalog>(
       }
       const elapsedMs = Date.now() - start;
       if (elapsedMs >= timeoutMs) {
+        // Hoisted so the hint stays one template literal: a ternary inline renders
+        // as raw source in `just hints`, which is the surface reviewers read.
+        const windowAdvice = from === 0
+          ? "This wait already searched the whole buffer, so the window is not the problem — "
+            + "the events genuinely are not there."
+          : "If the sequence happened before this wait began, take a checkpoint with mark() "
+            + "before the action that produces it and pass { after: checkpoint } as the third "
+            + "argument, or { after: FROM_START } to search the whole buffer.";
         throw {
           kind: "sequence_timeout",
+          hint:
+            `expectSequence advances through \`names\` in order over events ingested after ` +
+            `the position it searched from. It skips anything that is not the name it is ` +
+            `waiting for next — including a name that IS in the list but arrives out of turn, ` +
+            `so a duplicate or a swapped pair reads as a missing event rather than a wrong ` +
+            `order. \`seen\` lists what it had to work with, in order; the first entry of ` +
+            `\`names\` missing from it is where the run broke. ${windowAdvice}`,
           names,
           elapsedMs,
           after: from,

@@ -252,3 +252,35 @@ describe("events/subscription offset", () => {
     ).rejects.toMatchObject({ kind: "sequence_timeout" });
   });
 });
+
+describe("wait_for_timeout blames the right thing", () => {
+  // The window branch used to fire whenever a same-named event sat before the
+  // checkpoint, without asking whether the FILTER would have excluded it. A
+  // reader was then told to widen the window; doing so timed out again in a
+  // different branch. These pin that the branch tests what it claims.
+  const catalog = { PET_CREATED: z.object({ id: z.number() }) };
+
+  test("a same-named event the filter excludes does NOT get window advice", async () => {
+    const { bus, ingest } = createEventBus(catalog);
+    ingest({ name: "PET_CREATED", attributes: { id: 1 } }, { component: "petstore" });
+    let hint = "";
+    try {
+      await bus.waitFor("PET_CREATED", { attributes: { id: 2 } }, 30);
+    } catch (e) { hint = (e as { hint?: string }).hint ?? ""; }
+
+    expect(hint).toContain("would not have helped");
+    expect(hint).not.toContain("mark()");
+  });
+
+  test("a same-named event the filter WOULD match still gets window advice", async () => {
+    const { bus, ingest } = createEventBus(catalog);
+    ingest({ name: "PET_CREATED", attributes: { id: 1 } }, { component: "petstore" });
+    let hint = "";
+    try {
+      await bus.waitFor("PET_CREATED", { attributes: { id: 1 } }, 30);
+    } catch (e) { hint = (e as { hint?: string }).hint ?? ""; }
+
+    expect(hint).toContain("mark()");
+    expect(hint).toContain("beforeCheckpoint");
+  });
+});

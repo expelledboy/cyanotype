@@ -121,5 +121,26 @@ export const runProbe = async <I extends InterfaceRecord>(
     throw { kind: "probe_aborted", probe, elapsedMs: Date.now() - start, attempts };
   }
   emit?.({ type: "probe.timed_out", attempts, elapsedMs: Date.now() - start, error: lastError });
-  throw { kind: "probe_timeout", probe, lastError, elapsedMs: Date.now() - start, attempts };
+  throw {
+    kind: "probe_timeout",
+    probe, lastError, elapsedMs: Date.now() - start, attempts,
+    hint:
+      `Readiness never passed within ${timeoutMs}ms (${attempts} attempts). \`lastError\` ` +
+      `is what the final attempt saw, and reading it first matters because these causes are ` +
+      `in different systems. An invalid-URL TypeError means the request was never sent: the ` +
+      `probe URI is malformed, typically a port that rendered as "undefined" because the ` +
+      `Blueprint's interface() read a port name the Binding never assigned — that is your ` +
+      `declaration, not the component. A connect or fetch failure means the URI was well ` +
+      `formed but nothing answered — still booting, crashed, or listening elsewhere; check ` +
+      `the component's own logs. "status not acceptable" means it answered outside the ` +
+      `accepted range, which is statusMin..statusMax and defaults to 200-499, so a 5xx lands ` +
+      `here and a 404 does not. An abort means one attempt outran its own budget, intervalMs ` +
+      `capped at 5s. For a custom probe, "custom probe returned false" says only that check ` +
+      `resolved false; throw a tagged error from it instead and its kind is carried on the ` +
+      `probe.attempt observer event. \`attempts\` of 0 means the loop never ran because ` +
+      `timeoutMs was not positive, and \`lastError\` is then absent. If the component is ` +
+      `merely slow, raise timeoutMs on the probe you declared — readiness for the ` +
+      `orchestrator's own calls, or whichever probe you passed if you called runProbe ` +
+      `directly.`,
+  };
 };

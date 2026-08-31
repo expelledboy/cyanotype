@@ -42,6 +42,15 @@
 - [D-036 — Attach runs the Blueprint readiness probe; `exists()` is not readiness](#d-036-attach-runs-the-blueprint-readiness-probe-exists-is-not-readiness)
 - [D-037 — Event subscription starts at the current stream position; checkpoints are monotonic](#d-037-event-subscription-starts-at-the-current-stream-position-checkpoints-are-monotonic)
 - [D-038 — Composite adapter: one Environment, several substrates, routed by component and instance](#d-038-composite-adapter-one-environment-several-substrates-routed-by-component-and-instance)
+- [D-039 — A component's Service selects the binding, not the pod; chaos kills the pod, not the address](#d-039-a-components-service-selects-the-binding-not-the-pod-chaos-kills-the-pod-not-the-address)
+- [D-040 — Component slots may start concurrently; readiness probes are the synchronisation](#d-040-component-slots-may-start-concurrently-readiness-probes-are-the-synchronisation)
+- [D-041 — Persisted environment metadata records its substrate; a mismatch rebuilds or refuses, never attaches](#d-041-persisted-environment-metadata-records-its-substrate-a-mismatch-rebuilds-or-refuses-never-attaches)
+- [D-042 — Runtime invariants for cross-module agreements, enabled only for this repository's own suite](#d-042-runtime-invariants-for-cross-module-agreements-enabled-only-for-this-repositorys-own-suite)
+- [D-043 — Invariants defer their condition; consumer mistakes are errors with hints, not invariants](#d-043-invariants-defer-their-condition-consumer-mistakes-are-errors-with-hints-not-invariants)
+- [D-044 — Almost every failure a test harness raises is the consumer's to act on](#d-044-almost-every-failure-a-test-harness-raises-is-the-consumers-to-act-on)
+- [D-045 — A hint may only state what a test proves or the claim lint resolves](#d-045-a-hint-may-only-state-what-a-test-proves-or-the-claim-lint-resolves)
+- [D-046 — `Adapter.reconnect`: one optional SPI method, for adapters whose reported ports are process-local](#d-046-adapterreconnect--one-optional-spi-method-for-adapters-whose-reported-ports-are-process-local)
+- [D-047 — Attach resolves a COMPONENT, not a container id: `reconnect` reconciles by label](#d-047-attach-resolves-a-component-not-a-container-id--reconnect-reconciles-by-label)
 
 ---
 
@@ -772,3 +781,225 @@ The obvious routing key — the Binding's `image` — is wrong. The same require
 - Route keys may not contain the `::` separator; construction rejects them, so an id can always be split unambiguously.
 - Not addressed here: verifying up front that every component routed to the in-memory substrate has a registered factory. The composite sees a `StartSpec` only at start time and never sees the Environment, so a preflight needs the Environment passed separately. Today a missing factory surfaces as `image_not_registered` when that component starts. Worth building once a consumer asks; not worth guessing at the shape before then.
 - This is additive. An Environment with a single adapter is unaffected, and no existing metadata, Binding, or test changes.
+
+## D-039. A component's Service selects the binding, not the pod; chaos kills the pod, not the address
+
+**Context:** In Kubernetes deploy mode each component gets a per-Pod `Service` (D-020) whose selector was the unique `cyanotype.podname` label. Because a chaos restart generates a fresh pod name, that selector could never match the replacement, so `chaos.stop` deleted the Service along with the pod and `chaos.start` recreated it.
+
+That makes the injected fault a compound one: the process dies **and** its cluster-internal DNS name stops existing. Those are independent faults, so an observed failure cannot be attributed to either. It is also not a fault production produces — when a pod dies its Service remains and simply loses an endpoint. Jepsen's entire built-in nemesis vocabulary is partitions, process pause/kill, clock skew and file corruption; nothing in it removes service discovery, because removing the address is not how machines fail.
+
+The measured consequence was a slower and differently-shaped recovery. Dependents resolving a deleted name get NXDOMAIN rather than connection-refused, and resolvers cache negative answers.
+
+**Decision:** The Service selector is `cyanotype.component` plus `cyanotype.instance` (when present), scoped by `cyanotype.session` — the identity of the *binding*, which is stable across pod replacement. Endpoints then follow a new pod automatically, so `chaos.stop` deletes the pod and its ConfigMap and deliberately leaves the Service standing. Suite teardown still removes it by label.
+
+**This retires the Selector bullet of D-020**, which chose the per-Pod label deliberately and gave a reason: a 1:1 Service avoids "cross-instance traffic when two Pods share `cyanotype.component` + `cyanotype.instance` — e.g. mid-chaos when an old Pod is terminating while the new one is starting". That concern is real and is not dismissed. It is accepted because:
+
+- Kubernetes Endpoints include only Pods that are **Ready**. A terminating Pod is marked NotReady and drops out of the endpoint set before it stops answering, so the overlap window requires two simultaneously-Ready Pods, not merely two existing ones.
+- `chaos.stop` force-deletes with `--grace-period=0` and `chaos.start` then creates a new Pod and waits for Ready before the caller proceeds. The old Pod's deletion is issued before the new Pod exists, so the orderings that would produce two Ready Pods are narrow.
+- The selector is session-scoped, so two concurrent test sessions in one namespace cannot select each other's Pods regardless.
+- The failure it replaces was worse and was not a window but a certainty: deleting the Service deleted the cluster-internal DNS name, which is a fault no real failure mode produces and which measurably changed how dependents recovered.
+
+A residual window remains where a not-yet-removed Ready Pod and a new Ready Pod both match. If that ever produces an observable defect, the fix is to have `chaos.stop` wait for endpoint removal before returning rather than to restore the per-Pod selector, because the per-Pod selector is what forced the Service deletion in the first place.
+
+**Consequences:**
+- `chaos.stop` in deploy mode is now a clean node kill. Dependents see a live Service with no endpoints and get connection-refused, which is what a dead pod produces in production.
+- The `cyanotype.podname` label remains on the pod. It is no longer a selector, but it still identifies a specific pod for diagnosis.
+- **This did not measurably change recovery time**, and it is worth recording that it was expected to. Instrumented before and after, dependents became usable 4356ms and 4303ms after `chaos.start` returned — unchanged. The recovery cost was the Redis client's own reconnect backoff, not DNS. The change is justified on fault-model correctness alone; anyone revisiting it for performance reasons should know that measurement already happened.
+- Services now persist for the life of a session rather than being deleted and recreated around every chaos cycle. That widens the window for a Kubernetes footgun worth stating plainly: for every Service in a namespace, Kubernetes injects `<SERVICE_NAME>_PORT=tcp://<ip>:<port>` into every pod started afterwards. A workload that reads a same-named variable receives a URL where it expected a value. The reference fixture reads `REDIS_PRIMARY_PORT`; with a `redis-primary` Service present it got `tcp://192.168.194.219:6379`, `Number()` produced `NaN`, the Redis URL became `redis://host:NaN`, and the container exited at module load before it ever listened — which `restartPolicy: Never` then turns into a pod that sits Failed until the readiness probe gives up. The fixture now takes that variable only when it parses as a port; consumers whose environment variable names collide with Service names need the same defence. This hazard predates the change and is not caused by it, but the change makes encountering it more likely.
+- Two concurrent sessions in one namespace still collide on the Service *name*, which was true before this change and is unaddressed.
+
+## D-040. Component slots may start concurrently; readiness probes are the synchronisation
+
+**Context:** `startEnvironment` started component slots strictly one at a time, in `Object.entries(env)` order, awaiting each slot's readiness before beginning the next. Total startup was therefore the SUM of every slot's readiness time. Measured on the six-component reference example under Kubernetes: redis 1.6s + petstore 6.1s + nginx 0.9s ≈ 8.7s.
+
+The ordering this provided was never a contract. Cyanotype has no dependency graph; the order was whichever order the keys happened to be declared in. Components that depend on each other already tolerate arriving early, because readiness probes poll — a component whose dependency is still coming up simply retries.
+
+**Decision:** `OrchestratorOptions.startup` (forwarded from `SharedOptions`) accepts `"sequential"` or `"concurrent"`. Sequential remains the default. Concurrent starts every slot at once, making startup the length of the longest dependency chain rather than the sum of all of them.
+
+- Concurrent uses `Promise.allSettled` and rethrows the first rejection, rather than `Promise.all`. A rejection from `all` would leave the remaining slots starting in the background with nobody holding their handles, which is how a failed start leaks containers.
+- The default stays sequential because existing environments have been running against the incidental ordering, and a silent change to provisioning order is not something to impose on a consumer mid-release.
+
+**Consequences:**
+- The reference example opts in. Measured on Kubernetes over five runs of each mode, environment startup is 7.2s concurrent (7.0/7.0/6.8/7.3/7.7) against 9.1s sequential (9.6/10.3/7.4/8.3/9.9) — roughly 2s faster, and with visibly tighter spread, since sequential adds each slot's variance rather than overlapping it.
+- The gain is smaller than the arithmetic suggests, because removing the serialisation exposes the dependency chain underneath. What remains is pod scheduling (~1.7-2s, all six concurrently) plus a cascade — Redis, then the petstores that connect to it, then nginx which proxies to them — and per-component `kubectl port-forward` setup, which the adapter must complete before it can probe. No single component reliably dominates; which one finishes last varies between runs.
+- Application boot time is NOT a meaningful factor here, contrary to what the shape of the numbers suggests. Measured inside the reference image, `require("redis")` costs 89ms and the HTTP server binds immediately. Anyone optimising this should start with the substrate and the adapter's port-forward setup, not the fixture.
+- Opting in is only safe for components that retry their dependencies. Anything that exits when a dependency is absent — with `restartPolicy: Never`, a pod that exits stays exited — should stay sequential.
+- `environment.component_ready` counts may interleave under concurrency. The totals are correct; the ordering of the intermediate `done` values is not meaningful.
+
+## D-041. Persisted environment metadata records its substrate; a mismatch rebuilds or refuses, never attaches
+
+**Context:** `<stateDir>/<envKey>.json` is keyed by env key alone and recorded nothing about which substrate produced it. Container ids are only meaningful to the adapter that issued them, so flipping `CYANOTYPE_ADAPTER` between runs — the ordinary developer loop, and what the reference example's own `just` recipes do — leaves behind a file the next adapter cannot interpret.
+
+It nevertheless appeared to work, by accident. `adapter.exists()` was handed a foreign container id, returned `false`, and the existing dead-container path rebuilt. Three problems with relying on that:
+
+1. It is not guaranteed. The Adapter SPI does not require `exists()` to return `false` rather than throw, or rather than matching, for an id shape the substrate never issued. A permissive adapter attaches to another substrate's environment.
+2. In pure `attach` mode it surfaces as `attach_dead_container`, which `docs/attach-mode.md` explains as "the underlying stack was rebuilt outside Cyanotype's control" — a confident and wrong diagnosis.
+3. Silent identity drift is the failure mode the axioms exist to prevent (A1, A2).
+
+**Decision:** `EnvironmentMetadata` gains an optional `adapter?: string`, the `Adapter.name` of the substrate that started the environment. The behaviour on mismatch follows D-027's split exactly, because this is the same problem — a persisted environment that no longer matches current intent — with a second cache key:
+
+- **`startOrAttach`**: delete the metadata and re-race the ensure loop. Not an error. Erroring here would break the ordinary flow of changing substrate between runs.
+- **`attach`** (`freshAttach`): throw `{ kind: "attach_substrate_mismatch", envKey, expected, found }`, alongside `attach_version_stale` and `attach_dead_container`. There is nothing to rebuild in that mode.
+
+Environment-level, not per-component: `createSharedEnvs` takes one Adapter for the whole environment, and a composite adapter (D-038) reports itself under a single name.
+
+**Consequences:**
+- Optional and additive, so `schemaVersion` stays `1`. Metadata written before this field omits it, and an absent value skips the check — it can never false-invalidate a healthy environment. Same rule `ComponentSnapshot.version` follows.
+- The mismatch check runs BEFORE `exists()` in both paths. Asking an adapter about a foreign container id is meaningless, and letting its `false` answer flow onward is what produced the misleading `attach_dead_container`.
+- Unlike a version bump, `startOrAttach` does NOT call `stopAllInMeta` before rebuilding. Those containers belong to another substrate and this adapter cannot stop them; they are left to their own substrate's teardown and leak gate. Switching substrate therefore orphans the previous substrate's containers — which is exactly what happened before this decision, so it is not a regression, but it is a reason to run `just clean-containers` when moving between substrates.
+- A composite adapter's name encodes its members (`composite(memory+docker)`), so re-pointing a route changes the name and invalidates the environment. That is correct — the containers really are on different substrates — but it means composite configurations are not interchangeable across a persisted environment.
+
+## D-042. Runtime invariants for cross-module agreements, enabled only for this repository's own suite
+
+**Context:** D-012 bans defensive asserts that duplicate the type system, and it is right. But `CONVENTIONS.md` already carved out an exception — "a non-type invariant that would be hard to debug otherwise" — with no mechanism and nowhere to put one, so the exception went unused.
+
+The cost of that showed up as a class of bug this codebase keeps producing: an agreement between two modules that no single signature can state, which fails silently at the point of violation and loudly somewhere unrelated. Recent examples, all real:
+
+- The session label the orchestrator stamped (`${process.pid}-${Date.now()}`, recomputed per call, so *unique per container*) was not the label the adapter's `teardown()` swept (its own `sessionId`). D-016's label-scan backstop could never match anything. Nothing errored; crash-orphans simply survived.
+- A component's `Service` selector not being a subset of its Pod's labels yields a Service that never gets endpoints. Dependents hang until an unrelated probe times out.
+- An adapter registering a container it did not create in `known` makes `teardown()` delete workloads it does not own — and returning `owned: false` does not save it, because teardown never consults ownership. D-034's rules are pinned by eleven tests in `tests/core/owned-lifecycle.test.ts`, and a new code path walked straight past all of them.
+- An adapter returning fewer resolved ports than requested interpolates `undefined` into a URI.
+
+Tests pin the paths they exercise. An invariant pins every path, including ones written later.
+
+**Decision:** `src/invariants.ts` exports `invariant(held, name, detail?)`, and it is the only sanctioned way to write a runtime assertion in this codebase.
+
+- **Off by default.** Enabled by `tests/preload.ts` for this repository's suite, and by `CYANOTYPE_INVARIANTS=1` for a consumer debugging behaviour that looks impossible. Consumers run Cyanotype to test *their* system; they should neither pay for nor be interrupted by checks on ours.
+- **`detail` is a thunk**, so the cost of describing a violation is paid only when there is one. When disabled the cost is one boolean read and a call.
+- **Violations throw `{ kind: "invariant_violated", invariant, detail }`** — a tagged object, never a class, per the existing error convention. Throwing rather than logging is deliberate: a violated invariant means the system is in a state believed impossible, and continuing is what produces the distant, confusing failure.
+- **Named `invariant`, not `assert`** — `CONVENTIONS.md` bans the latter outright, in source and tests.
+- **Scope test:** it must be an agreement between two modules that no signature can state, whose violation surfaces elsewhere. Anything a type, a boundary validator (`missing_cyanotype_label`, `metadata_corrupt`) or a chokepoint (the attach-mode denylists) already covers is out — duplicating those is the noise D-012 bans.
+
+Eleven invariants ship with this decision: session-label agreement, resolved-port completeness (both the SPI and Blueprint sides), Service selector subset, reconnect claiming no ownership, teardown stopping only owned containers, attach never producing an owned component, monotonic event sequence, instance stamping, composite ids routing back, and the registry claim describing this process.
+
+**Consequences:**
+- **It immediately found a live bug.** The session-label invariant fired on the first run against real containers. The fix makes the adapter authoritative for `cyanotype.session` — it owns `teardown()`, so it owns the label teardown sweeps — normalised once in `start()` so Pod, ConfigMap and Service are swept together. `createSharedEnvs` still computes its own unused session string; that redundancy is now harmless and worth removing separately.
+- It also found that `tests/substrate/docker.test.ts` built specs labelled `cyanotype.session: "test"` while constructing adapters with different ids. Those tests passed only because they stopped containers explicitly; anything escaping `known` was uncollectable. `mkSpec` now takes the session it will be handed to.
+- D-012 stands unmodified. This operationalises the exception `CONVENTIONS.md` already stated; it does not widen it.
+- An invariant that fires in a consumer's run is silent by default, which is a deliberate trade: we lose field reports of our own broken agreements in exchange for not failing someone else's suite over our internals. `CYANOTYPE_INVARIANTS=1` is the escape hatch when a consumer is willing to help diagnose.
+
+## D-043. Invariants defer their condition; consumer mistakes are errors with hints, not invariants
+
+**Context:** D-042 introduced `invariant()` and claimed that a consumer, for whom invariants are off, pays "one boolean read and a call". That was wrong, and the way it was wrong matters.
+
+`held` was an ordinary parameter, so JavaScript evaluated it at the call site whether or not invariants were enabled. Measured:
+
+- A disabled invariant still ran its condition on every call.
+- A condition that dereferenced something absent still **threw**: `undefined is not an object (evaluating 'ports.http')`. A check documented as off, crashing a consumer with a message about Cyanotype's internals and no indication of what they had done.
+
+Reviewing the catalogue against "who broke it" then showed a second error. D-042 listed the check that every Blueprint-declared `portName` resolves as an invariant. But `Binding.ports` is `Record<string, "auto" | number>` and is not keyed to `Blueprint.portNames`, so a Binding that omits one type-checks — that is consumer misconfiguration, not an agreement between Cyanotype's modules, and it was silent for exactly the people who needed it. Left unchecked the missing port reads `undefined`, lands in a URI as `http://127.0.0.1:undefined`, and surfaces as a readiness timeout apparently against the consumer's own service.
+
+A third: the session-label invariants sat directly below the normalisation that makes them true, asserting what the previous statement had just guaranteed. That is the defensive assert D-012 bans.
+
+**Decision:** Three changes.
+
+1. **Both `invariant()` arguments are thunks** — `invariant(() => held, name, () => detail)`. When invariants are disabled nothing runs. "Off" now means off, for the condition as much as the diagnostic.
+2. **The invariant/error boundary is decided by who broke it.** An agreement between Cyanotype's own modules is an invariant, off for consumers because they cannot act on it. A mistake a consumer makes in their own code is an error: always on, thrown at the boundary where it is still explicable. The declared-ports check moves to `createEnvironment` as `binding_missing_declared_ports`, naming the component, the instance, and the missing port. The two session-label invariants are dropped as vacuous. Six invariants remain.
+3. **Consumer-facing errors carry a `hint`** — what was done, why it is wrong, and the fix. The tagged fields address programs; the `hint` addresses the person reading the failure. The codebase had 61 throw sites and 2 hints; the convention existed and had not spread. Eight consumer-reachable errors gain one: `use_not_ensured`, `wrong_target_env`, `unknown_env`, `component_not_found`, `invalid_chaos`, `snapshot_unknown_component`, `snapshot_shape_mismatch`, `snapshot_unknown_instance`, plus `reserved_component_name`. Internal errors stay bare, because a hint nobody can act on is noise.
+
+**Consequences:**
+- D-042's mechanism stands; its catalogue is amended, from eleven invariants to six plus one boundary error.
+- The hint rule has a useful side effect as a design test: if you cannot write the hint, the error is probably internal and may want to be an invariant instead.
+- Thunking `held` costs a closure allocation per call site when invariants are ENABLED. Every site is on a lifecycle path measured in hundreds of milliseconds, so this is not a consideration; it would be if an invariant were ever placed in a hot loop, which is a reason not to.
+- `tests/core/environment-validation.test.ts` pins the new boundary errors, including that each hint names the fix rather than restating the fact.
+- **The classification is enforced, not documented.** `tests/core/error-classification.test.ts` scans every `throw { kind: ... }` in `src/` and fails unless it is listed as consumer-facing or internal; consumer-facing kinds must carry a `hint`, internal kinds must not, and no hint may reference this repository's own tooling. Adding an error without classifying it fails the suite — deliberately, so the decision happens while the author still knows who can trigger it. Applying it across all 62 thrown kinds moved fourteen more into the consumer-facing set, including `wait_for_timeout` and `sequence_timeout`, which are the errors a test author reads most often and had no guidance at all.
+- The three `derived_compose_*` errors are declared types, so adding `hint` to them made the compiler demand one at every throw site — which surfaced a third site the audit had missed. Where the type system can carry the convention, it should.
+- Hints must not name this repository's tooling: an early draft told consumers to run `just clean-containers`, which only exists here. Recovery advice is now phrased in terms the consumer controls — their stateDir, their container labels, their `docker compose`. The audit also corrected two inaccurate hints: `use()` is scoped to the `createSharedEnvs` handle rather than the file, and `stopAll()` cannot clean containers a previous process started, so it must not be offered as the recovery.
+
+## D-044. Almost every failure a test harness raises is the consumer's to act on
+
+**Context:** D-043 established the rule — ask who broke it — and classified the errors reachable from the eight paths that had been reasoned about. Auditing all 62 thrown kinds against their actual guard conditions showed the classification was badly skewed: 38 kinds had been filed as internal, and most were not.
+
+The mistake was reading "internal" as "raised by Cyanotype's own code" rather than "only Cyanotype can act on it". A test harness is almost entirely a boundary onto someone else's system, so the failures it raises are overwhelmingly about *their* system: their image will not pull, their pod will not schedule, their service never becomes ready, their kubectl is missing, their credentials lack a verb, their compose stack is down. Cyanotype raises the error; the consumer is the only one who can fix it.
+
+Two cases make the point. `probe_timeout` — the component started but never became ready — is among the most-hit errors in the library and had been filed as internal, so it offered nothing. `image_not_registered` is a pure configuration mistake: the in-memory adapter could not resolve a Binding's image against its factory registry, and the fix is one line the consumer writes.
+
+The audit also found `zero_ping_failed`, an error kind this library never raises. It appears in a JSDoc block documenting how a custom probe may throw its own tagged error. The classification scanner was matching inside comments.
+
+**Decision:** Classification follows *who can act*, not *who raised it*. That moves the split to 54 consumer-facing kinds and 8 internal ones, and every consumer-facing kind carries a `hint`.
+
+The 8 that remain internal are the honest cases: `invariant_violated`; `missing_cyanotype_label` (the orchestrator always sets it, so only a hand-built `StartSpec` reaches it); `docker_not_connected` (a `connect()` ordering bug of ours); `probe_aborted` (our own `AbortController`, not a failure of theirs); `attach_mode_violation` (the non-destructive chokepoint refusing a write — a safety net, not advice); `attach_reconnect_failed`; and the two EndpointSlice-parsing failures.
+
+Hints on substrate failures say what to check rather than what to run, because the reader's tooling is unknown: which pod phase means unschedulable versus crash-looping, that a missing host port binding usually means the image does not EXPOSE it, that `docs/k8s-rbac.md` lists the verbs when kubectl reports a permissions error.
+
+**Consequences:**
+- The scanner in `tests/core/error-classification.test.ts` strips comments before matching, so documentation examples are no longer mistaken for error kinds.
+- The classification lists are long, and deliberately so: they are the enforcement, and a new error cannot be added without joining one.
+- This does not widen D-042 or D-043 — the rule is unchanged. What changed is that applying it properly turned out to reclassify most of the catalogue, which is itself the finding: for a library whose whole job is to run someone else's system, "internal" is a small category.
+
+## D-045. A hint may only state what a test proves or the claim lint resolves
+
+**Context:** D-043 and D-044 put a `hint` on 54 error kinds. Enforcing that a hint *exists* says nothing about whether it is *true*, and a false hint is worse than none: the reader acts on it, and the fix they try cannot work. Three shipped before anything guarded against it — advice to run a `just` recipe consumers do not have; a scope claim that was simply wrong ("the same file", when the cache is closed over by `createSharedEnvs`); and a remedy, `stopAll()`, that exists but cannot clean another process's containers, which is exactly what it was offered for.
+
+Those three are not one failure but three, and they need different mechanisms. The first is a dead reference. The second and third are behavioural claims that resolve to real symbols and are still false. Nothing static distinguishes them.
+
+**Decision:** Hints are guarded by three layers, and a rule that decides what may be written when none of them can help.
+
+1. **`tests/core/hint-claims.test.ts` — the claim lint.** Strips `${...}` interpolation from each hint (that is the hint's own code, not a claim about Cyanotype) and fails the build if an identifier-shaped claim does not resolve: a method name absent from `src`, an `adapter.*` config path whose segments do not exist, a `mode:` outside `SharedMode`, a file that is not on disk, a `CYANOTYPE_*` variable nothing reads. Commands for external tools (`docker compose`, `kubectl describe`) are detected by real subcommand — not by mentioning the tool in prose — and must appear in an allowlist with a written reason, since telling someone to run something is the advice they will follow verbatim.
+2. **`tests/core/hint-remedies.test.ts` — remedy proofs.** For the nine errors whose remedy is executable in-process, the test triggers the error, performs what the hint says, and asserts the second attempt succeeds. This is the only real proof of truthfulness and it covers the misuse class, where a false hint does most damage.
+3. **`just hints` — the catalogue.** Prints every error, the condition that raises it, and the hint, so the part no test can reach can be read in one pass rather than found across sixty throw sites.
+
+**The rule:** a hint may only state what layer 1 or 2 can back. Anything else says what to **check**, not what to do — "kubectl describe pod shows which" rather than a remedy to follow. That is what keeps a substrate hint honest without a test behind it.
+
+**Consequences:**
+- The claim lint is deliberately loose about *types* and strict about *existence*. TypeScript already checks code; a hint is a string, and the failure being guarded is the reference going stale, not being ill-typed.
+- Remedy tests couple a hint to a test: change the advice and the test must change with it. That coupling is the point, and it is why only nine exist — each is real work, and they were spent on the errors a consumer is most likely to act on.
+- What remains unguarded is whether prose advice is *sound*. This is stated rather than papered over: layers 1 and 2 shrink that surface, layer 3 makes reviewing it cheap, and the rule keeps unprovable advice modest in what it claims.
+- The catalogue reports 79 throw sites against the classification test's 62 distinct kinds — several kinds are raised from more than one place, and each site gets its own hint because the context differs.
+
+## D-046. `Adapter.reconnect` — one optional SPI method, for adapters whose reported ports are process-local
+
+**Context:** `Started.ports` is durable only where it is a real host binding. Docker and Compose report bindings that outlive the process that opened them, so a second process attaching from persisted metadata can use the recorded numbers. The Kubernetes deploy adapter reports `kubectl port-forward` locals, which die with their parent.
+
+Nothing in the SPI said which kind an adapter returns, and the orchestrator assumed the durable kind. The result on Kubernetes: a second process reads metadata, attaches to closed ports, and burns its entire readiness budget against them. Measured against the reference example — five non-chaos files, six components — a warm attach took **30473ms and failed** with `attach_probe_failed` wrapping a `probe_timeout` that had run for 30192ms. Nothing in that failure points at ports.
+
+This contradicts C1 in `axioms.md`, which promises that "first worker starts containers and writes metadata; subsequent workers attach" — true on Docker, false on Kubernetes deploy mode, with no signal that the promise is substrate-dependent.
+
+**Decision:** One optional method on the Adapter SPI, amending D-004 from "seven methods" to **seven required and one optional**.
+
+```ts
+reconnect?(spec: ReconnectSpec): Promise<Reconnected>;
+```
+
+- **`ReconnectSpec` carries only what the caller genuinely holds** — the recorded `containerId`, the `envKey`, `component`, `instance`, the port names, and the Binding's `adapterConfig`. Deliberately not a synthesised `StartSpec`: its `env` and `mounts` would have to be invented, and an adapter reading them would be reading fiction.
+- **`envKey` is in the spec because it is the identity that survives the process boundary.** It is stamped as `cyanotype.env`. `cyanotype.session` is not usable for this — since D-042's session-label fix it identifies the adapter instance that created the container, so a later process never matches it.
+- **`Reconnected` has no `owned` field.** A process that reconnects created nothing and must never claim ownership; `teardown()` acts on what an adapter says it created, so a claim here would delete another process's workloads. The spike version returned `Started` and forbade the claim with an `invariant()`; leaving the field out makes it unrepresentable instead, which is what D-042's own scope test asks for — an invariant is for what no signature can state.
+- **The returned `containerId` may differ from the one supplied.** No adapter changes it today. The shape is deliberate; see the reconcile note below.
+- **Kubernetes exposes it in deploy mode only.** In attach mode a component's ports are Service-anchored reconnect wrappers whose Service name can be overridden per Binding, so re-establishing them is discovery, not re-forwarding.
+- **The orchestrator wraps failures** as `attach_reconnect_failed` — consumer-facing, carrying component identity and a hint. The adapter-level causes stay internal and bare, so the reader gets one story. Mirrors `probe_timeout` → `attach_probe_failed`.
+
+**Presence means capability, not durability.** Implementing this says "I can re-establish ports for another process". Omitting it says only that this adapter cannot — which is true both for adapters whose ports are already durable *and* for adapters that simply have no way to re-open them. Kubernetes attach mode is the second kind today, and an attaching process there still fails at the probe exactly as before. The distinction is not currently representable, and that is an accepted cost rather than an oversight: a separate `portsAreProcessLocal` flag would let attach mode fail fast with an accurate error instead of a timeout, but no adapter needs the two knobs apart yet.
+
+**Consequences:**
+
+- The reference example on Kubernetes goes from **10565ms cold to ~2000ms warm** (2249/1889/1959 over three runs), with the environment intact after each and no leaked port-forwards. The negative control is above: the same run without the method takes 30473ms and fails.
+- **Warm attach still cannot survive a chaos-running suite.** `reconnect` re-establishes a connection to the *recorded* container; it does not resolve which container a component currently is. A chaos restart replaces the Pod, `exists()` fails on the stale id, and attach raises `container_gone` — whose hint already describes exactly this case. This is D-007's stated gap ("chaos restarts during a session that produce new container IDs aren't seen by attached workers"), unchanged.
+- **That gap is what the returned `containerId` is for.** Resolving a component to its current container — matching on `cyanotype.env` + `cyanotype.component` + `cyanotype.instance`, which is why the selector deliberately excludes the session label — is a natural extension that would close it. It needs its own decision: it changes what attach *means*, from "this container" to "this component", and brings failure modes reconnect does not have (zero matches, and the mid-chaos window where an old terminating container and its replacement both match — the window D-020 worried about and D-039 accepted). Not taken here; the shape is left open so it does not require another SPI change.
+- Adapters that do not implement it are unaffected — Docker, Compose, in-memory and the composite adapter compile and behave exactly as before, which is what "optional" is buying.
+
+## D-047. Attach resolves a COMPONENT, not a container id — `reconnect` reconciles by label
+
+**Context:** D-046 gave adapters a way to re-establish ports for a container another process started, and left a bound in place: it reconnects to the *recorded* container. D-007 named the same bound years earlier — "chaos restarts during a session that produce new container IDs aren't seen by attached workers".
+
+That bound is not an edge case; it is the normal state of any environment whose suite exercises chaos. Measured on the reference example: after one full run including the resilience tests, **three of six recorded container ids no longer existed**, while all six components were healthy. A second process reading that metadata saw half an environment gone.
+
+The failure was also the wrong shape. `attachOne` asked `exists(snap.containerId)` before anything else, so a component that had been restarted — and was serving perfectly — was rejected as `container_gone`. The precheck answered a question about an identifier at a point where nobody could correct it.
+
+**Decision:** For adapters that implement `reconnect`, a component's identity is its **labels**, not the container id the metadata happens to hold.
+
+- The Kubernetes adapter resolves `cyanotype.env` + `cyanotype.component` + `cyanotype.instance` and forwards to whatever Pod that selects, ignoring the recorded name.
+- **The selector deliberately excludes `cyanotype.session`.** Since D-042's label fix that names the adapter instance that *created* the Pod, so a later process never matches it. `cyanotype.env` is the identity that crosses a process boundary, which is what makes this possible at all.
+- **Single-instance components require the instance label to be ABSENT** (`!cyanotype.instance`), not merely omitted from the selector. Omitting it would make a single-instance lookup match every instance of a same-named multi-instance slot.
+- **Pods with a `deletionTimestamp` are excluded even while they report `Running`.** This is what keeps the mid-chaos window — old terminating, new starting — from reading as two live candidates. It is the window D-020 worried about and D-039 accepted; here it is handled rather than accepted.
+- Zero matches, more than one live match, and a failed query are distinct internal errors (`k8s_reconcile_no_match`, `k8s_reconcile_ambiguous`, `k8s_reconcile_query_failed`), all surfaced to the consumer through `attach_reconnect_failed`.
+- **`attachOne` skips the `exists()` precheck when the adapter can reconnect.** For those adapters `reconnect` is the resolver and it either produces a live container or fails. Adapters without it are completely unchanged: `exists()` still runs and `container_gone` still means what it meant.
+
+No SPI change. D-046 shaped `ReconnectSpec` to carry `envKey`, `component` and `instance`, and allowed the returned `containerId` to differ from the one supplied, precisely so this could arrive without one.
+
+**Consequences:**
+
+- Warm attach now survives a chaos-running suite. Against the environment described above — three stale ids out of six — the attaching process completes in **2509ms with 12 tests passing**. The control is exact: the same code resolving `spec.containerId` instead of the label query gives **0 pass, 1 fail, `attach_reconnect_failed`**.
+- **`container_gone` is no longer reachable on the Kubernetes deploy path.** A component that is genuinely absent now surfaces as `attach_reconnect_failed` wrapping `k8s_reconcile_no_match`. That is a behaviour change in error identity, taken because the alternative — asking about a stale id first — rejects healthy components.
+- **Attach means something different for these adapters, and it is a widening.** Previously it meant "re-attach to exactly these containers"; now it means "attach to whatever is currently serving this environment's components". A caller who wanted the first meaning cannot express it. Nothing in the codebase wanted it: the recorded id was a convenience, and its staleness was a documented defect rather than a guarantee anyone relied on.
+- Docker, Compose, in-memory and composite are untouched, since none implements `reconnect`. The composite adapter therefore loses reconcile for members that could support it — a real gap, left open deliberately rather than solved by routing an id through a wrapper whose members disagree about what identity means.
+- The mid-chaos ambiguity is handled by excluding terminating Pods, but two simultaneously-Ready Pods for one component remains an error rather than a choice. If that ever fires in practice it means the environment is not what it claims, and picking one silently would hide it.

@@ -31,7 +31,13 @@ Switch to a semver pin once your library change has landed in a published releas
 # Type-check.
 just typecheck
 
-# Harness functionality tests — exercises adapters/orchestrator directly, not via the example; Docker/K8s tests self-skip when unavailable.
+# Pure unit suite — no Docker, no cluster. Seconds, not minutes; run it constantly.
+just test-unit
+
+# Adapter integration against real Docker and Kubernetes.
+just test-substrate
+
+# Both harness suites.
 just test-core
 
 # Full suite. Teardown runs automatically; back-to-back `bun test` invocations
@@ -76,10 +82,32 @@ preload = ["./tests/preload.ts"]
 ### Code changes
 
 - Follow `CONVENTIONS.md`.
-- Every implementation module has a test file in `tests/core/<module>.test.ts`. Add tests for new behaviour there.
+- Every implementation module has a test file: `tests/core/<module>.test.ts` for anything testable without a substrate, `tests/substrate/<module>.test.ts` for adapter behaviour that needs a real Docker daemon or cluster. Add tests for new behaviour there.
 - The end-to-end example in `tests/petstore-example/` is the integration smoke; if your change affects orchestration or the Adapter SPI, it should still pass.
 - `just typecheck` must be clean.
-- `just test-core` must be clean. Then `just test` against real Docker.
+- `just test-unit` must be clean — run it constantly, it takes seconds. It runs
+  with runtime invariants enabled (`tests/preload.ts`), so a violated cross-module
+  agreement fails there rather than as a confusing symptom later. Set
+  `CYANOTYPE_INVARIANTS=1` to enable them outside this repo's suite. Then `just test-core` (adds substrate integration) and `just test` against real Docker.
+
+### Adding a failure mode
+
+Before adding a `throw`, decide whether it is a consumer's mistake (an error,
+always on, carrying a `hint`) or an agreement between Cyanotype's own modules
+(an `invariant()`, off in consumers' runs). The decision table is in
+[`AGENTS.md`](./AGENTS.md#failures-invariant-or-error), and
+`tests/core/error-classification.test.ts` will fail until the new error is
+classified — that is intentional.
+
+### Auditing hints
+
+`just hints` prints every error, the condition that raises it, and the hint the
+reader gets. Two automatic layers guard them — `hint-claims.test.ts` fails if a
+hint references something that does not exist, `hint-remedies.test.ts` proves
+the advice works by performing it — but neither can judge whether prose advice
+is *sound*. That is what the catalogue is for: read it against the code when
+touching error paths, and when adding a hint you cannot prove, phrase it as
+something to check rather than a remedy to follow.
 
 ### Architectural changes
 
@@ -150,19 +178,21 @@ src/                    Library source
   helpers.ts            HelperContext + http helper
   events.ts             Typed EventCatalog + per-component EventBus
   probe.ts              Probe<I> + runProbe
-  adapter.ts            Adapter SPI (7 methods) + StartSpec
+  adapter.ts            Adapter SPI (7 required + optional reconnect) + StartSpec
   metadata.ts           Cross-process JSON snapshot schema
   orchestrator.ts       startEnvironment / attachEnvironment + chaos
   observer.ts           Framework lifecycle event stream (D-024)
   reporter.ts           createConsoleReporter — built-in stream consumer
   runtime.ts            Runtime<E> + ChaosControls<E>
   shared.ts             createSharedEnvs — atomic file claim
+  invariants.ts         invariant() — cross-module agreements, off for consumers (D-042)
   compose.ts            reconcileComposeStack + FingerprintSpec (D-031)
   adapters/
     docker.ts           dockerode + SIGINT cleanup; onImageDrift policy (D-028)
     memory.ts           Factory-registry in-process adapter
     kubernetes.ts       K8s adapter (deploy + attach modes), reconnection layer
     kubectl.ts          kubectl subprocess wrapper (D-019)
+    composite.ts        Routes components/instances to different substrates (D-038)
   cli/
     index.ts            cyanotype derive CLI dispatch (bin entry) (D-030)
     derive.ts           deriveCompose / deriveK8s / loadDerivedCompose (D-030, D-032)
@@ -170,7 +200,8 @@ src/                    Library source
 
 tests/
   preload.ts            bun:test global setup + teardown (afterAll → shared.stopAll)
-  core/                 Harness self-tests (in-memory adapter)
+  core/                 Harness self-tests — pure, no daemon or cluster
+  substrate/            Adapter integration against real Docker and Kubernetes
   fakes/                Reusable in-process simulators for Blueprints
   petstore-example/     End-to-end SLA suite (runs across all five adapters)
   support/containers/   Dockerfiles for the test images

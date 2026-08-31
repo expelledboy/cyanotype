@@ -48,6 +48,8 @@ export type AttachImageDriftError = {
   readonly expected: string;
   readonly actual: string;
   readonly component: string;
+  /** Human-readable explanation of what went wrong and how to fix it (D-043). */
+  readonly hint: string;
 };
 
 declare module "../adapter.js" {
@@ -271,7 +273,17 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       pullStream = await c.pull(image);
     } catch (cause) {
       emit?.({ type: "image.pull_failed", image, error: cause });
-      throw { kind: "image_pull_failed", image, cause };
+      throw {
+        kind: "image_pull_failed",
+        image,
+        cause,
+        hint:
+          `The pull of "${image}" was rejected before any layer transferred, so this is the ` +
+          `request to the daemon failing rather than the registry: an unreachable or unhealthy ` +
+          `daemon, socket permissions, or a malformed image reference. \`cause\` carries what it ` +
+          `said. Note Cyanotype never builds images — an image you build locally must exist ` +
+          `before the suite runs.`,
+      };
     }
     // Throttle per-layer progress: emit on every status transition, and at
     // most ~1.4×/s while a layer stays in the same status (e.g. Downloading).
@@ -305,7 +317,18 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       c.modem.followProgress(pullStream, (err) => (err ? reject(err) : resolve()), onProgress);
     }).catch((cause) => {
       emit?.({ type: "image.pull_failed", image, error: cause });
-      throw { kind: "image_pull_failed", image, cause };
+      throw {
+        kind: "image_pull_failed",
+        image,
+        cause,
+        hint:
+          `The pull of "${image}" started and then failed part-way through. Registries report a ` +
+          `missing tag and an authorization failure inside the progress stream rather than as a ` +
+          `failed request, so those land here: check the tag exists and is spelled as the Binding ` +
+          `declares it, and that you are logged in if it is private. A dropped connection ` +
+          `mid-download looks the same — \`cause\` distinguishes them. Cyanotype never builds ` +
+          `images; build a local one before the suite runs.`,
+      };
     });
     emit?.({ type: "image.pulled", image, durationMs: Date.now() - pullStart });
   };
@@ -335,7 +358,23 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     for (const name of portKeys) {
       const arr = networkPorts[`${name}/tcp`];
       if (!arr || arr.length === 0 || !arr[0]) {
-        throw { kind: "port_not_bound", containerId, port: name };
+        throw {
+          kind: "port_not_bound",
+          containerId,
+          port: name,
+          hint:
+            `Docker reports no published host binding for container port ${name}. Two paths reach ` +
+            `this, with different causes. On a first attach the container was just verified ` +
+            `running, so the stack is at fault: the compose service needs a "ports:" entry mapping ` +
+            `that container port to the host — "expose:" alone publishes nothing. On a chaos resume ` +
+            `the restart is attempted and a failure swallowed, so an EXITED container reaches here ` +
+            `too; check whether it actually came back (docker ps shows its state) before blaming ` +
+            `the compose file. Note adapter.compose.attach.port does not map a port name to a ` +
+            `number — it replaces the whole set of ports read with that single container port, ` +
+            `dropping every other declared port, so reaching for it when a port NAME is unresolved ` +
+            `leaves the rest of your interface URI holding undefined. Name the Binding's port after ` +
+            `the container port number instead.`,
+        };
       }
       ports[name] = Number(arr[0].HostPort);
     }
@@ -354,8 +393,12 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         const containerId = b.realId;
         throw {
           kind: "chaos_unsupported_in_attach_mode",
-          message: "chaos.stop on an attached binding requires adapter.compose.attach.allowChaos: true",
           containerId,
+          hint:
+            `Attach mode never mutates containers you own unless a Binding opts in, so chaos ` +
+            `is refused by default — this is what stops a suite from stopping your compose ` +
+            `stack. Set adapter.compose.attach.allowChaos: true on this Binding if disrupting ` +
+            `it is intended.`,
         };
       }
       // Chaos path: real outage via `docker stop`.
@@ -368,7 +411,15 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         if (err?.statusCode === 304 || (typeof err?.message === "string" && /already stopped|not modified/i.test(err.message))) {
           // Container was already stopped — that's fine; still mark paused.
         } else {
-          throw { kind: "docker_stop_failed", containerId: b.realId, cause: e };
+          throw {
+            kind: "docker_stop_failed",
+            containerId: b.realId,
+            cause: e,
+            hint:
+              `The Docker daemon refused to stop this container. It may already be gone, or ` +
+              `the daemon may be unhealthy — check "docker ps -a" for its state. cause carries ` +
+              `the daemon's own error.`,
+          };
         }
       }
       b.paused = true;
@@ -397,7 +448,16 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         await client.ping();
       } catch (cause) {
         client = null;
-        throw { kind: "docker_connect_failed", cause, hint: "Injected client ping failed." };
+        throw {
+          kind: "docker_connect_failed",
+          cause,
+          hint:
+            `The dockerClient passed to createDockerAdapter did not answer ping(). That option is ` +
+            `an internal test seam, so this is normally a fake that is not responding — but an ` +
+            `injected REAL client pointed at a dead daemon reaches here too, in which case a daemon ` +
+            `was contacted and refused. \`cause\` distinguishes them. Production callers have no ` +
+            `reason to set dockerClient, though nothing stops them.`,
+        };
       }
       return;
     }
@@ -437,7 +497,11 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       throw {
         kind: "docker_connect_failed",
         cause,
-        hint: "Is the Docker daemon running? Check DOCKER_HOST.",
+        hint:
+          `Is the Docker daemon running? Cyanotype connects to DOCKER_HOST when it is set, ` +
+          `and otherwise to /var/run/docker.sock, falling back to the Docker Desktop socket ` +
+          `under your home directory. A daemon on any other socket (Colima, Rancher Desktop, ` +
+          `a remote host) needs DOCKER_HOST pointing at it.`,
       };
     }
   };
@@ -452,7 +516,13 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     const attach = spec.adapterConfig?.compose?.attach;
     const project = attach?.project ?? opts.project;
     if (!project) {
-      throw { kind: "compose_attach_project_required" };
+      throw {
+        kind: "compose_attach_project_required",
+        hint:
+          "Compose attach mode discovers containers by their compose project label, and no " +
+          "project was given. Set adapter.compose.attach.project on the Binding (or pass " +
+          "project to createDockerAdapter) to the value shown under NAME in `docker compose ls`.",
+      };
     }
     const allowChaos = attach?.allowChaos === true;
     const component = spec.labels["cyanotype.component"];
@@ -464,7 +534,12 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         kind: "compose_attach_service_not_found",
         service: null,
         project,
-        reason: "missing cyanotype.component label and no adapter.compose.attach.service override",
+        hint:
+          "No compose service name could be derived: this StartSpec carries no " +
+          "cyanotype.component label. The orchestrator always sets that label, so reaching this " +
+          "means adapter.start() was called directly with a hand-built spec — set the label on " +
+          "it, or put the service name in adapterConfig.compose.attach.service. There is no " +
+          "Binding involved on this path.",
       };
     }
     const containerNumber = attach?.containerNumber ?? 1;
@@ -495,7 +570,15 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       }
     }
     if (!match) {
-      throw { kind: "compose_attach_service_not_found", service, project, containerNumber };
+      throw {
+        kind: "compose_attach_service_not_found",
+        service, project, containerNumber,
+        hint:
+          `No container for compose service "${service}" (replica #${containerNumber}) in ` +
+          `project "${project}". Check the service name matches your compose file, that the ` +
+          `stack is up, and — if this component maps to a scaled service — that ` +
+          `adapter.compose.attach.containerNumber is within the running replica count.`,
+      };
     }
     const containerId = `attach:${project}/${match.id}`;
 
@@ -522,6 +605,15 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
             expected,
             actual,
             component: component ?? service,
+            hint:
+              `The running container for "${component ?? service}" reports image "${actual}", but its ` +
+              `Binding declares "${expected}". The comparison is textual, with one allowance for an ` +
+              `@sha256: digest suffix, so two spellings of the SAME image also land here — "redis" ` +
+              `against "redis:latest", or a registry-qualified ref against a bare one. Compare the two ` +
+              `strings first: if they denote the same image, align the spelling or set ` +
+              `adapter.compose.attach.onImageDrift: "warn" on this Binding. If they genuinely differ, ` +
+              `the suite would test something other than it declares — bring the stack up from the ` +
+              `image the Binding names, or update the Binding to match what is deployed.`,
           } satisfies AttachImageDriftError;
         }
         // "warn": surface and continue.
@@ -545,7 +637,16 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     }
 
     if (match.status !== "running") {
-      throw { kind: "compose_attach_container_not_running", service, project, status: match.status, containerId: match.id };
+      throw {
+        kind: "compose_attach_container_not_running",
+        service, project, status: match.status, containerId: match.id,
+        hint:
+          `The compose service "${service}" exists in project "${project}" but its container is ` +
+          `"${match.status}". Attach mode observes your stack rather than running it; the one ` +
+          `exception is a container this adapter itself chaos-stopped, which it may restart, so ` +
+          `it never starts a container it did not stop. Bring the stack up ` +
+          `(docker compose up -d) before running the suite.`,
+      };
     }
 
     const portKeys = attach?.port !== undefined
@@ -560,7 +661,13 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     return { containerId, ports, owned: false };
   };
 
-  const start = async (spec: StartSpec, emit?: Emit): Promise<Started> => {
+  const start = async (rawSpec: StartSpec, emit?: Emit): Promise<Started> => {
+    // See the Kubernetes adapter: the adapter owns `cyanotype.session` because
+    // `teardown()` sweeps by it. (I1)
+    const spec: StartSpec = {
+      ...rawSpec,
+      labels: { ...rawSpec.labels, "cyanotype.session": sessionId },
+    };
     if (spec.labels.cyanotype !== "1") {
       throw { kind: "missing_cyanotype_label", labels: spec.labels };
     }
@@ -600,7 +707,20 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       emit?.({ type: "container.start_failed", image: imageRef, error: cause });
       try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
       try { await created.remove({ force: true }); } catch { /* ignore */ }
-      throw { kind: "container_start_failed", image: imageRef, cause };
+      throw {
+        kind: "container_start_failed",
+        image: imageRef,
+        cause,
+        hint:
+          `The container for "${imageRef}" was created but the daemon refused to start it. ` +
+          `\`cause\` carries the daemon's own message and is the authority — the reason need not ` +
+          `be one of these, but the usual ones are: a fixed host port in the Binding's ports ` +
+          `already taken on this machine (give it "auto" to let Docker choose), an entrypoint or ` +
+          `command the image cannot run, or a bind mount the daemon will not share. For mounts the ` +
+          `fix is not in your Binding: Cyanotype writes mount contents into a temporary directory ` +
+          `under the OS temp path and binds that, so it is the daemon's file-sharing configuration ` +
+          `or TMPDIR that has to allow it.`,
+      };
     }
 
     const inspected = await created.inspect();
@@ -609,7 +729,18 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     for (const name of Object.keys(spec.ports)) {
       const arr = networkPorts[`${name}/tcp`];
       if (!arr || arr.length === 0 || !arr[0]) {
-        throw { kind: "port_not_bound", containerId: created.id, port: name };
+        throw {
+          kind: "port_not_bound",
+          containerId: created.id,
+          port: name,
+          hint:
+            `The container started but Docker reports no host binding for container port ${name}. ` +
+            `Deploy mode asks the daemon to publish every port the Binding declares, so a container ` +
+            `still up should have one; the usual cause is the process inside exiting within ` +
+            `milliseconds of start, which drops the mapping. \`containerId\` names it — inspect it ` +
+            `NOW. It is not yet registered for cleanup here, but suite teardown sweeps by label, so ` +
+            `after the run docker will report no such container.`,
+        };
       }
       ports[name] = Number(arr[0].HostPort);
     }

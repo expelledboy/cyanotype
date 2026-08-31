@@ -9,15 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0] - 2026-08-31
 
-Contract restoration, plus the first multi-substrate Environment.
-
-The bulk of this release closes four surfaces that type-checked, looked
-declared, and could not work — each item below either makes an existing promise
-true or makes it fail to compile. Alongside that, `createCompositeAdapter` lifts
-the real-vs-simulated choice from per-Environment to per-component, which is the
-isolation case the Blueprint contract was designed around.
-
 ### Changed (BREAKING)
+
 - `attachEnvironment` now runs the Blueprint's `readiness` probe before
   returning a runtime, matching `startEnvironment`. `adapter.exists()` proves a
   container is present, not that it serves, and attach is the default path —
@@ -40,7 +33,68 @@ isolation case the Blueprint contract was designed around.
   response schema, `raw` mode reaches `errorResponse` but not `response`, and
   `json` mode (the default) reaches both.
 
+### Changed
+
+- A component's Kubernetes `Service` now selects the binding
+  (`cyanotype.component` + `cyanotype.instance`, session-scoped) rather than a
+  single pod, so it survives pod replacement. `chaos.stop` consequently deletes
+  the pod and leaves the Service standing: a dead pod behind a live Service is
+  what production produces, and deleting the address alongside the process was
+  a compound fault that no real failure mode creates. See D-039.
+
 ### Added
+
+- Attach now resolves a **component**, not a container id, for adapters that
+  implement `reconnect`. A chaos restart in the process that owns an
+  environment replaces containers without updating the shared metadata, so an
+  attaching worker held names that no longer existed — measured at three of six
+  after one run of the reference suite — and was rejected with `container_gone`
+  despite every component being healthy. The Kubernetes adapter now resolves
+  `cyanotype.env` + component + instance. No SPI change. See D-047.
+- `Adapter.reconnect` — one optional SPI method, for adapters whose reported
+  ports do not outlive the process that opened them. Kubernetes deploy mode
+  reports `kubectl port-forward` locals, so a second process attaching from
+  persisted metadata previously found closed ports and spent its whole
+  readiness budget on them (measured: 30.5s and a failure). With it, the
+  reference example warm-attaches in ~2.0s against 10.6s cold. Adapters that
+  omit it are unaffected. See D-046.
+- Three layers keeping hints honest, because a hint that lies is worse than no
+  hint: a claim lint that fails the build when a hint references something that
+  does not exist, remedy tests that trigger an error and then perform its hint's
+  advice to prove it resolves, and `just hints` — a rendered catalogue of every
+  error, its trigger and its hint — for the soundness review neither can
+  automate. See D-045.
+- Consumer-facing errors carry a `hint` explaining what was done, why it is
+  wrong, and the fix. An audit of all 62 thrown kinds against their guard
+  conditions put 54 in that category and 8 as internal: a test harness is
+  almost entirely a boundary onto someone else's system, so the failures it
+  raises are overwhelmingly theirs to act on — the image will not pull, the pod
+  will not schedule, the service never becomes ready, kubectl is missing,
+  credentials lack a verb. `probe_timeout` and `image_not_registered` are among
+  those that previously offered nothing. Enforced by
+  `tests/core/error-classification.test.ts`, which fails if any thrown error is
+  unclassified, if a consumer-facing one lacks a hint, if an internal one has
+  one, or if a hint references this repository's own tooling. See D-043, D-044.
+- Runtime invariants for cross-module agreements the type system cannot state —
+  `invariant()` in `src/invariants.ts`, eleven of them across the orchestrator,
+  registry, event bus and adapters. Off unless `CYANOTYPE_INVARIANTS=1`, so a
+  consumer pays nothing and is never interrupted by a check on Cyanotype's
+  internals; on for this repository's own suite. See D-042.
+- `SharedOptions.startup` / `OrchestratorOptions.startup` accept `"concurrent"`
+  to start every component slot at once instead of one at a time, making
+  startup the length of the longest dependency chain rather than the sum of
+  every slot's readiness. Defaults to `"sequential"`; opt in when your
+  components retry their dependencies. See D-040.
+
+- Persisted environment metadata records the substrate that produced it
+  (`EnvironmentMetadata.adapter`). Switching `CYANOTYPE_ADAPTER` between runs
+  used to leave a state file the next adapter could not interpret; it survived
+  only because `exists()` happened to reject the foreign container ids.
+  `startOrAttach` now rebuilds explicitly, and `attach` throws
+  `attach_substrate_mismatch` instead of the misleading `attach_dead_container`.
+  Optional and additive — metadata without the field is attached as before.
+  See D-041.
+
 - `bus.mark(): EventCheckpoint` and `waitFor(name, { after })` /
   `expectSequence(names, timeoutMs, { after })` for explicit subscription offsets,
   plus the exported `FROM_START` checkpoint. The underlying sequence counter is
@@ -70,6 +124,51 @@ isolation case the Blueprint contract was designed around.
   it names the surviving containers and exits non-zero.
 
 ### Fixed
+
+- A chaos stop that the adapter REFUSES no longer kills the component's event
+  stream. `chaos.stop` aborted the log-stream signal before calling
+  `adapter.stop()`, so when the stop threw — `chaos_unsupported_in_attach_mode`
+  is the live case, made a loud throw deliberately — the container kept running
+  with a permanently closed stream. Only `chaos.start` re-arms it, and nobody
+  calls start after a stop that was refused, so every later `waitFor` on that
+  component timed out blaming the component rather than the refusal. The abort
+  now happens after the stop succeeds.
+- `invariant()` no longer evaluates its condition when invariants are disabled.
+  `held` was a plain parameter, so JavaScript ran it at the call site
+  regardless: consumers paid for every condition, and one that dereferenced
+  something absent threw `undefined is not an object` — a disabled check
+  crashing a consumer with a message about Cyanotype's internals. Both
+  arguments are thunks now. See D-043.
+- A Binding that omits one of its Blueprint's declared `portNames` is rejected
+  by `createEnvironment` with `binding_missing_declared_ports`, naming the
+  component, instance and missing port. It previously type-checked (
+  `Binding.ports` is not keyed to `portNames`), resolved to `undefined` inside
+  the interface URI, and surfaced as a readiness timeout apparently against the
+  consumer's own service. See D-043.
+- The Kubernetes attach-mode reconnection layer no longer orphans a `kubectl
+  port-forward` child on every chaos cycle. `resume()` published the new child
+  only after clearing its `paused` flag, so the supervisor could wake, observe
+  the dead child as already exited, and race into its own respawn while
+  `resume` was spawning — leaving a process nothing held a reference to.
+  Measured on the k8s-attach petstore suite across three independent pairs of
+  runs: 2/2/4 orphaned processes before, 0/0/0 after.
+- The `cyanotype.session` label is now stamped by the adapter, which is what
+  `teardown()` sweeps by. Previously `createSharedEnvs` supplied
+  `${process.pid}-${Date.now()}` recomputed per call — so the label meant to
+  group a session was unique per container — while teardown selected on the
+  adapter's own id, leaving D-016's label-scan backstop unable to match
+  anything. Found by the invariant above on its first run against real
+  containers. See D-042.
+- `waitFor` in the reference example records its trajectory — attempts, elapsed
+  time and a sample of what the predicate observed — so a timeout distinguishes
+  "never came close" from "recovering, just not inside the budget".
+- The reference fixture no longer trusts `REDIS_PRIMARY_PORT` blindly.
+  Kubernetes injects `<SERVICE_NAME>_PORT=tcp://<ip>:<port>` into every pod for
+  every Service in the namespace, so a `redis-primary` Service silently
+  replaced that variable with a URL; `Number()` yielded `NaN` and the container
+  died at module load. Anyone whose environment variable names collide with
+  Service names needs the same guard. See D-039.
+
 - Events ingested by the orchestrator now carry `instance` on the event object
   itself, alongside `component` and `occurredAt`.
   `EventFilter.instance` was a public filter that could never match in a real
@@ -91,6 +190,14 @@ isolation case the Blueprint contract was designed around.
   the Docker teardown scan, `clean-containers` and the leak check all filter on
   it. Containers created before this labelling need clearing once by hand with
   `docker rm -f $(docker ps -aq --filter label=cyanotype=1)`.
+
+### Development
+
+- `tests/core/` is now the pure unit suite — no Docker, no cluster, ~6s — and
+  the six adapter-integration files moved to `tests/substrate/`. `just
+  test-unit` runs the fast suite for the inner loop, `just test-substrate` the
+  integration one, `just test-core` both. `npm test` and `prepublishOnly` run
+  both, so continuous integration coverage is unchanged.
 
 ## [0.5.0] - 2026-08-12
 

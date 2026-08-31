@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import {
   createSharedEnvs,
   createDockerAdapter,
+  createConsoleReporter,
 } from "../../src/index";
 import { createInMemoryAdapter, type FakeFactory } from "../../src/adapters/memory";
 import { createK8sAdapter } from "../../src/adapters/kubernetes";
@@ -83,6 +84,11 @@ const adapter = adapterType === "docker"
     })
   : (() => { throw { kind: "unknown_adapter", value: adapterType }; })();
 
+// CYANOTYPE_REPORTER=1 renders the framework lifecycle (probe timings, chaos
+// phases, per-component readiness) to stderr. Off by default so test output
+// stays clean; invaluable when a run fails and you need the timeline.
+const observer = process.env.CYANOTYPE_REPORTER === "1" ? createConsoleReporter() : undefined;
+
 export const shared = createSharedEnvs(
   { "petstore-sla": env },
   {
@@ -90,5 +96,17 @@ export const shared = createSharedEnvs(
     stateDir: ".cyanotype-env",
     mode:     "startOrAttach",
     getTargetEnv: () => "petstore-sla",
+    // Sequential, deliberately. D-040's concurrent mode is only safe when every
+    // component tolerates a dependency that is not yet present, and nginx does
+    // not: it resolves its `upstream` hostnames once at config load and EXITS
+    // if one is missing (`[emerg] host not found in upstream "petstore-one"`).
+    // With `restartPolicy: Never` that pod stays dead and the environment fails.
+    //
+    // The Kubernetes adapter applies a component's Service only after its Pod
+    // is Ready (D-020), so under concurrent startup nginx routinely boots before
+    // any petstore Service exists and loses the race. Concurrent startup here
+    // was worth ~2s and cost an intermittently unstartable environment.
+    startup: "sequential",
+    ...(observer ? { observer } : {}),
   },
 );

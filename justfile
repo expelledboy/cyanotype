@@ -1,6 +1,6 @@
 # Cyanotype task runner. `just` lists the recipes below, grouped by substrate
 # and ordered fast → heavy. Test recipes follow the grammar:
-#   test-{core}                          — the tests/core/ suite
+#   test-{unit|substrate|core}           — pure suite, adapter integration, or both
 #   test-{petstore|adapter}-{substrate}  — the example suite, or an adapter suite
 # Recipes used only as build steps are hidden; read this file to see them.
 
@@ -33,10 +33,19 @@ lint-fix:
 test:
     bun test
 
-# Harness functionality tests — exercises adapters/orchestrator directly, not via the example; Docker/K8s tests self-skip when unavailable.
+# Fast unit suite — pure, no Docker, no cluster. The inner loop.
 [group('general')]
-test-core:
+test-unit:
     bun test tests/core/
+
+# Adapter integration against real Docker and Kubernetes. Needs both.
+[group('general')]
+test-substrate:
+    bun test tests/substrate/
+
+# Both harness suites: unit plus substrate integration.
+[group('general')]
+test-core: test-unit test-substrate
 
 # Refuse to pass unless this tree is releasable. Checks everything, tags nothing.
 [group('general')]
@@ -84,17 +93,22 @@ clean-containers:
 # Kubernetes adapter suite. Needs kubectl + a reachable cluster.
 [group('kubernetes')]
 test-adapter-k8s:
-    CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun test tests/core/kubernetes.test.ts
+    CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun test tests/substrate/kubernetes.test.ts
 
 # Kubernetes attach-mode adapter suite (denylist tests run offline; rest need a cluster).
 [group('kubernetes')]
 test-adapter-k8s-attach:
-    CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun test tests/core/kubernetes-attach.test.ts
+    CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun test tests/substrate/kubernetes-attach.test.ts
 
 # Petstore example suite on OrbStack Kubernetes (Cyanotype deploys the workloads).
 [group('kubernetes')]
 test-petstore-k8s: load-k8s-images
     CYANOTYPE_ADAPTER=k8s CYANOTYPE_K8S_CONTEXT={{ k8s_context }} bun test tests/petstore-example
+
+# Print every error, its trigger, and the hint a consumer gets. Optional filter.
+[group('quality')]
+hints filter="":
+    bun scripts/hints.ts {{ filter }}
 
 # Petstore example suite attached to a cluster this recipe deploys and tears down.
 [group('kubernetes')]
