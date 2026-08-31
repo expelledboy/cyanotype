@@ -32,6 +32,7 @@ const CONSUMER_FACING = new Set([
   "ensure_loop_exhausted", "metadata_corrupt",
   // Their environment drifted from the one Cyanotype persisted
   "attach_dead_container", "attach_version_stale", "attach_substrate_mismatch",
+  "attach_reconnect_failed",
   "attach_image_drift", "container_gone",
   "snapshot_unknown_component", "snapshot_shape_mismatch", "snapshot_unknown_instance",
   // Their chaos call
@@ -68,6 +69,9 @@ const CONSUMER_FACING = new Set([
  * cause.
  */
 const INTERNAL = new Set([
+  // Reached only through `attach_reconnect_failed`, which wraps it with the
+  // component identity and the hint. Bare here so the reader gets one story.
+  "k8s_reconnect_pod_not_running",
   // Cyanotype's own machinery, or an Adapter violating our SPI. A consumer
   // cannot act on any of these, so a hint would be noise.
   "invariant_violated",
@@ -75,7 +79,6 @@ const INTERNAL = new Set([
   "docker_not_connected",        // connect() ordering, ours to get right
   "probe_aborted",               // our AbortController, not a failure of theirs
   "attach_mode_violation",       // the non-destructive chokepoint refusing a write
-  "attach_reconnect_failed",
   "k8s_attach_endpoint_wait_timeout", "k8s_attach_endpointslice_parse_failed",
 ]);
 

@@ -55,7 +55,7 @@ export type {
   Binding, BlueprintOf, ConfigOf, EnvOf, IfaceOf, ApiOfBlueprint, EventsOf,
 } from "./binding.js";
 export type { Environment, Slot, IsMultiInstance } from "./environment.js";
-export type { Adapter, AdapterConfig, StartSpec, Started } from "./adapter.js";
+export type { Adapter, AdapterConfig, StartSpec, Started, ReconnectSpec, Reconnected } from "./adapter.js";
 export type { CompositeAdapterOptions } from "./adapters/composite.js";
 export type { EnvironmentMetadata, SlotSnapshot, ComponentSnapshot } from "./metadata.js";
 export type { Runtime, Running, ComponentRuntime, ChaosControls, RuntimeSnapshot } from "./runtime.js";

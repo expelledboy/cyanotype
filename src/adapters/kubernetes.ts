@@ -13,7 +13,7 @@
 import net from "node:net";
 import type { Subprocess } from "bun";
 import { z } from "zod";
-import type { Adapter, StartSpec, Started } from "../adapter.js";
+import type { Adapter, StartSpec, Started, ReconnectSpec, Reconnected } from "../adapter.js";
 import { createKubectl, type KubectlClient, type KubectlMode } from "./kubectl.js";
 import { invariant } from "../invariants.js";
 
@@ -1044,8 +1044,47 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     known.clear();
   };
 
+  /**
+   * D-046. Re-open port-forwards to a Pod another process started.
+   *
+   * Deploy mode only, and the adapter exposes it only in deploy mode — in
+   * attach mode a component's ports are Service-anchored reconnect wrappers
+   * whose Service name can be overridden per Binding, so re-establishing them
+   * is the reconcile-shaped work D-046 defers rather than a re-forward.
+   *
+   * Creates nothing in the cluster. Registers in `tracked` — the port-forward
+   * cleanup set — and deliberately NOT in `known`, which means "containers this
+   * session created and must remove": `teardown()` walks `known` and calls
+   * `stop(id)`, deleting the Pod. A reconnecting process created nothing.
+   */
+  const reconnect = async (spec: ReconnectSpec): Promise<Reconnected> => {
+    const podName = spec.containerId;
+    const check = await k.run(["get", "pod", podName, "-o", "jsonpath={.status.phase}"]);
+    const phase = check.stdout.trim();
+    if (check.exit !== 0 || phase !== "Running") {
+      throw { kind: "k8s_reconnect_pod_not_running", podName, phase, stderr: check.stderr };
+    }
+    const ports: Record<string, number> = {};
+    const forwards: Subprocess[] = [];
+    try {
+      for (const name of spec.ports) {
+        const { proc, localPort } = await startPortForward(podName, Number(name), "auto");
+        forwards.push(proc);
+        ports[name] = localPort;
+      }
+    } catch (e) {
+      for (const fp of forwards) { try { fp.kill(); } catch { /* ignore */ } }
+      throw e;
+    }
+    const t: Tracked = { podName, namespace, context, forwards, serviceName: null };
+    tracked.set(podName, t);
+    globalTracked.set(podName, t);
+    return { containerId: podName, ports };
+  };
+
   return {
     name: "kubernetes",
+    ...(mode === "deploy" ? { reconnect } : {}),
     connect,
     disconnect,
     teardown,

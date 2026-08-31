@@ -529,15 +529,52 @@ export const attachEnvironment = async <E extends Environment>(
     // Attach mode never owns the container: the process that started it
     // (or the operator, for compose / pre-running pods) holds the lifecycle.
     // `runtime.stop()` here detaches without removing.
+    // D-046. The ports in the snapshot are only durable if the adapter says so.
+    // An adapter exposing `reconnect` is declaring it can re-establish them for
+    // THIS process — Kubernetes deploy mode records `kubectl port-forward`
+    // locals, which died with the process that wrote them.
+    let attachId = snap.containerId;
+    let attachPorts: Record<string, number> = { ...snap.ports };
+    if (opts.adapter.reconnect) {
+      try {
+        const re = await opts.adapter.reconnect({
+          containerId: snap.containerId,
+          envKey: opts.envKey,
+          component: componentName,
+          ...(instanceId !== undefined ? { instance: instanceId } : {}),
+          ports: Object.keys(binding.ports ?? {}),
+          ...(binding.adapter !== undefined ? { adapterConfig: binding.adapter } : {}),
+        });
+        attachId = re.containerId;
+        attachPorts = { ...re.ports };
+      } catch (cause) {
+        throw {
+          kind: "attach_reconnect_failed",
+          componentName, instanceId, containerId: snap.containerId, cause,
+          hint:
+            `The container in \`containerId\` exists, but this process could not open its own ` +
+            `connection to it while re-attaching ` +
+            `"${instanceId === undefined ? componentName : `${componentName}.${instanceId}`}". ` +
+            `\`cause\` carries the adapter's error. On Kubernetes the recorded ports belong to ` +
+            `the process that started the environment — they are port-forwards, not host ` +
+            `bindings — so this step re-opens them here, and it fails when the Pod is no longer ` +
+            `Running even though it still exists. A Pod that a chaos restart replaced leaves the ` +
+            `old one briefly present but not Running; kubectl get pod shows the phase. If the ` +
+            `Pod is gone for good, stop the containers labelled cyanotype=1, delete the ` +
+            `<envKey>.json under your stateDir, and re-run under mode: "start" or ` +
+            `"startOrAttach" to rebuild.`,
+        };
+      }
+    }
     const state = buildComponentRuntime(
-      opts.adapter, componentName, instanceId, binding, snap.containerId, { ...snap.ports }, false,
+      opts.adapter, componentName, instanceId, binding, attachId, attachPorts, false,
     );
     // D-034: the process that called `attachEnvironment` did not start these
     // containers, so its `runtime.stop` must not stop them. Upheld today by the
     // literal `false` above — this pins it against a future refactor that
     // threads the snapshot's `owned` through instead.
     invariant( () => state.owned === false, "attach never produces an owned component",
-      () => ({ component: componentName, instance: instanceId, containerId: snap.containerId }));
+      () => ({ component: componentName, instance: instanceId, containerId: attachId }));
     // `exists()` above proves the container is present, not that it serves.
     // Attaching to a warm stack is the case readiness was written for: the
     // component may be mid-restart, or a sibling worker may have written

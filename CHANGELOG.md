@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `Adapter.reconnect` — one optional SPI method, for adapters whose reported
+  ports do not outlive the process that opened them. Kubernetes deploy mode
+  reports `kubectl port-forward` locals, so a second process attaching from
+  persisted metadata previously found closed ports and spent its whole
+  readiness budget on them (measured: 30.5s and a failure). With it, the
+  reference example warm-attaches in ~2.0s against 10.6s cold. Adapters that
+  omit it are unaffected. See D-046.
 - Three layers keeping hints honest, because a hint that lies is worse than no
   hint: a claim lint that fails the build when a hint references something that
   does not exist, remedy tests that trigger an error and then perform its hint's

@@ -178,7 +178,7 @@ src/                    Library source
   helpers.ts            HelperContext + http helper
   events.ts             Typed EventCatalog + per-component EventBus
   probe.ts              Probe<I> + runProbe
-  adapter.ts            Adapter SPI (7 methods) + StartSpec
+  adapter.ts            Adapter SPI (7 required + optional reconnect) + StartSpec
   metadata.ts           Cross-process JSON snapshot schema
   orchestrator.ts       startEnvironment / attachEnvironment + chaos
   observer.ts           Framework lifecycle event stream (D-024)

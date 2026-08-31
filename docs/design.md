@@ -94,7 +94,7 @@ Six user-facing entities. Each maps to a TypeScript type. Inference helpers (`de
 │  - Chaos control: typed stop/start/restart by name + instance   │
 │  - Snapshot: a getter that walks the live registry              │
 └─────────────────────────┬───────────────────────────────────────┘
-                          │  Adapter SPI (seven methods)
+                          │  Adapter SPI (seven required + `reconnect`)
 ┌─────────────────────────┴───────────────────────────────────────┐
 │  Adapter (src/adapter.ts — type only here; impls separate)      │
 │  ───────                                                        │
@@ -277,7 +277,7 @@ stack.failed   — on any thrown error during reconciliation
 
 Substrate-internal events (`image.*`, `container.creating/created/starting/started`)
 flow through an optional `emit` parameter on `Adapter.start`; everything else
-the orchestrator emits directly. The SPI stays at seven methods (D-004) — `emit`
+the orchestrator emits directly. Observability added no method to the SPI — `emit`
 is a trailing optional argument.
 
 **Emitting them is optional, and only the Docker adapter does today.** `emit` is

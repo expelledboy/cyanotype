@@ -49,6 +49,7 @@
 - [D-043 — Invariants defer their condition; consumer mistakes are errors with hints, not invariants](#d-043-invariants-defer-their-condition-consumer-mistakes-are-errors-with-hints-not-invariants)
 - [D-044 — Almost every failure a test harness raises is the consumer's to act on](#d-044-almost-every-failure-a-test-harness-raises-is-the-consumers-to-act-on)
 - [D-045 — A hint may only state what a test proves or the claim lint resolves](#d-045-a-hint-may-only-state-what-a-test-proves-or-the-claim-lint-resolves)
+- [D-046 — `Adapter.reconnect`: one optional SPI method, for adapters whose reported ports are process-local](#d-046-adapterreconnect--one-optional-spi-method-for-adapters-whose-reported-ports-are-process-local)
 
 ---
 
@@ -944,3 +945,33 @@ Those three are not one failure but three, and they need different mechanisms. T
 - Remedy tests couple a hint to a test: change the advice and the test must change with it. That coupling is the point, and it is why only nine exist — each is real work, and they were spent on the errors a consumer is most likely to act on.
 - What remains unguarded is whether prose advice is *sound*. This is stated rather than papered over: layers 1 and 2 shrink that surface, layer 3 makes reviewing it cheap, and the rule keeps unprovable advice modest in what it claims.
 - The catalogue reports 79 throw sites against the classification test's 62 distinct kinds — several kinds are raised from more than one place, and each site gets its own hint because the context differs.
+
+## D-046. `Adapter.reconnect` — one optional SPI method, for adapters whose reported ports are process-local
+
+**Context:** `Started.ports` is durable only where it is a real host binding. Docker and Compose report bindings that outlive the process that opened them, so a second process attaching from persisted metadata can use the recorded numbers. The Kubernetes deploy adapter reports `kubectl port-forward` locals, which die with their parent.
+
+Nothing in the SPI said which kind an adapter returns, and the orchestrator assumed the durable kind. The result on Kubernetes: a second process reads metadata, attaches to closed ports, and burns its entire readiness budget against them. Measured against the reference example — five non-chaos files, six components — a warm attach took **30473ms and failed** with `attach_probe_failed` wrapping a `probe_timeout` that had run for 30192ms. Nothing in that failure points at ports.
+
+This contradicts C1 in `axioms.md`, which promises that "first worker starts containers and writes metadata; subsequent workers attach" — true on Docker, false on Kubernetes deploy mode, with no signal that the promise is substrate-dependent.
+
+**Decision:** One optional method on the Adapter SPI, amending D-004 from "seven methods" to **seven required and one optional**.
+
+```ts
+reconnect?(spec: ReconnectSpec): Promise<Reconnected>;
+```
+
+- **`ReconnectSpec` carries only what the caller genuinely holds** — the recorded `containerId`, the `envKey`, `component`, `instance`, the port names, and the Binding's `adapterConfig`. Deliberately not a synthesised `StartSpec`: its `env` and `mounts` would have to be invented, and an adapter reading them would be reading fiction.
+- **`envKey` is in the spec because it is the identity that survives the process boundary.** It is stamped as `cyanotype.env`. `cyanotype.session` is not usable for this — since D-042's session-label fix it identifies the adapter instance that created the container, so a later process never matches it.
+- **`Reconnected` has no `owned` field.** A process that reconnects created nothing and must never claim ownership; `teardown()` acts on what an adapter says it created, so a claim here would delete another process's workloads. The spike version returned `Started` and forbade the claim with an `invariant()`; leaving the field out makes it unrepresentable instead, which is what D-042's own scope test asks for — an invariant is for what no signature can state.
+- **The returned `containerId` may differ from the one supplied.** No adapter changes it today. The shape is deliberate; see the reconcile note below.
+- **Kubernetes exposes it in deploy mode only.** In attach mode a component's ports are Service-anchored reconnect wrappers whose Service name can be overridden per Binding, so re-establishing them is discovery, not re-forwarding.
+- **The orchestrator wraps failures** as `attach_reconnect_failed` — consumer-facing, carrying component identity and a hint. The adapter-level causes stay internal and bare, so the reader gets one story. Mirrors `probe_timeout` → `attach_probe_failed`.
+
+**Presence means capability, not durability.** Implementing this says "I can re-establish ports for another process". Omitting it says only that this adapter cannot — which is true both for adapters whose ports are already durable *and* for adapters that simply have no way to re-open them. Kubernetes attach mode is the second kind today, and an attaching process there still fails at the probe exactly as before. The distinction is not currently representable, and that is an accepted cost rather than an oversight: a separate `portsAreProcessLocal` flag would let attach mode fail fast with an accurate error instead of a timeout, but no adapter needs the two knobs apart yet.
+
+**Consequences:**
+
+- The reference example on Kubernetes goes from **10565ms cold to ~2000ms warm** (2249/1889/1959 over three runs), with the environment intact after each and no leaked port-forwards. The negative control is above: the same run without the method takes 30473ms and fails.
+- **Warm attach still cannot survive a chaos-running suite.** `reconnect` re-establishes a connection to the *recorded* container; it does not resolve which container a component currently is. A chaos restart replaces the Pod, `exists()` fails on the stale id, and attach raises `container_gone` — whose hint already describes exactly this case. This is D-007's stated gap ("chaos restarts during a session that produce new container IDs aren't seen by attached workers"), unchanged.
+- **That gap is what the returned `containerId` is for.** Resolving a component to its current container — matching on `cyanotype.env` + `cyanotype.component` + `cyanotype.instance`, which is why the selector deliberately excludes the session label — is a natural extension that would close it. It needs its own decision: it changes what attach *means*, from "this container" to "this component", and brings failure modes reconnect does not have (zero matches, and the mid-chaos window where an old terminating container and its replacement both match — the window D-020 worried about and D-039 accepted). Not taken here; the shape is left open so it does not require another SPI change.
+- Adapters that do not implement it are unaffected — Docker, Compose, in-memory and the composite adapter compile and behave exactly as before, which is what "optional" is buying.

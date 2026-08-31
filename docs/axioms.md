@@ -48,7 +48,7 @@ Without this, log-event assertions are regex-greps that drift the moment anyone 
 
 #### B1. Substrate portability via the Adapter SPI
 
-A single test file runs identically against Docker locally, an in-memory adapter for fast inner-loop, and a Kubernetes adapter for CI (in either deploy or attach mode, as defined above). The Adapter SPI — Service Provider Interface, the fixed set of methods any substrate must implement to be usable — is seven methods (`connect` / `disconnect` / `teardown` / `start` / `stop` / `logs` / `exists`), and it is the *only* place real-vs-fake or Docker-vs-K8s is decided. Bindings declare `image: string`; adapters interpret what that means.
+A single test file runs identically against Docker locally, an in-memory adapter for fast inner-loop, and a Kubernetes adapter for CI (in either deploy or attach mode, as defined above). The Adapter SPI — Service Provider Interface, the fixed set of methods any substrate must implement to be usable — is seven methods (`connect` / `disconnect` / `teardown` / `start` / `stop` / `logs` / `exists`), and it is the *only* place real-vs-fake or Docker-vs-K8s is decided. One further method, `reconnect`, is optional: it exists because a substrate may report ports that do not outlive the process that opened them, which is a fact only the adapter knows (D-046). Bindings declare `image: string`; adapters interpret what that means.
 
 Without this, every team rewrites integration tests for staging or pays for two suites that drift.
 
@@ -69,6 +69,8 @@ Without this, you cannot test replication, sharding, load-balanced topologies, o
 #### C1. Cross-process registry
 
 Multiple test worker processes (Bun's `bun test` is per-file; Jest is per-worker) coordinate through one JSON metadata snapshot on disk. First worker starts containers and writes metadata; subsequent workers attach. The race is at invocation boundaries — concurrent terminals, watch mode, Jest workers — and is resolved by an atomic `O_CREAT|O_EXCL` claim with a staged state lifecycle ("starting" → "running") and a 90-second staleness threshold for crashed-mid-start recovery.
+
+Attaching needs one thing the snapshot cannot supply on its own: a way to reach the containers. Where the recorded ports are real host bindings they outlive the process that opened them and the snapshot is enough. Where they are not — Kubernetes reports `kubectl port-forward` locals — the attaching worker must re-establish its own, which is what the optional `Adapter.reconnect` is for (D-046). Kubernetes deploy mode implements it; Kubernetes attach mode does not yet, so this force is satisfied on every substrate except that one.
 
 Without this, every worker starts its own copy of every container — catastrophic for any non-trivial environment, and brittle when the previous run was interrupted.
 

@@ -102,6 +102,7 @@ const EXTERNAL_ALLOWLIST = new Map<string, string>([
   ["kubectl describe", "reading the consumer's own pod to distinguish unschedulable from crash-looping"],
   ["kubectl scale", "naming the write chaos performs, so the RBAC requirement is concrete"],
   ["kubectl port-forward", "naming the process the adapter spawns, so a reader can find and kill leaked ones — not a command we ask them to run"],
+  ["kubectl get", "reading the consumer's own pod phase, which is the field that separates a Pod that still exists from one that can still serve"],
 ]);
 
 /**
