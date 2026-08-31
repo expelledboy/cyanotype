@@ -449,7 +449,16 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
   const tracked = new Map<string, Tracked>();
   const sessionEntry = { namespace, sessionId, context };
 
+  // `connect` is called once by the orchestrator and again by the shared
+  // registry on each of its paths — five call sites in all. The Docker adapter
+  // already short-circuits a repeat (`if (client) return`); this one re-ran a
+  // `kubectl version --client` that cannot change during a session, plus a
+  // namespace get and a possible create, every time. Same contract, ~120ms per
+  // redundant call reclaimed. `disconnect` clears it so a later reconnect works.
+  let connected = false;
+
   const connect = async (): Promise<void> => {
+    if (connected) return;
     const ver = await k.run(["version", "--client", "-o", "json"]);
     if (ver.exit !== 0) throw { kind: "kubectl_not_found", stderr: ver.stderr };
 
@@ -465,9 +474,11 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     }
     globalSessions.add(sessionEntry);
     registerExitHandler();
+    connected = true;
   };
 
   const disconnect = async (): Promise<void> => {
+    connected = false;
     for (const [key, p] of Array.from(pausedAttaches.entries())) {
       if (p.namespace === namespace) {
         for (const r of p.reconnects) { try { r.kill(); } catch { /* ignore */ } }
