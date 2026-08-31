@@ -222,7 +222,7 @@ export const createEventBus = <Cat extends EventCatalog>(
     // I7: `clear()` empties the buffer but must NOT reset this counter. If it
     // did, a checkpoint taken before a chaos restart would silently address an
     // unrelated event afterwards — a wrong pass, not a failure.
-    invariant(lastSeq > previous, "event sequence is strictly increasing",
+    invariant( () => lastSeq > previous, "event sequence is strictly increasing",
       () => ({ previous, next: lastSeq, name: evt.name }));
     events.push({ seq: lastSeq, evt });
   };

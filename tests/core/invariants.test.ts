@@ -24,13 +24,13 @@ describe("invariants", () => {
   });
 
   test("a held invariant does nothing", () => {
-    expect(() => invariant(true, "holds")).not.toThrow();
+    expect(() => invariant(() => true, "holds")).not.toThrow();
   });
 
   test("a violated invariant throws a tagged object, not a class", () => {
     let caught: unknown;
     try {
-      invariant(false, "the stamped label matches the swept label", () => ({ a: 1 }));
+      invariant(() => false, "the stamped label matches the swept label", () => ({ a: 1 }));
     } catch (e) { caught = e; }
 
     expect(caught).toMatchObject({
@@ -43,20 +43,37 @@ describe("invariants", () => {
 
   test("detail is omitted entirely when not supplied", () => {
     let caught: unknown;
-    try { invariant(false, "no detail"); } catch (e) { caught = e; }
+    try { invariant(() => false, "no detail"); } catch (e) { caught = e; }
     expect(Object.hasOwn(caught as object, "detail")).toBe(false);
+  });
+
+  test("disabled: the CONDITION does not run either", () => {
+    // The first version took `held` as a plain boolean, so JavaScript evaluated
+    // it at the call site whether or not invariants were on. Consumers paid for
+    // every condition, and a condition touching something absent threw
+    // `undefined is not an object` — a disabled check crashing a consumer.
+    disableInvariants();
+    let ran = 0;
+    invariant(() => { ran += 1; return true; }, "must not run");
+    expect(ran).toBe(0);
+  });
+
+  test("disabled: a condition that would throw does not throw", () => {
+    disableInvariants();
+    const absent = undefined as unknown as Record<string, number>;
+    expect(() => invariant(() => absent.http === 1, "would crash")).not.toThrow();
   });
 
   test("the detail thunk does not run when the invariant holds", () => {
     let built = 0;
-    invariant(true, "holds", () => { built += 1; return {}; });
+    invariant(() => true, "holds", () => { built += 1; return {}; });
     expect(built).toBe(0);
   });
 
   test("disabled: nothing throws and the detail thunk never runs", () => {
     disableInvariants();
     let built = 0;
-    expect(() => invariant(false, "violated but disabled", () => { built += 1; return {}; })).not.toThrow();
+    expect(() => invariant(() => false, "violated but disabled", () => { built += 1; return {}; })).not.toThrow();
     expect(built).toBe(0);
     expect(invariantsEnabled()).toBe(false);
   });
@@ -65,6 +82,6 @@ describe("invariants", () => {
     disableInvariants();
     enableInvariants();
     enableInvariants();
-    expect(() => invariant(false, "re-armed")).toThrow();
+    expect(() => invariant(() => false, "re-armed")).toThrow();
   });
 });

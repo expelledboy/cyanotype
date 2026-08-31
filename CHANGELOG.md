@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Consumer-facing errors carry a `hint` explaining what was done, why it is
+  wrong, and the fix: `use_not_ensured`, `wrong_target_env`, `unknown_env`,
+  `component_not_found`, `invalid_chaos`, `reserved_component_name`, and the
+  three snapshot-mismatch errors. Internal errors stay bare. See D-043.
 - Runtime invariants for cross-module agreements the type system cannot state —
   `invariant()` in `src/invariants.ts`, eleven of them across the orchestrator,
   registry, event bus and adapters. Off unless `CYANOTYPE_INVARIANTS=1`, so a
@@ -37,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a compound fault that no real failure mode creates. See D-039.
 
 ### Fixed
+- `invariant()` no longer evaluates its condition when invariants are disabled.
+  `held` was a plain parameter, so JavaScript ran it at the call site
+  regardless: consumers paid for every condition, and one that dereferenced
+  something absent threw `undefined is not an object` — a disabled check
+  crashing a consumer with a message about Cyanotype's internals. Both
+  arguments are thunks now. See D-043.
+- A Binding that omits one of its Blueprint's declared `portNames` is rejected
+  by `createEnvironment` with `binding_missing_declared_ports`, naming the
+  component, instance and missing port. It previously type-checked (
+  `Binding.ports` is not keyed to `portNames`), resolved to `undefined` inside
+  the interface URI, and surfaced as a readiness timeout apparently against the
+  consumer's own service. See D-043.
 - The Kubernetes attach-mode reconnection layer no longer orphans a `kubectl
   port-forward` child on every chaos cycle. `resume()` published the new child
   only after clearing its `paused` flag, so the supervisor could wake, observe

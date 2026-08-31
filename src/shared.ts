@@ -72,12 +72,31 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
   const assertTarget = (envKey: string): void => {
     if (!options.getTargetEnv) return;
     const expected = options.getTargetEnv();
-    if (envKey !== expected) throw { kind: "wrong_target_env", requested: envKey, expected };
+    if (envKey !== expected) {
+      throw {
+        kind: "wrong_target_env",
+        requested: envKey,
+        expected,
+        hint:
+          `This process is targeting "${expected}" (from getTargetEnv), but "${envKey}" was ` +
+          `requested. One process serves one environment so parallel workers do not start ` +
+          `each other's containers. Either request "${expected}", or change getTargetEnv.`,
+      };
+    }
   };
 
   const getEnv = <K extends keyof R & string>(envKey: K): R[K] => {
     const env = registry[envKey];
-    if (!env) throw { kind: "unknown_env", envKey };
+    if (!env) {
+      throw {
+        kind: "unknown_env",
+        envKey,
+        known: Object.keys(registry),
+        hint:
+          `"${envKey}" is not in the registry passed to createSharedEnvs. Known keys: ` +
+          `${Object.keys(registry).join(", ") || "(none)"}. Check for a typo, or add it.`,
+      };
+    }
     return env;
   };
 
@@ -93,7 +112,7 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
     // I10: the archetype CONVENTIONS.md names — the `O_CREAT|O_EXCL` claim
     // reported success, so the file must exist and be ours. If it is not, two
     // processes both believe they own the environment and race to start it.
-    invariant(typeof payload.pid === "number" && payload.envKey === envKey,
+    invariant( () => typeof payload.pid === "number" && payload.envKey === envKey,
       "a won claim describes this process and this env",
       () => ({ envKey, payload }));
     fs.writeSync(fd, JSON.stringify(payload));
@@ -340,7 +359,16 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
 
   const use = <K extends keyof R & string>(envKey: K): Runtime<R[K]> => {
     const cached = cache.get(envKey);
-    if (!cached) throw { kind: "use_not_ensured", envKey };
+    if (!cached) {
+      throw {
+        kind: "use_not_ensured",
+        envKey,
+        hint:
+          `use("${envKey}") returns the runtime a previous ensure() built, and nothing has ` +
+          `ensured "${envKey}" in this process yet. Call await shared.ensure("${envKey}") first ` +
+          `— typically in a beforeAll — then use() elsewhere in the same file.`,
+      };
+    }
     return cached as Runtime<R[K]>;
   };
 

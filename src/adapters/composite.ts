@@ -149,7 +149,7 @@ export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter =
       // I9: every id this adapter mints must route back. An unroutable id does
       // not throw — `stop` becomes a no-op and `exists` reports false, so a
       // container silently outlives the suite.
-      invariant(split(containerId) !== null, "a minted composite id routes back",
+      invariant( () => split(containerId) !== null, "a minted composite id routes back",
         () => ({ containerId, key, routes: Object.keys(opts.routes) }));
       return { ...started, containerId };
     },

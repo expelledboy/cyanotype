@@ -732,18 +732,11 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       }
     }
 
-    // I1: the label this adapter stamps must be the one its `teardown()` sweeps.
-    // Disagreement makes D-016's label-scan backstop silently dead — it deletes
-    // nothing, and crash-orphans survive with no signal.
-    invariant(spec.labels["cyanotype.session"] === sessionId,
-      "the stamped session label is the one teardown sweeps",
-      () => ({ stamped: spec.labels["cyanotype.session"], sweptBy: sessionId }));
-
     const podManifest = buildPodManifest(podName, cmName, spec, namespace, { "cyanotype.podname": podName });
     // I4: a Service whose selector is not a subset of its Pod's labels never
     // gets endpoints. Nothing errors; dependents simply hang until a probe
     // times out somewhere unrelated.
-    invariant(
+    invariant( () =>
       Object.entries(buildServiceSelector(spec)).every(
         ([k, v]) => (podManifest as { metadata: { labels: Record<string, string> } }).metadata.labels[k] === v,
       ),

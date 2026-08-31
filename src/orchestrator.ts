@@ -182,15 +182,6 @@ const enrichInterface = (record: InterfaceRecord): InterfaceRecord => {
 };
 
 const buildIface = (binding: AnyBinding, ports: Record<string, number>): InterfaceRecord => {
-  // I2/I3: the SPI says an adapter reports back what it bound. Nothing made it
-  // report ALL of them, and a missing key does not throw — it interpolates as
-  // `undefined` into a URI and surfaces as a probe timeout against
-  // `http://host:undefined`, far from the adapter that dropped it.
-  invariant(
-    (binding.blueprint.portNames ?? []).every((n: string) => typeof ports[n] === "number"),
-    "every declared portName resolves to a bound port",
-    () => ({ declared: binding.blueprint.portNames, resolved: Object.keys(ports), image: binding.image }),
-  );
   if (!binding.blueprint.interface) return {};
   const raw = binding.blueprint.interface(binding.config, binding.env, ports);
   return enrichInterface(raw);
@@ -345,7 +336,19 @@ export const startEnvironment = async <E extends Environment>(
   const resolveState = (name: string, instance?: string): ComponentState => {
     const key = stateKey(name, instance);
     const s = components.get(key);
-    if (!s) throw { kind: "component_not_found", name, instance };
+    if (!s) {
+      throw {
+        kind: "component_not_found",
+        name,
+        instance,
+        known: Array.from(components.keys()),
+        hint:
+          `No component "${instance === undefined ? name : `${name}.${instance}`}" in this ` +
+          `environment. Known: ${Array.from(components.keys()).join(", ")}. For a ` +
+          `multi-instance component the instance is required (chaos.stop("redis", "primary")); ` +
+          `for a single-instance one it must be omitted.`,
+      };
+    }
     return s;
   };
 
@@ -381,7 +384,19 @@ export const startEnvironment = async <E extends Environment>(
 
   const chaosStart = async (name: string, instance?: string): Promise<void> => {
     const s = resolveState(name, instance);
-    if (s.status !== "stopped") throw { kind: "invalid_chaos", reason: "not_stopped" };
+    if (s.status !== "stopped") {
+      throw {
+        kind: "invalid_chaos",
+        reason: "not_stopped",
+        component: s.componentName,
+        instance: s.instanceId,
+        status: s.status,
+        hint:
+          `chaos.start() resumes a component that chaos.stop() stopped, but this one is ` +
+          `"${s.status}". Use chaos.restart() to cycle a running component, or drop the ` +
+          `chaos.start() if a previous stop already failed.`,
+      };
+    }
     const chaosEmit = chaosScope(name, instance);
     chaosEmit({ type: "chaos.starting" });
     const spec = buildSpec(s.componentName, s.instanceId, s.binding);
@@ -473,7 +488,7 @@ export const attachEnvironment = async <E extends Environment>(
     // containers, so its `runtime.stop` must not stop them. Upheld today by the
     // literal `false` above — this pins it against a future refactor that
     // threads the snapshot's `owned` through instead.
-    invariant(state.owned === false, "attach never produces an owned component",
+    invariant( () => state.owned === false, "attach never produces an owned component",
       () => ({ component: componentName, instance: instanceId, containerId: snap.containerId }));
     // `exists()` above proves the container is present, not that it serves.
     // Attaching to a warm stack is the case readiness was written for: the
@@ -506,16 +521,59 @@ export const attachEnvironment = async <E extends Environment>(
   try {
     for (const [componentName, slotSnap] of Object.entries(snapshot.components)) {
       const slot = env[componentName];
-      if (slot === undefined) throw { kind: "snapshot_unknown_component", componentName };
+      if (slot === undefined) {
+        throw {
+          kind: "snapshot_unknown_component",
+          componentName,
+          hint:
+            `The persisted environment contains "${componentName}", but the Environment in ` +
+            `this code does not. The definition changed since those containers started. ` +
+            `Stop them (just clean-containers) and let the next run rebuild, or restore the ` +
+            `component.`,
+        };
+      }
       if (slotSnap.kind === "single") {
-        if (!isSingleBinding(slot)) throw { kind: "snapshot_shape_mismatch", componentName };
+        if (!isSingleBinding(slot)) {
+          throw {
+            kind: "snapshot_shape_mismatch",
+            componentName,
+            persisted: "single",
+            current: "multi-instance",
+            hint:
+              `"${componentName}" was persisted as a single-instance component but is now ` +
+              `multi-instance. Running containers cannot be re-attached across that change: ` +
+              `stop them (just clean-containers) and let the next run rebuild.`,
+          };
+        }
         await attachOne(componentName, undefined, slot, slotSnap.snapshot);
       } else {
-        if (isSingleBinding(slot)) throw { kind: "snapshot_shape_mismatch", componentName };
+        if (isSingleBinding(slot)) {
+          throw {
+            kind: "snapshot_shape_mismatch",
+            componentName,
+            persisted: "multi-instance",
+            current: "single",
+            hint:
+              `"${componentName}" was persisted as multi-instance but is now single-instance. ` +
+              `Running containers cannot be re-attached across that change: stop them ` +
+              `(just clean-containers) and let the next run rebuild.`,
+          };
+        }
         const map = slot as Record<string, AnyBinding>;
         for (const [instanceId, compSnap] of Object.entries(slotSnap.instances)) {
           const binding = map[instanceId];
-          if (!binding) throw { kind: "snapshot_unknown_instance", componentName, instanceId };
+          if (!binding) {
+            throw {
+              kind: "snapshot_unknown_instance",
+              componentName,
+              instanceId,
+              known: Object.keys(map),
+              hint:
+                `The persisted environment has "${componentName}.${instanceId}", but this code ` +
+                `defines only [${Object.keys(map).join(", ")}]. An instance was renamed or ` +
+                `removed. Stop the containers (just clean-containers) and rebuild.`,
+            };
+          }
           await attachOne(componentName, instanceId, binding, compSnap);
         }
       }
@@ -609,7 +667,7 @@ const finalizeRuntime = <E extends Environment>(
         // a non-owned container, and this is not it — suite teardown reaching
         // `adapter.stop` here is what once ran `docker stop` against an
         // operator's compose stack at the end of every run.
-        invariant(c.owned === true, "teardown stops only owned containers",
+        invariant( () => c.owned === true, "teardown stops only owned containers",
           () => ({ component: c.componentName, instance: c.instanceId, containerId: c.containerId }));
         stopEmit({ type: "container.stopping", containerId: c.containerId });
         try { await opts.adapter.stop(c.containerId); } catch (e) { console.error(e); }

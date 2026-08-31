@@ -46,6 +46,7 @@
 - [D-040 — Component slots may start concurrently; readiness probes are the synchronisation](#d-040-component-slots-may-start-concurrently-readiness-probes-are-the-synchronisation)
 - [D-041 — Persisted environment metadata records its substrate; a mismatch rebuilds or refuses, never attaches](#d-041-persisted-environment-metadata-records-its-substrate-a-mismatch-rebuilds-or-refuses-never-attaches)
 - [D-042 — Runtime invariants for cross-module agreements, enabled only for this repository's own suite](#d-042-runtime-invariants-for-cross-module-agreements-enabled-only-for-this-repositorys-own-suite)
+- [D-043 — Invariants defer their condition; consumer mistakes are errors with hints, not invariants](#d-043-invariants-defer-their-condition-consumer-mistakes-are-errors-with-hints-not-invariants)
 
 ---
 
@@ -872,3 +873,28 @@ Eleven invariants ship with this decision: session-label agreement, resolved-por
 - It also found that `tests/substrate/docker.test.ts` built specs labelled `cyanotype.session: "test"` while constructing adapters with different ids. Those tests passed only because they stopped containers explicitly; anything escaping `known` was uncollectable. `mkSpec` now takes the session it will be handed to.
 - D-012 stands unmodified. This operationalises the exception `CONVENTIONS.md` already stated; it does not widen it.
 - An invariant that fires in a consumer's run is silent by default, which is a deliberate trade: we lose field reports of our own broken agreements in exchange for not failing someone else's suite over our internals. `CYANOTYPE_INVARIANTS=1` is the escape hatch when a consumer is willing to help diagnose.
+
+## D-043. Invariants defer their condition; consumer mistakes are errors with hints, not invariants
+
+**Context:** D-042 introduced `invariant()` and claimed that a consumer, for whom invariants are off, pays "one boolean read and a call". That was wrong, and the way it was wrong matters.
+
+`held` was an ordinary parameter, so JavaScript evaluated it at the call site whether or not invariants were enabled. Measured:
+
+- A disabled invariant still ran its condition on every call.
+- A condition that dereferenced something absent still **threw**: `undefined is not an object (evaluating 'ports.http')`. A check documented as off, crashing a consumer with a message about Cyanotype's internals and no indication of what they had done.
+
+Reviewing the catalogue against "who broke it" then showed a second error. D-042 listed the check that every Blueprint-declared `portName` resolves as an invariant. But `Binding.ports` is `Record<string, "auto" | number>` and is not keyed to `Blueprint.portNames`, so a Binding that omits one type-checks — that is consumer misconfiguration, not an agreement between Cyanotype's modules, and it was silent for exactly the people who needed it. Left unchecked the missing port reads `undefined`, lands in a URI as `http://127.0.0.1:undefined`, and surfaces as a readiness timeout apparently against the consumer's own service.
+
+A third: the session-label invariants sat directly below the normalisation that makes them true, asserting what the previous statement had just guaranteed. That is the defensive assert D-012 bans.
+
+**Decision:** Three changes.
+
+1. **Both `invariant()` arguments are thunks** — `invariant(() => held, name, () => detail)`. When invariants are disabled nothing runs. "Off" now means off, for the condition as much as the diagnostic.
+2. **The invariant/error boundary is decided by who broke it.** An agreement between Cyanotype's own modules is an invariant, off for consumers because they cannot act on it. A mistake a consumer makes in their own code is an error: always on, thrown at the boundary where it is still explicable. The declared-ports check moves to `createEnvironment` as `binding_missing_declared_ports`, naming the component, the instance, and the missing port. The two session-label invariants are dropped as vacuous. Six invariants remain.
+3. **Consumer-facing errors carry a `hint`** — what was done, why it is wrong, and the fix. The tagged fields address programs; the `hint` addresses the person reading the failure. The codebase had 61 throw sites and 2 hints; the convention existed and had not spread. Eight consumer-reachable errors gain one: `use_not_ensured`, `wrong_target_env`, `unknown_env`, `component_not_found`, `invalid_chaos`, `snapshot_unknown_component`, `snapshot_shape_mismatch`, `snapshot_unknown_instance`, plus `reserved_component_name`. Internal errors stay bare, because a hint nobody can act on is noise.
+
+**Consequences:**
+- D-042's mechanism stands; its catalogue is amended, from eleven invariants to six plus one boundary error.
+- The hint rule has a useful side effect as a design test: if you cannot write the hint, the error is probably internal and may want to be an invariant instead.
+- Thunking `held` costs a closure allocation per call site when invariants are ENABLED. Every site is on a lifecycle path measured in hundreds of milliseconds, so this is not a consideration; it would be if an invariant were ever placed in a hot loop, which is a reason not to.
+- `tests/core/environment-validation.test.ts` pins the new boundary errors, including that each hint names the fix rather than restating the fact.

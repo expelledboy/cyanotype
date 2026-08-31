@@ -23,8 +23,16 @@
  * not pay for — or be interrupted by — checks on ours. Enabled by
  * `tests/preload.ts` for this repository's own suite, and by
  * `CYANOTYPE_INVARIANTS=1` for anyone debugging behaviour that looks
- * impossible. When disabled the cost is one boolean read and a call; the
- * `detail` thunk exists so building a diagnostic never happens either.
+ * impossible.
+ *
+ * BOTH ARGUMENTS ARE THUNKS, and that is load-bearing rather than stylistic.
+ * The first version took `held` as a plain boolean, which JavaScript evaluates
+ * at the call site regardless of whether invariants are on. Two consequences,
+ * both measured: consumers ran every condition despite the feature being
+ * "off", and a condition that dereferenced something absent threw
+ * `undefined is not an object (evaluating 'ports.http')` — a disabled check
+ * crashing a consumer with a message about our internals. Deferring both
+ * arguments makes "off" actually mean off.
  *
  * Named `invariant`, not `assert`: `CONVENTIONS.md` bans the latter outright,
  * in source and in tests.
@@ -41,16 +49,18 @@ export const disableInvariants = (): void => { enabled = false; };
 export const invariantsEnabled = (): boolean => enabled;
 
 /**
- * Throw `{ kind: "invariant_violated" }` when `held` is false and invariants
- * are on. `name` identifies the agreement; `detail` is a thunk so the cost of
- * describing a violation is paid only when there is one.
+ * Throw `{ kind: "invariant_violated" }` when `held()` is false and invariants
+ * are on. `name` identifies the agreement. Both `held` and `detail` are thunks
+ * so that nothing — not the condition, not the diagnostic — runs when
+ * invariants are disabled.
  */
 export const invariant = (
-  held: boolean,
+  held: () => boolean,
   name: string,
   detail?: () => unknown,
 ): void => {
-  if (enabled === false || held === true) return;
+  if (enabled === false) return;
+  if (held() === true) return;
   throw {
     kind: "invariant_violated",
     invariant: name,

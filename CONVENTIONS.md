@@ -19,6 +19,9 @@
 ## Validation
 
 - **Parse at boundaries, trust internally.** Validate inputs where they enter the system (`createEnvironment` checks reserved names; `events.ingest` validates against the catalog; metadata files are checked at load). Inside the orchestrator and runtime, trust the types.
+- **Is it an invariant or an error? Ask who broke it.** An agreement between Cyanotype's own modules is an `invariant()` — off for consumers, because they cannot act on it. A mistake a consumer makes in their own code is an **error**, always on, thrown at the boundary where it is still explicable. `createEnvironment` rejecting a Binding that omits one of its Blueprint's declared `portNames` is the second kind: it type-checks (`Binding.ports` is not keyed to `portNames`), and left unchecked it surfaces as `http://host:undefined` and a readiness timeout pointed at the consumer's own service.
+- **Consumer-facing errors carry a `hint`.** State what was done, why it is wrong, and the fix — the tagged fields are for programs, the `hint` is for the person reading the failure. Internal errors stay bare: a hint no one can act on is noise. Useful side effect: if you cannot write the hint, the error is probably internal and may want to be an `invariant()` instead.
+
 - **No `assert(...)` proliferation.** Runtime asserts add noise that the type system already provides. Use them only where a non-type invariant matters and would be hard to debug otherwise (e.g. an `O_CREAT|O_EXCL` claim succeeded but the file then disappeared — that's a real runtime invariant).
 - **That exception has a mechanism: `invariant()` from `src/invariants.ts`.** It is the only way to write one, and it is off unless `tests/preload.ts` turns it on (this repository's own suite) or a consumer sets `CYANOTYPE_INVARIANTS=1` to debug something that looks impossible. Consumers run Cyanotype to test *their* system and should neither pay for nor be interrupted by checks on ours.
 
@@ -26,7 +29,7 @@
 
   Do NOT reach for it when a type, a boundary validator, or a chokepoint already covers the case. `missing_cyanotype_label`, `metadata_corrupt` and the attach-mode denylists are stronger than an invariant and stay as they are — an invariant that duplicates them is exactly the noise D-012 bans.
 
-  Write it as `invariant(held, "the rule, stated as a property", () => detail)`. `held` is a cheap expression; `detail` is a **thunk** so the cost of describing a violation is paid only when there is one. A violation throws `{ kind: "invariant_violated", invariant, detail }` — a tagged object, never a class. See D-042 for the catalogue and the reasoning.
+  Write it as `invariant(() => held, "the rule, stated as a property", () => detail)`. **Both arguments are thunks**, so nothing runs when invariants are off — not the condition, not the diagnostic. This is not style: the first version took `held` as a plain boolean, which JavaScript evaluates at the call site regardless, so consumers ran every condition and one that dereferenced something absent threw `undefined is not an object` — a disabled check crashing a consumer. A violation throws `{ kind: "invariant_violated", invariant, detail }` — a tagged object, never a class. See D-042 for the catalogue and the reasoning.
 - **No `new Error(...)` for control-flow errors.** Throw a tagged object. Reserve `new Error` for "this should be impossible" cases.
 
 ## File layout
