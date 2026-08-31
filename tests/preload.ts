@@ -19,7 +19,12 @@
  */
 
 import { beforeAll, afterAll } from "bun:test";
+import { enableInvariants } from "../src/invariants";
 import { shared } from "./petstore-example/harness";
+
+// Cyanotype's own suite always runs its runtime invariants — the cross-module
+// agreements types cannot express. Off for consumers; see src/invariants.ts.
+enableInvariants();
 
 beforeAll(() => {
   // Intentional no-op. Per-file `beforeAll(shared.ensure(...))` handles

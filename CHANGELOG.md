@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Runtime invariants for cross-module agreements the type system cannot state —
+  `invariant()` in `src/invariants.ts`, eleven of them across the orchestrator,
+  registry, event bus and adapters. Off unless `CYANOTYPE_INVARIANTS=1`, so a
+  consumer pays nothing and is never interrupted by a check on Cyanotype's
+  internals; on for this repository's own suite. See D-042.
 - `SharedOptions.startup` / `OrchestratorOptions.startup` accept `"concurrent"`
   to start every component slot at once instead of one at a time, making
   startup the length of the longest dependency chain rather than the sum of
@@ -32,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a compound fault that no real failure mode creates. See D-039.
 
 ### Fixed
+- The `cyanotype.session` label is now stamped by the adapter, which is what
+  `teardown()` sweeps by. Previously `createSharedEnvs` supplied
+  `${process.pid}-${Date.now()}` recomputed per call — so the label meant to
+  group a session was unique per container — while teardown selected on the
+  adapter's own id, leaving D-016's label-scan backstop unable to match
+  anything. Found by the invariant above on its first run against real
+  containers. See D-042.
 - `waitFor` in the reference example records its trajectory — attempts, elapsed
   time and a sample of what the predicate observed — so a timeout distinguishes
   "never came close" from "recovering, just not inside the budget".

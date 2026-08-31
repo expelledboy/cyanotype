@@ -15,6 +15,7 @@ import type { Subprocess } from "bun";
 import { z } from "zod";
 import type { Adapter, StartSpec, Started } from "../adapter.js";
 import { createKubectl, type KubectlClient, type KubectlMode } from "./kubectl.js";
+import { invariant } from "../invariants.js";
 
 declare module "../adapter.js" {
   interface AdapterConfig {
@@ -689,7 +690,20 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     return { containerId, ports, owned: false };
   };
 
-  const start = async (spec: StartSpec): Promise<Started> => {
+  const start = async (rawSpec: StartSpec): Promise<Started> => {
+    // The adapter is authoritative for `cyanotype.session`: `teardown()` sweeps
+    // by this label, so whatever the caller handed in is replaced with the id
+    // this adapter will actually look for. Normalised once here so the Pod,
+    // ConfigMap and Service all carry the same value and are swept together.
+    //
+    // Before this, `createSharedEnvs` stamped `${process.pid}-${Date.now()}`,
+    // recomputed per call — so the label meant to group a session was unique
+    // per container — while teardown selected on the adapter's own id. D-016's
+    // backstop could never match anything. (I1)
+    const spec: StartSpec = {
+      ...rawSpec,
+      labels: { ...rawSpec.labels, "cyanotype.session": sessionId },
+    };
     if (spec.labels.cyanotype !== "1") {
       throw { kind: "missing_cyanotype_label", labels: spec.labels };
     }
@@ -708,7 +722,27 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       }
     }
 
+    // I1: the label this adapter stamps must be the one its `teardown()` sweeps.
+    // Disagreement makes D-016's label-scan backstop silently dead — it deletes
+    // nothing, and crash-orphans survive with no signal.
+    invariant(spec.labels["cyanotype.session"] === sessionId,
+      "the stamped session label is the one teardown sweeps",
+      () => ({ stamped: spec.labels["cyanotype.session"], sweptBy: sessionId }));
+
     const podManifest = buildPodManifest(podName, cmName, spec, namespace, { "cyanotype.podname": podName });
+    // I4: a Service whose selector is not a subset of its Pod's labels never
+    // gets endpoints. Nothing errors; dependents simply hang until a probe
+    // times out somewhere unrelated.
+    invariant(
+      Object.entries(buildServiceSelector(spec)).every(
+        ([k, v]) => (podManifest as { metadata: { labels: Record<string, string> } }).metadata.labels[k] === v,
+      ),
+      "Service selector is a subset of the Pod labels",
+      () => ({
+        selector: buildServiceSelector(spec),
+        podLabels: (podManifest as { metadata: { labels: Record<string, string> } }).metadata.labels,
+      }),
+    );
     const podRes = await k.run(["apply", "-f", "-"], { stdin: JSON.stringify(podManifest) });
     if (podRes.exit !== 0) {
       if (cmName) {

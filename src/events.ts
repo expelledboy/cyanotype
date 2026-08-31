@@ -18,6 +18,7 @@
  */
 
 import type { z } from "zod";
+import { invariant } from "./invariants.js";
 
 /** A blueprint declares one of these per event it emits. */
 export type EventSchema = z.ZodTypeAny;
@@ -216,7 +217,13 @@ export const createEventBus = <Cat extends EventCatalog>(
       component: meta.component,
       ...(meta.instance !== undefined ? { instance: meta.instance } : {}),
     } as Event<Cat>;
+    const previous = lastSeq;
     lastSeq += 1;
+    // I7: `clear()` empties the buffer but must NOT reset this counter. If it
+    // did, a checkpoint taken before a chaos restart would silently address an
+    // unrelated event afterwards — a wrong pass, not a failure.
+    invariant(lastSeq > previous, "event sequence is strictly increasing",
+      () => ({ previous, next: lastSeq, name: evt.name }));
     events.push({ seq: lastSeq, evt });
   };
 

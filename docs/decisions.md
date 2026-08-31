@@ -45,6 +45,7 @@
 - [D-039 — A component's Service selects the binding, not the pod; chaos kills the pod, not the address](#d-039-a-components-service-selects-the-binding-not-the-pod-chaos-kills-the-pod-not-the-address)
 - [D-040 — Component slots may start concurrently; readiness probes are the synchronisation](#d-040-component-slots-may-start-concurrently-readiness-probes-are-the-synchronisation)
 - [D-041 — Persisted environment metadata records its substrate; a mismatch rebuilds or refuses, never attaches](#d-041-persisted-environment-metadata-records-its-substrate-a-mismatch-rebuilds-or-refuses-never-attaches)
+- [D-042 — Runtime invariants for cross-module agreements, enabled only for this repository's own suite](#d-042-runtime-invariants-for-cross-module-agreements-enabled-only-for-this-repositorys-own-suite)
 
 ---
 
@@ -842,3 +843,32 @@ Environment-level, not per-component: `createSharedEnvs` takes one Adapter for t
 - The mismatch check runs BEFORE `exists()` in both paths. Asking an adapter about a foreign container id is meaningless, and letting its `false` answer flow onward is what produced the misleading `attach_dead_container`.
 - Unlike a version bump, `startOrAttach` does NOT call `stopAllInMeta` before rebuilding. Those containers belong to another substrate and this adapter cannot stop them; they are left to their own substrate's teardown and leak gate. Switching substrate therefore orphans the previous substrate's containers — which is exactly what happened before this decision, so it is not a regression, but it is a reason to run `just clean-containers` when moving between substrates.
 - A composite adapter's name encodes its members (`composite(memory+docker)`), so re-pointing a route changes the name and invalidates the environment. That is correct — the containers really are on different substrates — but it means composite configurations are not interchangeable across a persisted environment.
+
+## D-042. Runtime invariants for cross-module agreements, enabled only for this repository's own suite
+
+**Context:** D-012 bans defensive asserts that duplicate the type system, and it is right. But `CONVENTIONS.md` already carved out an exception — "a non-type invariant that would be hard to debug otherwise" — with no mechanism and nowhere to put one, so the exception went unused.
+
+The cost of that showed up as a class of bug this codebase keeps producing: an agreement between two modules that no single signature can state, which fails silently at the point of violation and loudly somewhere unrelated. Recent examples, all real:
+
+- The session label the orchestrator stamped (`${process.pid}-${Date.now()}`, recomputed per call, so *unique per container*) was not the label the adapter's `teardown()` swept (its own `sessionId`). D-016's label-scan backstop could never match anything. Nothing errored; crash-orphans simply survived.
+- A component's `Service` selector not being a subset of its Pod's labels yields a Service that never gets endpoints. Dependents hang until an unrelated probe times out.
+- An adapter registering a container it did not create in `known` makes `teardown()` delete workloads it does not own — and returning `owned: false` does not save it, because teardown never consults ownership. D-034's rules are pinned by eleven tests in `tests/core/owned-lifecycle.test.ts`, and a new code path walked straight past all of them.
+- An adapter returning fewer resolved ports than requested interpolates `undefined` into a URI.
+
+Tests pin the paths they exercise. An invariant pins every path, including ones written later.
+
+**Decision:** `src/invariants.ts` exports `invariant(held, name, detail?)`, and it is the only sanctioned way to write a runtime assertion in this codebase.
+
+- **Off by default.** Enabled by `tests/preload.ts` for this repository's suite, and by `CYANOTYPE_INVARIANTS=1` for a consumer debugging behaviour that looks impossible. Consumers run Cyanotype to test *their* system; they should neither pay for nor be interrupted by checks on ours.
+- **`detail` is a thunk**, so the cost of describing a violation is paid only when there is one. When disabled the cost is one boolean read and a call.
+- **Violations throw `{ kind: "invariant_violated", invariant, detail }`** — a tagged object, never a class, per the existing error convention. Throwing rather than logging is deliberate: a violated invariant means the system is in a state believed impossible, and continuing is what produces the distant, confusing failure.
+- **Named `invariant`, not `assert`** — `CONVENTIONS.md` bans the latter outright, in source and tests.
+- **Scope test:** it must be an agreement between two modules that no signature can state, whose violation surfaces elsewhere. Anything a type, a boundary validator (`missing_cyanotype_label`, `metadata_corrupt`) or a chokepoint (the attach-mode denylists) already covers is out — duplicating those is the noise D-012 bans.
+
+Eleven invariants ship with this decision: session-label agreement, resolved-port completeness (both the SPI and Blueprint sides), Service selector subset, reconnect claiming no ownership, teardown stopping only owned containers, attach never producing an owned component, monotonic event sequence, instance stamping, composite ids routing back, and the registry claim describing this process.
+
+**Consequences:**
+- **It immediately found a live bug.** The session-label invariant fired on the first run against real containers. The fix makes the adapter authoritative for `cyanotype.session` — it owns `teardown()`, so it owns the label teardown sweeps — normalised once in `start()` so Pod, ConfigMap and Service are swept together. `createSharedEnvs` still computes its own unused session string; that redundancy is now harmless and worth removing separately.
+- It also found that `tests/substrate/docker.test.ts` built specs labelled `cyanotype.session: "test"` while constructing adapters with different ids. Those tests passed only because they stopped containers explicitly; anything escaping `known` was uncollectable. `mkSpec` now takes the session it will be handed to.
+- D-012 stands unmodified. This operationalises the exception `CONVENTIONS.md` already stated; it does not widen it.
+- An invariant that fires in a consumer's run is silent by default, which is a deliberate trade: we lose field reports of our own broken agreements in exchange for not failing someone else's suite over our internals. `CYANOTYPE_INVARIANTS=1` is the escape hatch when a consumer is willing to help diagnose.

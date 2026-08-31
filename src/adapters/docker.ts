@@ -28,6 +28,7 @@ import { createRequire } from "node:module";
 import { z } from "zod";
 import type { Adapter, StartSpec, Started } from "../adapter.js";
 import type { Emit, ObserverEventData } from "../observer.js";
+import { invariant } from "../invariants.js";
 
 /**
  * Policy for attach-mode image drift — what to do when the discovered
@@ -560,10 +561,21 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     return { containerId, ports, owned: false };
   };
 
-  const start = async (spec: StartSpec, emit?: Emit): Promise<Started> => {
+  const start = async (rawSpec: StartSpec, emit?: Emit): Promise<Started> => {
+    // See the Kubernetes adapter: the adapter owns `cyanotype.session` because
+    // `teardown()` sweeps by it. (I1)
+    const spec: StartSpec = {
+      ...rawSpec,
+      labels: { ...rawSpec.labels, "cyanotype.session": sessionId },
+    };
     if (spec.labels.cyanotype !== "1") {
       throw { kind: "missing_cyanotype_label", labels: spec.labels };
     }
+    // I1: see the same check in the Kubernetes adapter — the label stamped on a
+    // container must be the one this adapter's teardown sweeps.
+    invariant(spec.labels["cyanotype.session"] === sessionId,
+      "the stamped session label is the one teardown sweeps",
+      () => ({ stamped: spec.labels["cyanotype.session"], sweptBy: sessionId }));
     if (mode === "attach") {
       return await startAttach(spec, emit);
     }

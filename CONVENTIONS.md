@@ -20,6 +20,13 @@
 
 - **Parse at boundaries, trust internally.** Validate inputs where they enter the system (`createEnvironment` checks reserved names; `events.ingest` validates against the catalog; metadata files are checked at load). Inside the orchestrator and runtime, trust the types.
 - **No `assert(...)` proliferation.** Runtime asserts add noise that the type system already provides. Use them only where a non-type invariant matters and would be hard to debug otherwise (e.g. an `O_CREAT|O_EXCL` claim succeeded but the file then disappeared — that's a real runtime invariant).
+- **That exception has a mechanism: `invariant()` from `src/invariants.ts`.** It is the only way to write one, and it is off unless `tests/preload.ts` turns it on (this repository's own suite) or a consumer sets `CYANOTYPE_INVARIANTS=1` to debug something that looks impossible. Consumers run Cyanotype to test *their* system and should neither pay for nor be interrupted by checks on ours.
+
+  An invariant earns its place when it is an agreement **between two modules that no single signature can state**, and violating it fails somewhere else entirely. The session label one module stamps must equal the one another module sweeps; a Kubernetes Service selector must be a subset of the Pod labels it selects; a container the orchestrator does not own must never reach `adapter.stop`. Each of those, when broken, produced a confusing failure far from the cause.
+
+  Do NOT reach for it when a type, a boundary validator, or a chokepoint already covers the case. `missing_cyanotype_label`, `metadata_corrupt` and the attach-mode denylists are stronger than an invariant and stay as they are — an invariant that duplicates them is exactly the noise D-012 bans.
+
+  Write it as `invariant(held, "the rule, stated as a property", () => detail)`. `held` is a cheap expression; `detail` is a **thunk** so the cost of describing a violation is paid only when there is one. A violation throws `{ kind: "invariant_violated", invariant, detail }` — a tagged object, never a class. See D-042 for the catalogue and the reasoning.
 - **No `new Error(...)` for control-flow errors.** Throw a tagged object. Reserve `new Error` for "this should be impossible" cases.
 
 ## File layout

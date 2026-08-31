@@ -42,6 +42,7 @@
 
 import type { Adapter, StartSpec, Started } from "../adapter.js";
 import type { Emit } from "../observer.js";
+import { invariant } from "../invariants.js";
 
 const SEP = "::";
 
@@ -144,7 +145,13 @@ export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter =
       const key = resolveKey(spec);
       const adapter = key === undefined ? opts.default : opts.routes[key]!;
       const started = await adapter.start(spec, emit);
-      return { ...started, containerId: `${key ?? ""}${SEP}${started.containerId}` };
+      const containerId = `${key ?? ""}${SEP}${started.containerId}`;
+      // I9: every id this adapter mints must route back. An unroutable id does
+      // not throw — `stop` becomes a no-op and `exists` reports false, so a
+      // container silently outlives the suite.
+      invariant(split(containerId) !== null, "a minted composite id routes back",
+        () => ({ containerId, key, routes: Object.keys(opts.routes) }));
+      return { ...started, containerId };
     },
 
     stop: async (containerId: string): Promise<void> => {

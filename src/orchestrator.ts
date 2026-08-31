@@ -22,6 +22,7 @@
  */
 
 import type { Adapter, StartSpec } from "./adapter.js";
+import { invariant } from "./invariants.js";
 import type { Environment } from "./environment.js";
 import type { Runtime, RuntimeSnapshot, Running } from "./runtime.js";
 import type { Binding } from "./binding.js";
@@ -135,6 +136,12 @@ const stateKey = (componentName: string, instanceId: string | undefined): string
   instanceId === undefined ? componentName : `${componentName}:${instanceId}`;
 
 /** Source attribution stamped onto every ingested event. Omits `instance` for single-instance slots. */
+/**
+ * I8: an event's `instance` must be present exactly when the component has one.
+ * `EventFilter.instance` was a public filter that could never match in a real
+ * environment because this stamp was dropped — the failure was a wait that
+ * timed out with no indication why.
+ */
 const eventMeta = (componentName: string, instanceId: string | undefined) =>
   instanceId === undefined
     ? { component: componentName }
@@ -175,6 +182,15 @@ const enrichInterface = (record: InterfaceRecord): InterfaceRecord => {
 };
 
 const buildIface = (binding: AnyBinding, ports: Record<string, number>): InterfaceRecord => {
+  // I2/I3: the SPI says an adapter reports back what it bound. Nothing made it
+  // report ALL of them, and a missing key does not throw — it interpolates as
+  // `undefined` into a URI and surfaces as a probe timeout against
+  // `http://host:undefined`, far from the adapter that dropped it.
+  invariant(
+    (binding.blueprint.portNames ?? []).every((n: string) => typeof ports[n] === "number"),
+    "every declared portName resolves to a bound port",
+    () => ({ declared: binding.blueprint.portNames, resolved: Object.keys(ports), image: binding.image }),
+  );
   if (!binding.blueprint.interface) return {};
   const raw = binding.blueprint.interface(binding.config, binding.env, ports);
   return enrichInterface(raw);
@@ -453,6 +469,12 @@ export const attachEnvironment = async <E extends Environment>(
     const state = buildComponentRuntime(
       opts.adapter, componentName, instanceId, binding, snap.containerId, { ...snap.ports }, false,
     );
+    // D-034: the process that called `attachEnvironment` did not start these
+    // containers, so its `runtime.stop` must not stop them. Upheld today by the
+    // literal `false` above — this pins it against a future refactor that
+    // threads the snapshot's `owned` through instead.
+    invariant(state.owned === false, "attach never produces an owned component",
+      () => ({ component: componentName, instance: instanceId, containerId: snap.containerId }));
     // `exists()` above proves the container is present, not that it serves.
     // Attaching to a warm stack is the case readiness was written for: the
     // component may be mid-restart, or a sibling worker may have written
@@ -583,6 +605,12 @@ const finalizeRuntime = <E extends Environment>(
           adapter: opts.adapter.name, envKey: opts.envKey,
           component: c.componentName, instance: c.instanceId,
         });
+        // I6: D-034's central promise. Chaos is the *only* path allowed to stop
+        // a non-owned container, and this is not it — suite teardown reaching
+        // `adapter.stop` here is what once ran `docker stop` against an
+        // operator's compose stack at the end of every run.
+        invariant(c.owned === true, "teardown stops only owned containers",
+          () => ({ component: c.componentName, instance: c.instanceId, containerId: c.containerId }));
         stopEmit({ type: "container.stopping", containerId: c.containerId });
         try { await opts.adapter.stop(c.containerId); } catch (e) { console.error(e); }
         stopEmit({ type: "container.stopped", containerId: c.containerId });

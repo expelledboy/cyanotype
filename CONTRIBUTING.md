@@ -85,7 +85,10 @@ preload = ["./tests/preload.ts"]
 - Every implementation module has a test file: `tests/core/<module>.test.ts` for anything testable without a substrate, `tests/substrate/<module>.test.ts` for adapter behaviour that needs a real Docker daemon or cluster. Add tests for new behaviour there.
 - The end-to-end example in `tests/petstore-example/` is the integration smoke; if your change affects orchestration or the Adapter SPI, it should still pass.
 - `just typecheck` must be clean.
-- `just test-unit` must be clean — run it constantly, it takes seconds. Then `just test-core` (adds substrate integration) and `just test` against real Docker.
+- `just test-unit` must be clean — run it constantly, it takes seconds. It runs
+  with runtime invariants enabled (`tests/preload.ts`), so a violated cross-module
+  agreement fails there rather than as a confusing symptom later. Set
+  `CYANOTYPE_INVARIANTS=1` to enable them outside this repo's suite. Then `just test-core` (adds substrate integration) and `just test` against real Docker.
 
 ### Architectural changes
 

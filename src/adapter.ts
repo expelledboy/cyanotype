@@ -74,6 +74,7 @@ export type Adapter = {
 
   /** Whether a container with this id currently exists (running or stopped). */
   exists(containerId: string): Promise<boolean>;
+
 };
 
 /**

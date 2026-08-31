@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Adapter } from "./adapter.js";
+import { invariant } from "./invariants.js";
 import type { Environment } from "./environment.js";
 import type { Runtime } from "./runtime.js";
 import type { EnvironmentMetadata } from "./metadata.js";
@@ -89,6 +90,12 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
       throw e;
     }
     const payload: StartingFile = { schemaVersion: 1, envKey, state: "starting", pid: process.pid, startedAt: Date.now() };
+    // I10: the archetype CONVENTIONS.md names — the `O_CREAT|O_EXCL` claim
+    // reported success, so the file must exist and be ours. If it is not, two
+    // processes both believe they own the environment and race to start it.
+    invariant(typeof payload.pid === "number" && payload.envKey === envKey,
+      "a won claim describes this process and this env",
+      () => ({ envKey, payload }));
     fs.writeSync(fd, JSON.stringify(payload));
     fs.closeSync(fd);
     return true;

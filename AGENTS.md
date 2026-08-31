@@ -33,6 +33,7 @@ just pre-release               # the release bar; checks everything, tags nothin
 | Built-in console reporter for the observer stream | `src/reporter.ts` |
 | Orchestrator (start/attach/chaos) | `src/orchestrator.ts` |
 | Multi-env registry | `src/shared.ts` |
+| Runtime invariants — cross-module agreements (D-042) | `src/invariants.ts` |
 | Compose-stack reconciliation (`reconcileComposeStack`, `FingerprintSpec`) (D-031, D-032) | `src/compose.ts` |
 | `cyanotype derive` CLI dispatch (`cyanotype derive compose|k8s`) (D-030) | `src/cli/index.ts` |
 | Derive library + `loadDerivedCompose` (`deriveCompose`, `deriveK8s`, `loadDerivedCompose`) (D-030, D-032) | `src/cli/derive.ts` |
@@ -53,7 +54,7 @@ just pre-release               # the release bar; checks everything, tags nothin
 ## Hard rules
 
 - **Comments:** default to none. Add one only when the *why* is non-obvious — a hidden constraint, a workaround for a specific bug, behaviour that would surprise a reader. Instead of `// stop the container`, name the variable so the line reads itself.
-- **Assertions:** validate at boundaries; trust types internally. Instead of `assert(name != null)` in the orchestrator, use the boundary check `createEnvironment` already performs.
+- **Assertions:** validate at boundaries; trust types internally. Instead of `assert(name != null)` in the orchestrator, use the boundary check `createEnvironment` already performs. The one exception is `invariant()` from `src/invariants.ts`, for an agreement between two modules that no signature can state and whose violation surfaces somewhere else entirely — off unless this repo's own suite is running, or `CYANOTYPE_INVARIANTS=1`. Never `assert`. See D-042 and `CONVENTIONS.md`.
 - **`any`:** only in variance-widener positions — places where a specific generic (say `Binding<PetstoreBlueprint>`) must be assignable to a container that holds bindings of *any* Blueprint, and TypeScript's variance rules reject the narrower type. Use the existing `biome-ignore lint/suspicious/noExplicitAny` line with a one-line reason.
 - **Errors:** tagged objects, not classes. `throw { kind: "probe_timeout", lastError, elapsedMs }` — never `throw new Error(...)` except for "this should be impossible" cases.
 - **Tests:** `expect(...)` only. No `sleep(N)`-style waits — use `waitFor(predicate, opts)` from `tests/petstore-example/test-helpers.ts`.

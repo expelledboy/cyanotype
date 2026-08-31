@@ -130,6 +130,7 @@ Smaller pieces that live in their own files:
 | `events.ts` | `EventCatalog`, `Event<Cat, K>`, `EventBus<Cat>`, `LogParser` | Per-component typed event bus |
 | `probe.ts` | `Probe<I>` (HTTP + custom), `runProbe` | Lives on Blueprint (readiness/health are part of the contract) |
 | `metadata.ts` | `EnvironmentMetadata`, `SlotSnapshot`, `ComponentSnapshot` | Cross-process JSON snapshot; one concept, one file |
+| `invariants.ts` | `invariant`, `enableInvariants` | Cross-module agreements types cannot state; off unless enabled (D-042) |
 | `index.d.ts` | Re-exports of all public TYPES | The type contract |
 | `index.ts` | Re-exports of all public VALUES (factories, helpers) | The runtime entry |
 

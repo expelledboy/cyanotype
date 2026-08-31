@@ -18,6 +18,7 @@ export { bind } from "./binding.js";
 export { createEnvironment, RESERVED_COMPONENT_NAMES } from "./environment.js";
 export { createSharedEnvs } from "./shared.js";
 export { createEventBus, FROM_START } from "./events.js";
+export { enableInvariants } from "./invariants.js";
 export { runProbe } from "./probe.js";
 export { createHelpers } from "./helpers.js";
 export { startEnvironment, attachEnvironment } from "./orchestrator.js";
