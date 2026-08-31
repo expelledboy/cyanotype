@@ -370,7 +370,6 @@ export const startEnvironment = async <E extends Environment>(
     if (s.status === "stopped") return;
     const chaosEmit = chaosScope(name, instance);
     chaosEmit({ type: "chaos.stopping" });
-    s.signal.abort();
     const id = s.containerId;
     chaosEmit({ type: "container.stopping", containerId: id });
     // Do NOT swallow. D-034 replaced the Docker adapter's silent no-op with a
@@ -385,6 +384,13 @@ export const startEnvironment = async <E extends Environment>(
     // marking it "stopped" anyway is what let a later chaos.start() look like
     // it had resumed something.
     await opts.adapter.stop(id);
+    // Abort the log stream only once the stop has actually happened. Aborting
+    // first meant a REFUSED stop — the throw above is deliberate, see D-034 —
+    // left a running component with a closed stream, and only `chaos.start`
+    // re-arms it. Nobody calls start after a stop that was refused, so the
+    // component ran on with a dead event bus and later waits timed out blaming
+    // it rather than the refusal.
+    s.signal.abort();
     chaosEmit({ type: "container.stopped", containerId: id });
     s.containerId = "";
     s.status = "stopped";

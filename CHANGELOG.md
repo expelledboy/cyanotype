@@ -125,6 +125,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A chaos stop that the adapter REFUSES no longer kills the component's event
+  stream. `chaos.stop` aborted the log-stream signal before calling
+  `adapter.stop()`, so when the stop threw — `chaos_unsupported_in_attach_mode`
+  is the live case, made a loud throw deliberately — the container kept running
+  with a permanently closed stream. Only `chaos.start` re-arms it, and nobody
+  calls start after a stop that was refused, so every later `waitFor` on that
+  component timed out blaming the component rather than the refusal. The abort
+  now happens after the stop succeeds.
 - `invariant()` no longer evaluates its condition when invariants are disabled.
   `held` was a plain parameter, so JavaScript ran it at the call site
   regardless: consumers paid for every condition, and one that dereferenced
