@@ -99,16 +99,29 @@ const pausedAttaches = new Map<string, {
 
 const ENDPOINT_WAIT_TIMEOUT_MS = 30_000;
 
-const countReadyEndpoints = async (k: KubectlClient, serviceName: string): Promise<number> => {
+/**
+ * Ready endpoint count, or `null` when the cluster could not be asked.
+ *
+ * "Could not tell" and "zero" must not be the same value. This returned 0 for
+ * both, and `chaos.stop` waits for `n === 0`: a listing that failed on RBAC or
+ * an unreachable API server satisfied that predicate instantly, so chaos
+ * reported the workload down without ever having looked. A resilience test then
+ * asserts behaviour "while the service is down" against a service that is fully
+ * up — a false green, which is the one failure a chaos library must not have.
+ *
+ * The `n >= 1` direction did not have the bug: 0 kept it waiting until it threw.
+ * That asymmetry is why this went unnoticed.
+ */
+const countReadyEndpoints = async (k: KubectlClient, serviceName: string): Promise<number | null> => {
   const r = await k.run([
     "get", "endpointslices",
     "-l", `kubernetes.io/service-name=${serviceName}`,
     "-o", "json",
   ]);
-  if (r.exit !== 0) return 0;
+  if (r.exit !== 0) return null;
   type Slice = { endpoints?: Array<{ conditions?: { ready?: boolean } }> };
   let parsed: { items?: Slice[] };
-  try { parsed = JSON.parse(r.stdout) as { items?: Slice[] }; } catch { return 0; }
+  try { parsed = JSON.parse(r.stdout) as { items?: Slice[] }; } catch { return null; }
   let n = 0;
   for (const slice of parsed.items ?? []) {
     for (const ep of slice.endpoints ?? []) {
@@ -125,11 +138,16 @@ const waitForEndpoints = async (
   timeoutMs = ENDPOINT_WAIT_TIMEOUT_MS,
 ): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
+  let unreadable = 0;
   while (Date.now() < deadline) {
-    if (predicate(await countReadyEndpoints(k, serviceName))) return;
+    const n = await countReadyEndpoints(k, serviceName);
+    // Only a real count can satisfy the predicate. An unreadable cluster keeps
+    // polling and ultimately times out loudly, in BOTH directions.
+    if (n !== null && predicate(n)) return;
+    if (n === null) unreadable++;
     await new Promise((r) => setTimeout(r, 200));
   }
-  throw { kind: "k8s_attach_endpoint_wait_timeout", service: serviceName, timeoutMs };
+  throw { kind: "k8s_attach_endpoint_wait_timeout", service: serviceName, timeoutMs, unreadable };
 };
 
 const killForwards = (t: Tracked) => {
