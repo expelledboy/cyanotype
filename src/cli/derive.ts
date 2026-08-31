@@ -58,8 +58,18 @@ const selectorMatches = (
   return true;
 };
 
-const bindingKey = (component: string, instance: string | undefined): string =>
-  instance === undefined ? component : `${component}.${instance}`;
+/**
+ * `component`, or `component.instance` when the instance label carries a value.
+ *
+ * Absence is checked for falsiness, not `undefined`. YAML parses a valueless
+ * `cyanotype.instance:` as null and Compose's array label form (`- cyanotype.instance`,
+ * no `=`) as the empty string; testing `=== undefined` let both through and
+ * produced the keys `redis.null` and `redis.` — which then read as an expected
+ * key MISSING, while the labels the author is sent to inspect look correct.
+ * Instance names are non-empty strings, so no legitimate value is falsy.
+ */
+const bindingKey = (component: string, instance: string | undefined | null): string =>
+  instance ? `${component}.${instance}` : component;
 
 // ---------------------------------------------------------------------------
 // K8s derive
@@ -350,7 +360,7 @@ export const loadDerivedCompose = (
       hint:
         `"${path}" is missing [${missing.join(", ")}]. These are the expectedKeys you passed ` +
         `to loadDerivedCompose. Derive keys come from each service's cyanotype.component ` +
-        `label, suffixed with .<cyanotype.instance> when that label is present, and a service ` +
+        `label, suffixed with .<cyanotype.instance> when that label carries a value, and a service ` +
         `carrying no component label is skipped entirely — check those labels in the manifest ` +
         `your derive step walks, or update the key list if your topology changed.`,
     } satisfies DerivedComposeMissingKeysError;

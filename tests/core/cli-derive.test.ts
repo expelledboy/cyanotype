@@ -203,6 +203,44 @@ spec:
       targetPort: 8080
 `;
 
+  test("a valueless instance label does not become a `.null` suffix", () => {
+    // YAML parses `cyanotype.instance:` with no value as null. bindingKey
+    // treated only `undefined` as absent, so this produced the key "redis.null".
+    // The consumer's expected key "redis" was then MISSING, and the error sent
+    // them to inspect labels that look entirely correct.
+    const path = tmpFile("k8s-null-instance.yaml", `
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cache
+  namespace: demo
+spec:
+  template:
+    metadata:
+      labels:
+        cyanotype.component: redis
+        cyanotype.instance:
+    spec:
+      containers:
+        - name: c
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache
+  namespace: demo
+spec:
+  selector:
+    cyanotype.component: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+`);
+    expect(Object.keys(deriveK8s(path))).toEqual(["redis"]);
+  });
+
   test("extracts labelled deployments/services into binding keys", () => {
     const path = tmpFile("k8s.yaml", K8S_YAML);
     const result = deriveK8s(path);
