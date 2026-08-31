@@ -387,15 +387,6 @@ export const attachEnvironment = async <E extends Environment>(
   const envStart = Date.now();
   rootEmit({ type: "environment.starting", componentCount: countBindings(env) });
 
-  // Aggregate ceiling across every component's probe — see
-  // `OrchestratorOptions.attachReadinessTimeoutMs`. One controller for the
-  // whole attach; each probe honours it via the signal it already accepts.
-  const readinessDeadline = new AbortController();
-  const readinessTimer =
-    opts.attachReadinessTimeoutMs !== undefined
-      ? setTimeout(() => readinessDeadline.abort(), opts.attachReadinessTimeoutMs)
-      : undefined;
-
   const connectStart = Date.now();
   rootEmit({ type: "substrate.connecting" });
   try {
@@ -407,6 +398,17 @@ export const attachEnvironment = async <E extends Environment>(
   }
   rootEmit({ type: "substrate.connected", latencyMs: Date.now() - connectStart });
   const components = new Map<string, ComponentState>();
+
+  // Aggregate ceiling across every component's probe — see
+  // `OrchestratorOptions.attachReadinessTimeoutMs`. One controller for the
+  // whole attach; each probe honours it via the signal it already accepts.
+  // Started AFTER connect: the budget is for probing, and the `finally` that
+  // clears it is only reachable once the connect path has succeeded.
+  const readinessDeadline = new AbortController();
+  const readinessTimer =
+    opts.attachReadinessTimeoutMs !== undefined
+      ? setTimeout(() => readinessDeadline.abort(), opts.attachReadinessTimeoutMs)
+      : undefined;
 
   const attachOne = async (
     componentName: string,
