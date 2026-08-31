@@ -4,8 +4,12 @@
  * Denylist tests exercise the kubectl chokepoint directly — no cluster
  * required. Integration tests apply a fixture (Deployment + Service)
  * into a dedicated namespace and verify discovery, port-forwarding,
- * and reconnection across a rolling restart. Cluster-dependent tests
- * skip when `kubectl --context orbstack get nodes` fails.
+ * and reconnection across a rolling restart. When no cluster answers, the
+ * integration block reports as SKIPPED, not passed; the denylist block above
+ * it still runs and carries most of this file's assertions. The probe runs at
+ * module scope because `beforeAll` runs after registration, too late for
+ * `describe.skipIf`. Set `CYANOTYPE_REQUIRE_K8S=1` — continuous integration
+ * does — to fail instead of skip. See `tests/support/require-substrate.ts`.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
@@ -13,21 +17,13 @@ import path from "node:path";
 import { createK8sAdapter } from "../../src/adapters/kubernetes";
 import { createKubectl } from "../../src/adapters/kubectl";
 import type { Adapter, StartSpec } from "../../src/adapter";
+import { k8sAvailable, requireSubstrate } from "../support/require-substrate";
 
 const CONTEXT = process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack";
 const NAMESPACE = "cyanotype-attach-tests";
 const SERVICE = "attach-nginx";
 const FIXTURE = path.join(import.meta.dir, "..", "support", "k8s", "attach-fixture.yaml");
 const OVERRIDE_FIXTURE = path.join(import.meta.dir, "..", "support", "k8s", "attach-override-fixture.yaml");
-
-const k8sAvailable = async (): Promise<boolean> => {
-  try {
-    const proc = Bun.spawn(["kubectl", "--context", CONTEXT, "get", "nodes"], {
-      stdout: "ignore", stderr: "ignore",
-    });
-    return (await proc.exited) === 0;
-  } catch { return false; }
-};
 
 const kubectl = (args: string[]): Promise<{ exit: number; stdout: string; stderr: string }> => {
   const proc = Bun.spawn(["kubectl", "--context", CONTEXT, ...args], {
@@ -91,55 +87,52 @@ describe("kubernetes/adapter/attach denylist", () => {
   });
 });
 
-let HAS_K8S = false;
-let FIXTURE_READY = false;
+const HAS_K8S = requireSubstrate(
+  await k8sAvailable(CONTEXT), "k8s", `kubectl --context ${CONTEXT} get nodes`);
 
-beforeAll(async () => {
-  HAS_K8S = await k8sAvailable();
-  if (!HAS_K8S) return;
-  // Tolerate a still-terminating namespace from a prior afterAll's --wait=false delete.
-  const nsClear = await waitUntil(async () => {
-    const r = await kubectl(["get", "ns", NAMESPACE, "-o", "jsonpath={.status.phase}"]);
-    if (r.exit !== 0) return true;
-    return r.stdout !== "Terminating";
+describe.skipIf(!HAS_K8S)("kubernetes/adapter/attach integration", () => {
+  /**
+   * Setup THROWS rather than recording readiness. It used to set a
+   * `FIXTURE_READY` flag that every test checked and returned on, so a fixture
+   * that never came up produced four passing tests that asserted nothing.
+   *
+   * It lives inside this block, not at file scope, because a file-level
+   * `beforeAll` runs whenever any block in the file runs — and the denylist
+   * block above needs no cluster, so it always does.
+   */
+  beforeAll(async () => {
+    // Tolerate a still-terminating namespace from a prior afterAll's --wait=false delete.
+    const nsClear = await waitUntil(async () => {
+      const r = await kubectl(["get", "ns", NAMESPACE, "-o", "jsonpath={.status.phase}"]);
+      if (r.exit !== 0) return true;
+      return r.stdout !== "Terminating";
+    }, 60_000);
+    if (!nsClear) {
+      throw { kind: "attach_fixture_namespace_terminating", namespace: NAMESPACE };
+    }
+    for (const f of [FIXTURE, OVERRIDE_FIXTURE]) {
+      const apply = await kubectl(["apply", "-f", f]);
+      if (apply.exit !== 0) {
+        throw { kind: "attach_fixture_apply_failed", fixture: f, stderr: apply.stderr };
+      }
+    }
+    for (const d of ["attach-nginx", "override-nginx"]) {
+      const ready = await kubectl([
+        "-n", NAMESPACE, "wait", `deployment/${d}`,
+        "--for=condition=Available", "--timeout=120s",
+      ]);
+      if (ready.exit !== 0) {
+        throw { kind: "attach_fixture_not_available", deployment: d, stderr: ready.stderr };
+      }
+    }
+  }, 240_000);
+
+  afterAll(async () => {
+    await kubectl(["delete", "-f", FIXTURE, "--wait=false", "--ignore-not-found=true"]);
+    await kubectl(["delete", "-f", OVERRIDE_FIXTURE, "--wait=false", "--ignore-not-found=true"]);
   }, 60_000);
-  if (!nsClear) {
-    console.error("namespace still terminating after 60s — skipping attach integration");
-    return;
-  }
-  const apply = await kubectl(["apply", "-f", FIXTURE]);
-  if (apply.exit !== 0) {
-    console.error("attach-fixture apply failed:", apply.stderr);
-    return;
-  }
-  const ready = await kubectl([
-    "-n", NAMESPACE, "wait", "deployment/attach-nginx",
-    "--for=condition=Available", "--timeout=120s",
-  ]);
-  FIXTURE_READY = ready.exit === 0;
-  if (!FIXTURE_READY) {
-    console.error("attach-fixture not Available:", ready.stderr);
-  }
-  const applyOverride = await kubectl(["apply", "-f", OVERRIDE_FIXTURE]);
-  if (applyOverride.exit !== 0) {
-    console.error("attach-override-fixture apply failed:", applyOverride.stderr);
-    return;
-  }
-  await kubectl([
-    "-n", NAMESPACE, "wait", "deployment/override-nginx",
-    "--for=condition=Available", "--timeout=120s",
-  ]);
-}, 240_000);
 
-afterAll(async () => {
-  if (!HAS_K8S) return;
-  await kubectl(["delete", "-f", FIXTURE, "--wait=false", "--ignore-not-found=true"]);
-  await kubectl(["delete", "-f", OVERRIDE_FIXTURE, "--wait=false", "--ignore-not-found=true"]);
-}, 60_000);
-
-describe("kubernetes/adapter/attach integration", () => {
   test("discovers Service + port-forwards + HTTP 200", async () => {
-    if (!HAS_K8S || !FIXTURE_READY) return;
     const sid = `att-${Math.random().toString(36).slice(2, 8)}`;
     const adapter: Adapter = createK8sAdapter({
       mode: "attach", sessionId: sid, context: CONTEXT, namespace: NAMESPACE,
@@ -159,7 +152,6 @@ describe("kubernetes/adapter/attach integration", () => {
   }, 180_000);
 
   test("survives rolling restart via reconnection layer", async () => {
-    if (!HAS_K8S || !FIXTURE_READY) return;
     const sid = `rec-${Math.random().toString(36).slice(2, 8)}`;
     const adapter: Adapter = createK8sAdapter({
       mode: "attach", sessionId: sid, context: CONTEXT, namespace: NAMESPACE,
@@ -182,7 +174,6 @@ describe("kubernetes/adapter/attach integration", () => {
   }, 240_000);
 
   test("honours adapter.k8s.attach.service override when convention does not match", async () => {
-    if (!HAS_K8S || !FIXTURE_READY) return;
     const sid = `ovr-${Math.random().toString(36).slice(2, 8)}`;
     const adapter: Adapter = createK8sAdapter({
       mode: "attach", sessionId: sid, context: CONTEXT, namespace: NAMESPACE,
@@ -213,7 +204,6 @@ describe("kubernetes/adapter/attach integration", () => {
   }, 180_000);
 
   test("teardown does NOT delete cluster resources", async () => {
-    if (!HAS_K8S || !FIXTURE_READY) return;
     const sid = `safe-${Math.random().toString(36).slice(2, 8)}`;
     const adapter: Adapter = createK8sAdapter({
       mode: "attach", sessionId: sid, context: CONTEXT, namespace: NAMESPACE,

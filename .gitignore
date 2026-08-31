@@ -7,3 +7,4 @@ result-*
 .DS_Store
 .claude/
 dist/
+plan/

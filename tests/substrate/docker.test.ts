@@ -1,12 +1,18 @@
 /**
  * Docker adapter smoke tests. Real Docker required.
- * If no daemon is reachable, the entire suite skips silently.
+ *
+ * With no daemon reachable this block reports as SKIPPED, not passed. The
+ * probe runs at module scope because `beforeAll` runs after registration and
+ * so cannot inform `describe.skipIf`. Set `CYANOTYPE_REQUIRE_DOCKER=1` —
+ * continuous integration does — to fail instead of skip. See
+ * `tests/support/require-substrate.ts`.
  */
 
-import { describe, test, expect, beforeAll, afterEach } from "bun:test";
+import { describe, test, expect, afterEach } from "bun:test";
 import { createRequire } from "node:module";
 import { createDockerAdapter } from "../../src/adapters/docker";
 import type { Adapter, StartSpec } from "../../src/adapter";
+import { dockerAvailable, requireSubstrate } from "../support/require-substrate";
 
 const IMAGE = "redis:7-alpine";
 const ALPINE = "alpine:3.20";
@@ -81,19 +87,8 @@ const startAlpineLogger = async (session: string, cmd: string[]): Promise<string
   return cont.id;
 };
 
-const dockerAvailable = async (): Promise<boolean> => {
-  try {
-    const a = createDockerAdapter({ sessionId: "probe" });
-    await a.connect();
-    await a.disconnect();
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-let HAS_DOCKER = false;
-beforeAll(async () => { HAS_DOCKER = await dockerAvailable(); });
+const HAS_DOCKER = requireSubstrate(
+  await dockerAvailable(), "docker", "connecting to the Docker daemon");
 
 /**
  * `session` must be the sessionId of the adapter this spec is handed to: the
@@ -110,19 +105,18 @@ const mkSpec = (session: string, overrides: Partial<StartSpec> = {}): StartSpec 
   ...overrides,
 });
 
-describe("docker/adapter", () => {
+describe.skipIf(!HAS_DOCKER)("docker/adapter", () => {
   let adapter: Adapter | null = null;
   const started: string[] = [];
 
   afterEach(async () => {
-    if (HAS_DOCKER && adapter) {
+    if (adapter) {
       for (const id of started.splice(0)) {
         try { await adapter.stop(id); } catch { /* ignore */ }
       }
       try { await adapter.disconnect(); } catch { /* ignore */ }
       adapter = null;
     }
-    if (!HAS_DOCKER) return;
     const Docker = dockerCtor();
     const client = new Docker(dockerOpts());
     for (const id of rawContainers.splice(0)) {
@@ -135,7 +129,6 @@ describe("docker/adapter", () => {
   });
 
   test("connect + disconnect cleanly", async () => {
-    if (!HAS_DOCKER) return;
     adapter = createDockerAdapter({ sessionId: "s-connect" });
     await adapter.connect();
     await adapter.disconnect();
@@ -143,7 +136,6 @@ describe("docker/adapter", () => {
   });
 
   test("start + exists + stop", async () => {
-    if (!HAS_DOCKER) return;
     adapter = createDockerAdapter({ sessionId: "s-lifecycle" });
     await adapter.connect();
     const r = await adapter.start(mkSpec("s-lifecycle"));
@@ -155,7 +147,6 @@ describe("docker/adapter", () => {
   }, 60_000);
 
   test("port resolution with 'auto'", async () => {
-    if (!HAS_DOCKER) return;
     adapter = createDockerAdapter({ sessionId: "s-auto" });
     await adapter.connect();
     const r = await adapter.start(mkSpec("s-auto", { ports: { "6379": "auto" } }));
@@ -164,7 +155,6 @@ describe("docker/adapter", () => {
   }, 60_000);
 
   test("port resolution with fixed port", async () => {
-    if (!HAS_DOCKER) return;
     adapter = createDockerAdapter({ sessionId: "s-fixed" });
     await adapter.connect();
     const r = await adapter.start(mkSpec("s-fixed", { ports: { "6379": 36379 } }));
@@ -173,7 +163,6 @@ describe("docker/adapter", () => {
   }, 60_000);
 
   test("mount-as-content writes tmpfile and binds it", async () => {
-    if (!HAS_DOCKER) return;
     const fs = await import("node:fs");
     adapter = createDockerAdapter({ sessionId: "s-mount" });
     await adapter.connect();
@@ -194,7 +183,6 @@ describe("docker/adapter", () => {
   }, 60_000);
 
   test("logs yields live lines and aborts cleanly", async () => {
-    if (!HAS_DOCKER) return;
     // Continuous logger: redis is quiet after Ready, so tail:0 would hang.
     const id = await startAlpineLogger("s-logs", ["sh", "-c", "while true; do echo tick; sleep 0.15; done"]);
     adapter = createDockerAdapter({ sessionId: "s-logs" });
@@ -213,7 +201,6 @@ describe("docker/adapter", () => {
   }, 60_000);
 
   test("logs does not replay container history", async () => {
-    if (!HAS_DOCKER) return;
     const HIST = "CYANOTYPE_HISTORIC_MARKER";
     // Historic line first; then a quiet sleep so non-follow dump settles with HIST only.
     // After follow opens, emit LIVE lines so we prove the stream is still open.
@@ -256,7 +243,6 @@ describe("docker/adapter", () => {
   }, 60_000);
 
   test("teardown stops labeled stragglers across adapters", async () => {
-    if (!HAS_DOCKER) return;
     const sid = `s-straggler-${Math.random().toString(36).slice(2, 8)}`;
     const a1 = createDockerAdapter({ sessionId: sid });
     await a1.connect();

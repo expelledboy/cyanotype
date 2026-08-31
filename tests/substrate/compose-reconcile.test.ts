@@ -1,10 +1,13 @@
 /**
  * reconcileComposeStack — fingerprint, staleness, persistence, observer
- * sequence. The pure parts are exercised hard; the real `docker compose up`
- * path self-skips when no Docker daemon is reachable.
+ * sequence. The pure parts are exercised hard and need no daemon, so they run
+ * everywhere; only the real `docker compose up` block below is gated, and with
+ * no daemon it reports as SKIPPED rather than passed. The probe runs at module
+ * scope because `beforeAll` runs too late to inform `describe.skipIf`. Set
+ * `CYANOTYPE_REQUIRE_DOCKER=1` to fail instead of skip.
  */
 
-import { describe, test, expect, beforeAll } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,7 +20,7 @@ import {
   type Fingerprint,
 } from "../../src/compose";
 import type { ObserverEvent } from "../../src/observer";
-import { createDockerAdapter } from "../../src/adapters/docker";
+import { dockerAvailable, requireSubstrate } from "../support/require-substrate";
 
 const mkTmpDir = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "cyanotype-compose-"));
 
@@ -27,19 +30,8 @@ const tmpFile = (dir: string, name: string, content: string): string => {
   return p;
 };
 
-const dockerAvailable = async (): Promise<boolean> => {
-  try {
-    const a = createDockerAdapter({ sessionId: "probe" });
-    await a.connect();
-    await a.disconnect();
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-let HAS_DOCKER = false;
-beforeAll(async () => { HAS_DOCKER = await dockerAvailable(); });
+const HAS_DOCKER = requireSubstrate(
+  await dockerAvailable(), "docker", "connecting to the Docker daemon");
 
 describe("compose/computeFingerprint", () => {
   test("hashes file contents and verbatim values", async () => {
@@ -131,14 +123,13 @@ describe("compose/fingerprint persistence", () => {
   });
 });
 
-describe("compose/reconcileComposeStack observer sequence", () => {
+describe.skipIf(!HAS_DOCKER)("compose/reconcileComposeStack observer sequence", () => {
   const record = (): { observer: (e: ObserverEvent) => void; events: ObserverEvent[] } => {
     const events: ObserverEvent[] = [];
     return { observer: (e) => events.push(e), events };
   };
 
   test("fresh stack emits checking -> fresh -> attached, no rebuild", async () => {
-    if (!HAS_DOCKER) return;
     const dir = mkTmpDir();
     const composeFile = tmpFile(dir, "compose.yaml", "services: {}\n");
     // Pre-store a fingerprint matching the current inputs so the only
@@ -156,7 +147,6 @@ describe("compose/reconcileComposeStack observer sequence", () => {
   });
 
   test("observer events carry the compose adapter + project envKey", async () => {
-    if (!HAS_DOCKER) return;
     const dir = mkTmpDir();
     const composeFile = tmpFile(dir, "compose.yaml", "services: {}\n");
     const { observer, events } = record();
@@ -171,7 +161,6 @@ describe("compose/reconcileComposeStack observer sequence", () => {
   });
 
   test("force: true emits stack.stale with changedFields ['<forced>'] even when fingerprint matches", async () => {
-    if (!HAS_DOCKER) return;
     const dir = mkTmpDir();
     const composeFile = tmpFile(dir, "compose.yaml", "services: {}\n");
     // Pre-seed a fingerprint matching the current compose-file hash so the
@@ -196,7 +185,6 @@ describe("compose/reconcileComposeStack observer sequence", () => {
   });
 
   test("force: true invokes onStale and persists the post-rebuild fingerprint", async () => {
-    if (!HAS_DOCKER) return;
     const dir = mkTmpDir();
     const composeFile = tmpFile(dir, "compose.yaml", "services: {}\n");
     const project = "cyanotype-compose-test-forced-onstale";
@@ -224,7 +212,6 @@ describe("compose/reconcileComposeStack observer sequence", () => {
   });
 
   test("a no-op observer is the zero-cost path (no throw without observer)", async () => {
-    if (!HAS_DOCKER) return;
     const dir = mkTmpDir();
     const composeFile = tmpFile(dir, "compose.yaml", "services: {}\n");
     let threw = false;
