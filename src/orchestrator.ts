@@ -513,11 +513,17 @@ export const attachEnvironment = async <E extends Environment>(
         kind: "container_gone",
         containerId: snap.containerId, componentName, instanceId,
         hint:
-          `The persisted environment lists a container for ` +
-          `"${instanceId === undefined ? componentName : `${componentName}.${instanceId}`}" ` +
-          `that no longer exists — removed outside Cyanotype, or replaced by a chaos restart ` +
-          `in another process whose new id this state file never saw. Stop the containers ` +
-          `labelled cyanotype=1, delete the <envKey>.json under your stateDir, and re-run.`,
+          `The adapter reported the container in \`containerId\` as absent while re-attaching ` +
+          `"${instanceId === undefined ? componentName : `${componentName}.${instanceId}`}". ` +
+          `Absent is the adapter's definition and does not always mean gone: Docker attach ` +
+          `mode reports absent for a compose container that is merely stopped, and ` +
+          `Kubernetes attach mode reports absent for one this process did not itself start. ` +
+          `If Cyanotype started it, it really is gone — removed externally, or replaced by a ` +
+          `chaos restart in another process whose new id this state file never saw — so stop ` +
+          `the containers labelled cyanotype=1, delete the <envKey>.json under your ` +
+          `stateDir, and re-run under mode: "start" or "startOrAttach". If you own the ` +
+          `stack, those containers carry no Cyanotype label and deleting state will not help: ` +
+          `bring the stopped service back up instead.`,
       };
     }
     // Attach mode never owns the container: the process that started it
@@ -559,11 +565,13 @@ export const attachEnvironment = async <E extends Environment>(
           hint:
             `Attached to ` +
             `"${instanceId === undefined ? componentName : `${componentName}.${instanceId}`}" ` +
-            `but its Blueprint readiness probe never passed, so the container is running ` +
-            `without serving. Attach probes deliberately (D-036) rather than handing back a ` +
-            `runtime that fails inside your first assertion. Check that component's logs; ` +
-            `cause carries the probe's own failure — probe_timeout with the last error it ` +
-            `saw, or probe_aborted if attachReadinessTimeoutMs capped the whole attach.`,
+            `but its Blueprint readiness probe never passed. The container was found — ` +
+            `nothing more: exists() is true for a container that is present but STOPPED, so ` +
+            `check its status and exit code before assuming a running process that will not ` +
+            `serve. Attach probes deliberately (D-036) rather than handing back a runtime ` +
+            `that fails inside your first assertion. \`cause\` carries the probe's own ` +
+            `failure — probe_timeout with the last error it saw, or probe_aborted if ` +
+            `attachReadinessTimeoutMs capped the whole attach.`,
         };
       }
     }
@@ -581,7 +589,7 @@ export const attachEnvironment = async <E extends Environment>(
           hint:
             `The persisted environment contains "${componentName}", but the Environment in ` +
             `this code does not -- the definition changed since those containers started. ` +
-            `Add it back to the Environment to re-attach to those containers. Otherwise discard the environment: Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run. shared.stopAll() will NOT do this: it stops what THIS process started, and those containers belong to an earlier one.`,
+            `Add it back to the Environment to re-attach to those containers. Otherwise discard the environment: Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run under mode: "start" or "startOrAttach". Re-running in mode: "attach" finds no state file and raises attach_no_metadata instead. If you called attachEnvironment directly there is no stateDir to clear -- fix the Environment or the snapshot you passed it. shared.stopAll() will NOT clear this for you: it stops what THIS process started, and those containers belong to an earlier one.`,
         };
       }
       if (slotSnap.kind === "single") {
@@ -593,7 +601,7 @@ export const attachEnvironment = async <E extends Environment>(
             current: "multi-instance",
             hint:
               `"${componentName}" was persisted as a single-instance component but is now ` +
-              `multi-instance. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run. shared.stopAll() will NOT do this: it stops what THIS process started, and those containers belong to an earlier one.`,
+              `multi-instance. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run under mode: "start" or "startOrAttach". Re-running in mode: "attach" finds no state file and raises attach_no_metadata instead. If you called attachEnvironment directly there is no stateDir to clear -- fix the Environment or the snapshot you passed it. shared.stopAll() will NOT clear this for you: it stops what THIS process started, and those containers belong to an earlier one.`,
           };
         }
         await attachOne(componentName, undefined, slot, slotSnap.snapshot);
@@ -605,7 +613,7 @@ export const attachEnvironment = async <E extends Environment>(
             persisted: "multi-instance",
             current: "single",
             hint:
-              `"${componentName}" was persisted as multi-instance but is now single-instance. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run. shared.stopAll() will NOT do this: it stops what THIS process started, and those containers belong to an earlier one.`,
+              `"${componentName}" was persisted as multi-instance but is now single-instance. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run under mode: "start" or "startOrAttach". Re-running in mode: "attach" finds no state file and raises attach_no_metadata instead. If you called attachEnvironment directly there is no stateDir to clear -- fix the Environment or the snapshot you passed it. shared.stopAll() will NOT clear this for you: it stops what THIS process started, and those containers belong to an earlier one.`,
           };
         }
         const map = slot as Record<string, AnyBinding>;
@@ -620,7 +628,7 @@ export const attachEnvironment = async <E extends Environment>(
               hint:
                 `The persisted environment has "${componentName}.${instanceId}", but this code ` +
                 `defines only [${Object.keys(map).join(", ")}]. An instance was renamed or ` +
-                `removed. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run. shared.stopAll() will NOT do this: it stops what THIS process started, and those containers belong to an earlier one.`,
+                `removed. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run under mode: "start" or "startOrAttach". Re-running in mode: "attach" finds no state file and raises attach_no_metadata instead. If you called attachEnvironment directly there is no stateDir to clear -- fix the Environment or the snapshot you passed it. shared.stopAll() will NOT clear this for you: it stops what THIS process started, and those containers belong to an earlier one.`,
             };
           }
           await attachOne(componentName, instanceId, binding, compSnap);
@@ -643,11 +651,13 @@ export const attachEnvironment = async <E extends Environment>(
     throw {
       kind: "chaos_not_supported_in_attach",
       hint:
-        `Chaos is unavailable on a runtime built by attaching: it owns none of its containers, ` +
-        `so the process or operator that started them controls their lifecycle (D-034), and ` +
-        `stopping or restarting one here would disrupt everyone else attached to it. Run ` +
-        `chaos from the process that started the environment, or give this process its own ` +
-        `envKey so it starts, and owns, a separate set of containers.`,
+        `Chaos is not implemented on this path. A runtime rebuilt from a persisted snapshot ` +
+        `wires stop, start and restart to a refusal — it is the re-attach path that lacks ` +
+        `them, not a rule about ownership: chaos works fine against containers this process ` +
+        `does not own, which is how attach-mode disruption is supported when a Binding sets ` +
+        `allowChaos. Run chaos from the process whose ensure() actually built the ` +
+        `environment. Note a different envKey does not buy you ownership if the adapter is ` +
+        `in attach mode — it re-adopts the same operator-owned containers.`,
     };
   };
   return finalizeRuntime(env, components, opts, emitter, notSupported, notSupported, notSupported);
