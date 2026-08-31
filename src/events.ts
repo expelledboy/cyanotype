@@ -264,6 +264,17 @@ export const createEventBus = <Cat extends EventCatalog>(
           // Distinguishes "never emitted" from "emitted before you waited" —
           // the failure mode the from-now default introduces.
           beforeCheckpoint: sameName.filter((e) => e.seq <= from).length,
+          hint:
+            sameName.length === 0
+              ? `No "${name}" event was ingested at all. Either the component never emitted it, ` +
+                `or the Binding's logParser did not map the log line onto that catalog name — ` +
+                `check the parser against a raw line from this component.`
+              : sameName.filter((e) => e.seq > from).length === 0
+                ? `"${name}" WAS ingested, but only before this wait began. waitFor matches ` +
+                  `events ingested after the call, so build the promise BEFORE the action that ` +
+                  `triggers it, or pass { after: FROM_START } to scan buffered history.`
+                : `"${name}" arrived but no event matched the filter. See candidates for the ` +
+                  `most recent ones; compare their attributes against what you filtered on.`,
         };
       }
       await sleep(100);
@@ -292,6 +303,11 @@ export const createEventBus = <Cat extends EventCatalog>(
       if (elapsedMs >= timeoutMs) {
         throw {
           kind: "sequence_timeout",
+          hint:
+            `expectSequence waits for the names in order, matching only events ingested after ` +
+            `the call. Register it BEFORE the action that produces the sequence, or pass ` +
+            `{ after: FROM_START } to include already-buffered events. "matched" shows how far ` +
+            `it got — the name after that is the one that never arrived.`,
           names,
           elapsedMs,
           after: from,

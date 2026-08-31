@@ -90,6 +90,15 @@ preload = ["./tests/preload.ts"]
   agreement fails there rather than as a confusing symptom later. Set
   `CYANOTYPE_INVARIANTS=1` to enable them outside this repo's suite. Then `just test-core` (adds substrate integration) and `just test` against real Docker.
 
+### Adding a failure mode
+
+Before adding a `throw`, decide whether it is a consumer's mistake (an error,
+always on, carrying a `hint`) or an agreement between Cyanotype's own modules
+(an `invariant()`, off in consumers' runs). The decision table is in
+[`AGENTS.md`](./AGENTS.md#failures-invariant-or-error), and
+`tests/core/error-classification.test.ts` will fail until the new error is
+classified — that is intentional.
+
 ### Architectural changes
 
 Anything that touches a load-bearing concept (Blueprint shape, Adapter SPI, Environment composition, cross-process registry, event-bus typing) needs an ADR in `docs/decisions.md`.

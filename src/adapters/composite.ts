@@ -79,7 +79,14 @@ const IN_CLUSTER_SUBSTRATES = new Set(["kubernetes", "k8s"]);
 export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter => {
   for (const key of Object.keys(opts.routes)) {
     if (key.includes(SEP)) {
-      throw { kind: "composite_route_key_invalid", key, reason: `must not contain "${SEP}"` };
+      throw {
+        kind: "composite_route_key_invalid",
+        key,
+        hint:
+          `Route key "${key}" contains "${SEP}", which the composite adapter uses to prefix ` +
+          `container ids so it can route stop/logs/exists back to the substrate that started ` +
+          `them. Rename the route key in createCompositeAdapter.`,
+      };
     }
   }
 
@@ -92,10 +99,12 @@ export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter =
       throw {
         kind: "composite_substrates_unreachable",
         hostBound, inCluster,
-        reason:
-          "an in-process simulator binds the test host's loopback, which an "
-          + "in-cluster Pod cannot generally reach. Set allowUnreachableSubstrates "
-          + "if this cluster can route to the host.",
+        hint:
+          "This composite routes some components to a host-bound substrate (an in-process "
+          + "simulator binds the test host's loopback) and others into a cluster, which cannot "
+          + "generally reach that loopback — so the in-cluster components would fail to talk to "
+          + "the simulated ones. Either route both sides to the same substrate, or set "
+          + "allowUnreachableSubstrates: true if this cluster can route to your host.",
       };
     }
   }

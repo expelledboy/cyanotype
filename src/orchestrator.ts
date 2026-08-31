@@ -346,7 +346,8 @@ export const startEnvironment = async <E extends Environment>(
           `No component "${instance === undefined ? name : `${name}.${instance}`}" in this ` +
           `environment. Known: ${Array.from(components.keys()).join(", ")}. For a ` +
           `multi-instance component the instance is required (chaos.stop("redis", "primary")); ` +
-          `for a single-instance one it must be omitted.`,
+          `for a single-instance one it must be omitted. ChaosArgs normally makes that a compile ` +
+          `error, so reaching this at runtime usually means a dynamic or cast call site.`,
       };
     }
     return s;
@@ -527,9 +528,8 @@ export const attachEnvironment = async <E extends Environment>(
           componentName,
           hint:
             `The persisted environment contains "${componentName}", but the Environment in ` +
-            `this code does not. The definition changed since those containers started. ` +
-            `Stop them (just clean-containers) and let the next run rebuild, or restore the ` +
-            `component.`,
+            `this code does not -- the definition changed since those containers started. ` +
+            `Restore the component, or: Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run. shared.stopAll() will NOT do this: it stops what THIS process started, and those containers belong to an earlier one.`,
         };
       }
       if (slotSnap.kind === "single") {
@@ -541,8 +541,7 @@ export const attachEnvironment = async <E extends Environment>(
             current: "multi-instance",
             hint:
               `"${componentName}" was persisted as a single-instance component but is now ` +
-              `multi-instance. Running containers cannot be re-attached across that change: ` +
-              `stop them (just clean-containers) and let the next run rebuild.`,
+              `multi-instance. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run. shared.stopAll() will NOT do this: it stops what THIS process started, and those containers belong to an earlier one.`,
           };
         }
         await attachOne(componentName, undefined, slot, slotSnap.snapshot);
@@ -554,9 +553,7 @@ export const attachEnvironment = async <E extends Environment>(
             persisted: "multi-instance",
             current: "single",
             hint:
-              `"${componentName}" was persisted as multi-instance but is now single-instance. ` +
-              `Running containers cannot be re-attached across that change: stop them ` +
-              `(just clean-containers) and let the next run rebuild.`,
+              `"${componentName}" was persisted as multi-instance but is now single-instance. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run. shared.stopAll() will NOT do this: it stops what THIS process started, and those containers belong to an earlier one.`,
           };
         }
         const map = slot as Record<string, AnyBinding>;
@@ -571,7 +568,7 @@ export const attachEnvironment = async <E extends Environment>(
               hint:
                 `The persisted environment has "${componentName}.${instanceId}", but this code ` +
                 `defines only [${Object.keys(map).join(", ")}]. An instance was renamed or ` +
-                `removed. Stop the containers (just clean-containers) and rebuild.`,
+                `removed. Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run. shared.stopAll() will NOT do this: it stops what THIS process started, and those containers belong to an earlier one.`,
             };
           }
           await attachOne(componentName, instanceId, binding, compSnap);

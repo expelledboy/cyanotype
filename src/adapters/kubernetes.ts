@@ -323,7 +323,16 @@ const resolveReadyPod = async (
     "-o", "json",
   ]);
   if (r.exit !== 0) {
-    throw { kind: "k8s_attach_no_ready_endpoints", service: serviceName, stderr: r.stderr };
+    throw {
+      kind: "k8s_attach_no_ready_endpoints",
+      service: serviceName,
+      stderr: r.stderr,
+      hint:
+        `Could not read EndpointSlices for Service "${serviceName}". Attach mode needs at ` +
+        `least one READY endpoint to port-forward to. Check the Service selector matches ` +
+        `running pods, that those pods pass their readiness probe, and that the credentials ` +
+        `kubectl is using can list endpointslices in this namespace.`,
+    };
   }
   type Slice = {
     endpoints?: Array<{
@@ -341,7 +350,14 @@ const resolveReadyPod = async (
       }
     }
   }
-  throw { kind: "k8s_attach_no_ready_endpoints", service: serviceName };
+  throw {
+    kind: "k8s_attach_no_ready_endpoints",
+    service: serviceName,
+    hint:
+      `Service "${serviceName}" has EndpointSlices but none with a ready endpoint, so there ` +
+      `is no pod to port-forward to. Its pods are either not running or failing their ` +
+      `readiness probe — check them before attaching.`,
+  };
 };
 
 type ResumableForward = ReconnectForward & { resume(initialPod: string): Promise<void> };
@@ -561,7 +577,12 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       if (!deployment) {
         throw {
           kind: "k8s_attach_deployment_required",
-          message: `adapter.k8s.attach.deployment is required when allowChaos: true (service=${t.attach.serviceName})`,
+          hint:
+            `Chaos in attach mode scales a Deployment to 0 and back, so it needs the ` +
+            `Deployment's name — a Service alone is not enough to scale. Set ` +
+            `adapter.k8s.attach.deployment alongside allowChaos: true on this Binding ` +
+            `(service=${t.attach.serviceName}), or drop allowChaos if this component should ` +
+            `not be disrupted.`,
           service: t.attach.serviceName,
           namespace: t.namespace,
         };
@@ -576,7 +597,15 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
         "scale", `deployment/${deployment}`, "--replicas=0",
       ]);
       if (scaleRes.exit !== 0) {
-        throw { kind: "k8s_attach_scale_failed", deployment, replicas: 0, stderr: scaleRes.stderr };
+        throw {
+          kind: "k8s_attach_scale_failed",
+          deployment, replicas: 0, stderr: scaleRes.stderr,
+          hint:
+            `kubectl scale deployment/${deployment} --replicas=0 failed. Chaos in attach mode ` +
+            `is the one write Cyanotype performs against your cluster, so the credentials in ` +
+            `use need the scale verb on deployments in this namespace. See docs/k8s-rbac.md; ` +
+            `the stderr field carries kubectl's own message.`,
+        };
       }
       await waitForEndpoints(ak, t.attach.serviceName, (n) => n === 0);
       pausedAttaches.set(`${t.namespace}/${t.attach.serviceName}`, {
@@ -624,7 +653,12 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     if (allowChaos && !deployment) {
       throw {
         kind: "k8s_attach_deployment_required",
-        message: `adapter.k8s.attach.deployment is required when allowChaos: true (binding=${spec.labels["cyanotype.component"] ?? "<unknown>"})`,
+        hint:
+          `Chaos in attach mode scales a Deployment to 0 and back, so it needs the ` +
+          `Deployment's name — a Service alone cannot be scaled. Set ` +
+          `adapter.k8s.attach.deployment alongside allowChaos: true on the Binding for ` +
+          `"${spec.labels["cyanotype.component"] ?? "<unknown>"}", or drop allowChaos if this ` +
+          `component should not be disrupted.`,
         component: spec.labels["cyanotype.component"],
         instance: spec.labels["cyanotype.instance"],
       };
@@ -637,7 +671,16 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     });
     const serviceName = override?.service ?? buildServiceName(spec);
     if (!serviceName) {
-      throw { kind: "k8s_attach_service_not_found", service: null, namespace: attachNamespace, reason: "missing cyanotype.component label and no adapter.k8s.attach.service override" };
+      throw {
+        kind: "k8s_attach_service_not_found",
+        service: null,
+        namespace: attachNamespace,
+        hint:
+          `Cyanotype resolves a Service name from the component name by convention, but this ` +
+          `StartSpec carries no cyanotype.component label to derive one from. Set ` +
+          `adapter.k8s.attach.service on the Binding to name the Service in namespace ` +
+          `"${attachNamespace}" explicitly.`,
+      };
     }
     const pausedKey = `${attachNamespace}/${serviceName}`;
     const paused = pausedAttaches.get(pausedKey);
@@ -650,7 +693,15 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
           "scale", `deployment/${paused.deployment}`, "--replicas=1",
         ]);
         if (scaleRes.exit !== 0) {
-          throw { kind: "k8s_attach_scale_failed", deployment: paused.deployment, replicas: 1, stderr: scaleRes.stderr };
+          throw {
+            kind: "k8s_attach_scale_failed",
+            deployment: paused.deployment, replicas: 1, stderr: scaleRes.stderr,
+            hint:
+              `Scaling deployment/${paused.deployment} back to 1 failed, so the component ` +
+              `chaos stopped is still down. The credentials kubectl is using need the scale ` +
+              `verb on deployments in this namespace (see docs/k8s-rbac.md); stderr carries ` +
+              `kubectl's message. The Deployment may need scaling up by hand to recover.`,
+          };
         }
         await waitForEndpoints(paused.k, serviceName, (n) => n >= 1);
       }
@@ -672,7 +723,15 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     }
     const svc = await attachK.run(["get", "svc", serviceName, "-o", "json"]);
     if (svc.exit !== 0) {
-      throw { kind: "k8s_attach_service_not_found", service: serviceName, namespace: attachNamespace, stderr: svc.stderr };
+      throw {
+        kind: "k8s_attach_service_not_found",
+        service: serviceName, namespace: attachNamespace, stderr: svc.stderr,
+        hint:
+          `No Service "${serviceName}" in namespace "${attachNamespace}". Cyanotype derives ` +
+          `that name from the component name by convention — set ` +
+          `adapter.k8s.attach.service on the Binding if your cluster names it differently, ` +
+          `or check the namespace and that kubectl can read Services there.`,
+      };
     }
     const initialPod = await resolveReadyPod(attachK, serviceName);
     const attach: AttachState = { serviceName, namespace: attachNamespace, allowChaos, deployment, k: attachK, currentPod: initialPod, paused: false, reconnects: [] };

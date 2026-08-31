@@ -119,6 +119,61 @@ fresh — but the invalidate-and-restart is slow and has been observed to produc
 spurious failures when suites run back to back. `rm -rf .cyanotype-env` between
 `CYANOTYPE_ADAPTER` changes.
 
+## Failures: invariant, or error?
+
+Every failure Cyanotype raises is one of two things, and picking wrong is the
+common mistake. **Ask who broke it.**
+
+| | `invariant()` | thrown error |
+|---|---|---|
+| Who broke it | Cyanotype, or an Adapter implementing our SPI | the consumer, in their own code or config |
+| Who can fix it | us | them |
+| When it runs | only when enabled (our suite, or `CYANOTYPE_INVARIANTS=1`) | always |
+| Carries a `hint` | no | yes, if consumer-facing |
+
+**Reach for `invariant()`** when the rule is an agreement between two of *our*
+modules that no signature can state, and breaking it surfaces somewhere else
+entirely — the session label one module stamps versus the one another sweeps; a
+Service selector being a subset of the Pod labels it selects; a container we do
+not own never reaching `adapter.stop`. Write it
+`invariant(() => held, "the rule as a property", () => detail)`. **Both
+arguments are thunks** so that nothing runs when invariants are off; a plain
+boolean is evaluated at the call site regardless, which once made a *disabled*
+check crash a consumer with `undefined is not an object`.
+
+**Reach for a thrown error** when a consumer's own code caused it — a Binding
+that omits a declared `portName`, `use()` before `ensure()`, an Environment
+edited under a persisted one. It must fail for everyone, at the boundary where
+it is still explicable, and it owes them a `hint`.
+
+**Reach for neither** when a type, a boundary validator or a chokepoint already
+covers it. Duplicating those is the noise D-012 bans.
+
+### Writing a `hint`
+
+State what was done, why it is wrong, and the fix. The tagged fields address
+programs; the `hint` addresses the person reading the failure.
+
+- **Never reference this repository's tooling.** A consumer has no `just`
+  recipes of ours. Say "delete the `<envKey>.json` under your stateDir and stop
+  containers labelled `cyanotype=1`", not "run `just clean-containers`".
+- **Be accurate about scope and recovery.** Check the claim before writing it.
+  `use()` is scoped to the `createSharedEnvs` handle, not the file. `stopAll()`
+  will not clean containers a *previous* process started, so never suggest it
+  for that.
+- **Name the fix, not just the fact.** "Add `admin: \"auto\"` to that Binding's
+  ports" beats "the port is missing".
+- **Internal errors stay bare.** A hint nobody can act on is noise — and if you
+  cannot write one, the error is probably internal and may want to be an
+  `invariant()` instead.
+
+`tests/core/error-classification.test.ts` enforces all of this: every
+`throw { kind: ... }` in `src/` must be listed as consumer-facing or internal,
+consumer-facing ones must carry a `hint`, internal ones must not, and no hint
+may mention our own tooling. Adding an error without classifying it fails the
+suite — deliberately, so the decision happens while the author still knows who
+can trigger it. See D-042 and D-043.
+
 ## Releasing
 
 Two workflows, and what actually triggers them:

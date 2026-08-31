@@ -365,8 +365,9 @@ export const createSharedEnvs = <R extends Record<string, Environment>>(
         envKey,
         hint:
           `use("${envKey}") returns the runtime a previous ensure() built, and nothing has ` +
-          `ensured "${envKey}" in this process yet. Call await shared.ensure("${envKey}") first ` +
-          `— typically in a beforeAll — then use() elsewhere in the same file.`,
+          `ensured "${envKey}" through this handle yet. Call await shared.ensure("${envKey}") ` +
+          `first — typically in a beforeAll — then use() anywhere that imports the same ` +
+          `createSharedEnvs handle in this process. use() never starts anything itself.`,
       };
     }
     return cached as Runtime<R[K]>;

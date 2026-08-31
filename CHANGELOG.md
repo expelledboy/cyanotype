@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Consumer-facing errors carry a `hint` explaining what was done, why it is
-  wrong, and the fix: `use_not_ensured`, `wrong_target_env`, `unknown_env`,
-  `component_not_found`, `invalid_chaos`, `reserved_component_name`, and the
-  three snapshot-mismatch errors. Internal errors stay bare. See D-043.
+  wrong, and the fix — 25 error kinds in all, including `wait_for_timeout` and
+  `sequence_timeout`, which now distinguish "never emitted" from "emitted
+  before you waited" and say what to do about each. Internal errors stay bare.
+  Enforced by `tests/core/error-classification.test.ts`, which fails if any
+  thrown error is unclassified, if a consumer-facing one lacks a hint, or if a
+  hint references this repository's own tooling. See D-043.
 - Runtime invariants for cross-module agreements the type system cannot state —
   `invariant()` in `src/invariants.ts`, eleven of them across the orchestrator,
   registry, event bus and adapters. Off unless `CYANOTYPE_INVARIANTS=1`, so a

@@ -452,7 +452,13 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     const attach = spec.adapterConfig?.compose?.attach;
     const project = attach?.project ?? opts.project;
     if (!project) {
-      throw { kind: "compose_attach_project_required" };
+      throw {
+        kind: "compose_attach_project_required",
+        hint:
+          "Compose attach mode discovers containers by their compose project label, and no " +
+          "project was given. Set adapter.compose.attach.project on the Binding (or pass " +
+          "project to createDockerAdapter) to the value shown under NAME in `docker compose ls`.",
+      };
     }
     const allowChaos = attach?.allowChaos === true;
     const component = spec.labels["cyanotype.component"];
@@ -464,7 +470,10 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         kind: "compose_attach_service_not_found",
         service: null,
         project,
-        reason: "missing cyanotype.component label and no adapter.compose.attach.service override",
+        hint:
+          "Cyanotype resolves a compose service name from the component name by convention, " +
+          "but this StartSpec carries no cyanotype.component label to derive it from. Set " +
+          "adapter.compose.attach.service on the Binding to name the service explicitly.",
       };
     }
     const containerNumber = attach?.containerNumber ?? 1;
@@ -495,7 +504,15 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       }
     }
     if (!match) {
-      throw { kind: "compose_attach_service_not_found", service, project, containerNumber };
+      throw {
+        kind: "compose_attach_service_not_found",
+        service, project, containerNumber,
+        hint:
+          `No container for compose service "${service}" (replica #${containerNumber}) in ` +
+          `project "${project}". Check the service name matches your compose file, that the ` +
+          `stack is up, and — if this component maps to a scaled service — that ` +
+          `adapter.compose.attach.containerNumber is within the running replica count.`,
+      };
     }
     const containerId = `attach:${project}/${match.id}`;
 
@@ -545,7 +562,14 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
     }
 
     if (match.status !== "running") {
-      throw { kind: "compose_attach_container_not_running", service, project, status: match.status, containerId: match.id };
+      throw {
+        kind: "compose_attach_container_not_running",
+        service, project, status: match.status, containerId: match.id,
+        hint:
+          `The compose service "${service}" exists in project "${project}" but its container ` +
+          `is "${match.status}". Attach mode observes what is already running and never starts ` +
+          `it for you — bring the stack up (docker compose up -d) before running the suite.`,
+      };
     }
 
     const portKeys = attach?.port !== undefined
