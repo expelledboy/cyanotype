@@ -191,6 +191,13 @@ describe("hint remedies actually work", () => {
     try { await rt.chaos.stop("typo"); } catch (e) { caught = e; }
     expect(kindOf(caught)).toBe("component_not_found");
     expect(hintOf(caught)).toContain("svc");   // the known component it advertises
+    // The advertised names must be the ADDRESSABLE form. `components.keys()` are
+    // internal, colon-joined (`redis:primary`), while composite route keys and
+    // derive binding keys are dot-joined — printing the internal form invited
+    // copying a key that silently matches nothing.
+    const known = (caught as { known?: string[] }).known ?? [];
+    expect(known).toEqual(["svc"]);
+    expect(known.some((k) => k.includes(":"))).toBe(false);
 
     await rt.chaos.stop("svc");                 // the advertised name works
     await shared.stopAll();

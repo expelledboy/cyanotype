@@ -337,17 +337,26 @@ export const startEnvironment = async <E extends Environment>(
     const key = stateKey(name, instance);
     const s = components.get(key);
     if (!s) {
+      // Report the addressable form, NOT `components.keys()`. Those are internal
+      // map keys joined with a colon (`redis:primary`), while every user-facing
+      // key in the library — composite route keys, derive binding keys — is
+      // dot-joined (`redis.primary`). Printing the colon form invited copying it
+      // into `createCompositeAdapter({ routes })`, where it matches nothing and
+      // silently falls through to the default substrate instead of erroring.
+      const addressable = Array.from(components.values()).map((c) =>
+        c.instanceId === undefined ? c.componentName : `${c.componentName}.${c.instanceId}`);
       throw {
         kind: "component_not_found",
         name,
         instance,
-        known: Array.from(components.keys()),
+        known: addressable,
         hint:
           `No component "${instance === undefined ? name : `${name}.${instance}`}" in this ` +
-          `environment. Known: ${Array.from(components.keys()).join(", ")}. For a ` +
-          `multi-instance component the instance is required (chaos.stop("redis", "primary")); ` +
-          `for a single-instance one it must be omitted. ChaosArgs normally makes that a compile ` +
-          `error, so reaching this at runtime usually means a dynamic or cast call site.`,
+          `environment. Known: ${addressable.join(", ")}. For a multi-instance component the ` +
+          `instance is required (chaos.stop("redis", "primary")); for a single-instance one it ` +
+          `must be omitted. ChaosArgs normally makes that a compile error, so reaching this at ` +
+          `runtime usually means a dynamic or cast call site. These names are also the form ` +
+          `composite route keys and derive binding keys take.`,
       };
     }
     return s;
