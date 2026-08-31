@@ -31,8 +31,14 @@ const collect = (): Entry[] => {
   const out: Entry[] = [];
   for (const file of srcFiles("src")) {
     const raw = readFileSync(file, "utf8");
-    // Strip comments so documented example throws are not mistaken for errors.
-    const text = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    // Blank comments rather than deleting them, so documented example throws are
+    // not mistaken for errors WITHOUT shifting every line number after them.
+    // Deleting produced locations 10-25 lines low, and picked the `when:` guard
+    // off the wrong line — the catalogue exists for the review no test can do,
+    // so pointing at the wrong line is the one thing it must not do.
+    const text = raw
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+      .replace(/^(\s*)\/\/.*$/gm, "$1");
     const lines = text.split("\n");
     for (const m of text.matchAll(/(?:throw|reject\()\s*\{/g)) {
       let depth = 0;
