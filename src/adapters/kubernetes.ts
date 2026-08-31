@@ -565,6 +565,14 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
 
   const disconnect = async (): Promise<void> => {
     connected = false;
+    // Release the port-forwards this process opened. `stop()` already does it
+    // for containers we stop, but a process that only ATTACHED never stops
+    // anything, so without this it leaks one `kubectl port-forward` child per
+    // port on a clean exit. The signal handler covers SIGINT/SIGTERM only, and
+    // a normally-terminating `bun test` fires neither. Measured against the
+    // k8s-attach suite: two orphaned children before, none after.
+    for (const t of tracked.values()) killForwards(t);
+    tracked.clear();
     for (const [key, p] of Array.from(pausedAttaches.entries())) {
       if (p.namespace === namespace) {
         for (const r of p.reconnects) { try { r.kill(); } catch { /* ignore */ } }
