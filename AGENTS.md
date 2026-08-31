@@ -14,6 +14,7 @@ just test-core                 # harness functionality tests; Docker/K8s tests s
 just build-test-images         # one-time: builds petstore + redis-configurable
 just test                      # full suite against real Docker
 just clean-containers          # manual reset; not needed on the normal path
+just pre-release               # the release bar; checks everything, tags nothing
 ```
 
 `bun test` alone is sufficient — `tests/preload.ts` handles teardown.
@@ -42,6 +43,7 @@ just clean-containers          # manual reset; not needed on the normal path
 | End-to-end smoke (runs across all five adapters) | `tests/petstore-example/` |
 | Harness self-tests | `tests/core/` |
 | Test setup/teardown hooks | `tests/preload.ts` (registered in `bunfig.toml`) |
+| Release + leak gates, attach-suite chain | `scripts/` (one-line `just` recipes call these) |
 | K8s + Docker Compose attach walkthrough | `docs/attach-mode.md` |
 | K8s RBAC + cluster setup | `docs/k8s-rbac.md` |
 
@@ -85,7 +87,7 @@ Before declaring a change done:
 1. `just lint` — 0 diagnostics. `just lint-fix` applies the safe ones.
 2. `just typecheck` — 0 errors.
 3. `just test` — all green. If a test fails because of your change, fix the root cause rather than loosen the assertion.
-4. `just check-no-leaks` — silent, exit 0. If it names containers, the `bun:test` preload teardown is broken; fix that before anything else. It filters on `cyanotype.substrate=docker` rather than `cyanotype=1`, because on a runtime shared with Kubernetes (OrbStack, Docker Desktop) Pods carry the same `cyanotype` labels and would read as Docker leaks.
+4. `just check-no-leaks` — silent, exit 0. If it names containers, the `bun:test` preload teardown is broken; fix that before anything else. It filters on `cyanotype.substrate=docker` rather than `cyanotype=1`, because on a runtime shared with Kubernetes (OrbStack, Docker Desktop) Pods carry the same `cyanotype` labels and would read as Docker leaks. An unreachable daemon fails it — a check that cannot look must not report success.
 
 ## Releasing
 
@@ -103,23 +105,25 @@ The cycle:
 3. Merge to `master`.
 4. Tag `master`, not the branch: `git checkout master && git pull && git tag vX.Y.Z && git push --tags`.
 
-### Check these by hand before tagging — the automation does not
+### `just pre-release` is the bar
 
-- **The CHANGELOG section must exist and match the tag exactly.** `release.yml` validates it *after* `npm publish`, so a mismatch means the package is already on the registry when the workflow fails. npm forbids republishing a version ever, and unpublish is time-limited. Dry-run the workflow's own extraction first:
-  ```sh
-  awk -v v=X.Y.Z '$0 ~ "^## \\[" v "\\]" {i=1;next} i && /^## \[/{exit} i' CHANGELOG.md
-  ```
-- **`package.json` version must equal the tag.** Nothing compares them. Tagging `v0.6.0` while `package.json` says `0.5.0` publishes `0.5.0`, which fails late with a registry conflict — or silently ships the wrong version if that number was never published.
-- **Run the substrate suites.** Neither workflow runs `tests/petstore-example/` against Docker or Kubernetes; CI and release both stop at `tests/core/`. All five are a human responsibility before tagging:
-  ```sh
-  just test-petstore-memory         # no Docker, no cluster
-  just test-petstore-docker         # Cyanotype owns the containers
-  just test-petstore-docker-attach  # brings a Compose stack up, attaches, tears down
-  just test-petstore-k8s            # Cyanotype deploys the workloads
-  just test-petstore-k8s-attach     # deploys a fixture stack, attaches, deletes the namespace
-  ```
-- **Smoke the published CLI.** `bun run build` emits it to `dist/cli/index.js`, which is what `package.json`'s `bin.cyanotype` points at; run it as `bun dist/cli/index.js derive …`. `tests/core/cli-derive.test.ts` exercises `deriveCompose`/`deriveK8s` as pure functions and so cannot catch argv parsing or subcommand routing — 0.3.0 shipped a broken dispatcher for exactly that reason. The commands to run, with assertions that actually fail, are the pre-release checklist in `CONTRIBUTING.md`; work through the rest of that checklist too.
-- **`bun.lock` must be current.** Both workflows install with `--frozen-lockfile`; a drifted lockfile fails them before anything useful runs.
+One command, and it refuses rather than skips. It checks the tree (clean, on
+`master`, in sync with origin, tag unused, CHANGELOG dated and non-empty for
+`package.json`'s version, lockfile frozen), then runs lint, typecheck, build, a
+smoke of the built CLI, the core tests, all five substrate suites, and the leak
+gate. Structural failures stop it before the slow half and say so. It never
+tags, pushes or publishes.
+
+Three reasons it exists, none of which the workflows cover:
+
+- **The CHANGELOG is validated after `npm publish`.** `release.yml` extracts the
+  section for the tag *after* the package is on the registry, so a missing or
+  undated section means a published version and a failed workflow — and npm
+  forbids republishing a version.
+- **Nothing compares `package.json` to the tag.** `GITHUB_REF_NAME` appears once
+  in `release.yml`, in the notes step.
+- **Neither workflow runs the substrate suites.** `bun run test` is `tests/core/`
+  only, so Docker and Kubernetes are otherwise never exercised before a publish.
 
 ## What requires an ADR
 

@@ -118,41 +118,25 @@ tag on an unmerged branch publishes code no CI has validated. Land the release
 prep in the PR, merge, then tag `master`. The full cycle and the checks the
 automation does not perform are in [`AGENTS.md`](./AGENTS.md#releasing).
 
-Before tagging any `v*.*.*` and triggering `release.yml`:
+Before tagging any `v*.*.*` and triggering `release.yml`, run:
 
-- `just typecheck && bun run build && just test-core` must all be green.
-- **Exercise the bin entry end-to-end.** Library tests in
-  `tests/core/cli-derive.test.ts` cover `deriveCompose` and `deriveK8s`
-  as pure functions; they do not catch `src/cli/index.ts` argv-parsing
-  or subcommand-routing bugs. The spawn suite in the same file (under
-  `describe("cyanotype derive (CLI dispatch)", ...)`) does — and 0.3.0
-  shipped with a broken dispatcher because no test ever ran the bin
-  itself. The dispatch suite is the regression bar; do not relax it.
-  Manual smoke before publish. Note `jq -e`, which takes its exit status
-  from the result: without it the pipeline reports success no matter what
-  the CLI printed, which is how the previous version of this checklist
-  passed while asserting nothing.
-  ```sh
-  bun run build
+```sh
+just pre-release
+```
 
-  # Compose: the derived topology names the real service behind the binding.
-  bun dist/cli/index.js derive compose \
-    --compose tests/support/compose/petstore-attach/compose.yaml \
-    --out - --project petstore-attach \
-    | jq -e '.["redis.primary"].compose.attach.service == "cache-leader"' >/dev/null
+It is a gate, not a list: silent and exit 0 when the tree is releasable,
+otherwise every failing check between two `[GATE]` lines. It covers git state,
+the CHANGELOG section the release workflow will look for, the lockfile, lint,
+typecheck, build, the core tests, all five substrate suites, and container
+leaks — and it tags nothing.
 
-  # Kubernetes: every component is derived, and instances keep their identity.
-  bun dist/cli/index.js derive k8s \
-    --k8s tests/support/k8s/petstore-attach/all.yaml --out - \
-    | jq -e '(keys | length) == 6
-             and (.["petstore.one"].k8s.attach.service == "pet-svc-1")' >/dev/null
-
-  # Misuse must be refused, not silently accepted.
-  bun dist/cli/index.js derive bogus >/dev/null 2>&1; test $? -eq 2
-  ```
-- The CHANGELOG `[Unreleased]` section is non-empty and reads coherently
-  as a release-note. Move it to `[X.Y.Z] - YYYY-MM-DD` in the release
-  commit; `release.yml` feeds it to the GitHub Release body.
+It also smokes the built CLI, which is the one check with a story behind it:
+`tests/core/cli-derive.test.ts` covers `deriveCompose` and `deriveK8s` as pure
+functions, so nothing there catches argv parsing or subcommand routing, and
+0.3.0 shipped a broken dispatcher for exactly that reason. The gate runs
+`dist/cli/index.js` for real and asserts on what it emits, including that
+misuse exits 2 — a dispatcher bug shows up as accepting bad input rather than
+as wrong output.
 
 ## Project layout
 
