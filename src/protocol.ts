@@ -261,10 +261,11 @@ export const createHttpClient = <R extends HttpRouteMap>(
           cause: err,
           route: name,
           hint:
-            `The HTTP request for route "${String(name)}" never completed — the component was ` +
-            `reachable at readiness but is not now. It may have crashed or been stopped ` +
-            `(deliberately, if a chaos test is running), or the request exceeded its timeout. ` +
-            `cause carries the underlying network error.`,
+            `The HTTP request for route "${String(name)}" got no response at all, so this is ` +
+            `not an error status — nothing answered at "${url.origin}". Check whether that ` +
+            `component is still running (a chaos test may have stopped it deliberately) and ` +
+            `whether the request outlived this client's ${defaultTimeoutMs}ms timeout. cause ` +
+            `carries the underlying network error, which tells the two apart.`,
         };
       }
       clearTimeout(timer);

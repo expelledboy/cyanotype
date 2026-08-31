@@ -49,6 +49,8 @@ const CONSUMER_FACING = new Set([
   // Their compose stack
   "compose_attach_project_required", "compose_attach_service_not_found",
   "compose_attach_container_not_running",
+  // Their cluster's port-forwarding and local sockets
+  "k8s_port_forward_timeout", "k8s_port_forward_exited", "k8s_local_port_claim_failed",
   // Their cluster, RBAC, and attach config
   "kubectl_not_found", "k8s_namespace_missing", "k8s_namespace_create_failed",
   "k8s_pod_not_ready", "k8s_pod_apply_failed", "k8s_configmap_apply_failed",
@@ -94,7 +96,11 @@ const throwSites = (): { file: string; kind: string; hasHint: boolean }[] => {
     const text = readFileSync(file, "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/^\s*\/\/.*$/gm, "");
-    for (const m of text.matchAll(/throw\s*\{/g)) {
+    // `reject({ kind: ... })` counts as raising an error. Matching only `throw`
+    // let three consumer-visible Kubernetes failures — port-forward timeout,
+    // port-forward exited, local port claim — escape classification entirely,
+    // so they shipped with no hint and nothing noticed.
+    for (const m of text.matchAll(/(?:throw|reject\()\s*\{/g)) {
       // Walk to the matching brace so a hint in a NEIGHBOURING throw cannot
       // be miscredited to this one.
       let depth = 0, i = m.index + m[0].length - 1;

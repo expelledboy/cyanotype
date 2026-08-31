@@ -119,8 +119,13 @@ export const createEnvironment = <
         name,
         reserved: RESERVED_COMPONENT_NAMES,
         hint:
-          `"${name}" is a system operation on the runtime (runtime.${name}), so a component ` +
-          `cannot use it. Rename the component in createEnvironment().`,
+          name === "start"
+            ? `"start" is reserved defensively: runtime.start is not exposed today, but ` +
+              `reserving the name means adding an environment-level start later cannot ` +
+              `silently shadow a component. Rename the component in createEnvironment().`
+            : `"${name}" is a system operation on the runtime (runtime.${name}), and a ` +
+              `component of that name would shadow it. Rename the component in ` +
+              `createEnvironment().`,
       };
     }
     checkDeclaredPorts(name, env[name]);

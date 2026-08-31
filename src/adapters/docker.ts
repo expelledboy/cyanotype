@@ -360,9 +360,12 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
           containerId,
           port: name,
           hint:
-            `The container is running but Docker reports no host binding for container port ` +
-            `${name}. The image most likely does not EXPOSE it, or the process inside is ` +
-            `listening on a different port than the Binding declares.`,
+            `The container is running but Docker reports no published host binding for ` +
+            `container port ${name}. Attach mode only reads the mappings the stack already ` +
+            `publishes: the compose service needs a "ports:" entry mapping that container ` +
+            `port to the host — "expose:" alone publishes nothing. If the Binding's port name ` +
+            `is not the container port number, set adapter.compose.attach.port to the ` +
+            `container port to read.`,
         };
       }
       ports[name] = Number(arr[0].HostPort);
@@ -437,7 +440,14 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         await client.ping();
       } catch (cause) {
         client = null;
-        throw { kind: "docker_connect_failed", cause, hint: "Injected client ping failed." };
+        throw {
+          kind: "docker_connect_failed",
+          cause,
+          hint:
+            `The dockerClient passed to createDockerAdapter did not answer ping(), so no ` +
+            `daemon was contacted. That option is an internal test seam — production callers ` +
+            `do not set it.`,
+        };
       }
       return;
     }
@@ -477,7 +487,11 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       throw {
         kind: "docker_connect_failed",
         cause,
-        hint: "Is the Docker daemon running? Check DOCKER_HOST.",
+        hint:
+          `Is the Docker daemon running? Cyanotype connects to DOCKER_HOST when it is set, ` +
+          `and otherwise to /var/run/docker.sock, falling back to the Docker Desktop socket ` +
+          `under your home directory. A daemon on any other socket (Colima, Rancher Desktop, ` +
+          `a remote host) needs DOCKER_HOST pointing at it.`,
       };
     }
   };
@@ -583,8 +597,8 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
               `The running container for "${component ?? service}" uses image "${actual}", but ` +
               `its Binding declares "${expected}" — the suite would be testing something other ` +
               `than what it says. Bring the stack up from the image the Binding names, update ` +
-              `the Binding to match what is deployed, or set onImageDrift: "warn" to proceed ` +
-              `anyway.`,
+              `the Binding to match what is deployed, or set ` +
+              `adapter.compose.attach.onImageDrift: "warn" on this Binding to attach anyway.`,
           } satisfies AttachImageDriftError;
         }
         // "warn": surface and continue.
@@ -681,10 +695,11 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
         image: imageRef,
         cause,
         hint:
-          `The container for "${imageRef}" was created but would not start, so the failure is ` +
-          `in the image or the Binding's env/mounts rather than in Cyanotype. cause carries ` +
-          `the daemon's error; running the image by hand with the same env usually reproduces ` +
-          `it immediately.`,
+          `The container for "${imageRef}" was created but the daemon refused to start it. ` +
+          `cause carries the daemon's own message, which says which of the usual causes it ` +
+          `is: a fixed host port in the Binding's ports already taken on this machine (give ` +
+          `it "auto" to let Docker choose), an entrypoint or command the image cannot run, ` +
+          `or a mount path this daemon cannot share.`,
       };
     }
 
@@ -700,8 +715,10 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
           port: name,
           hint:
             `The container started but Docker reports no host binding for container port ` +
-            `${name}. The image most likely does not EXPOSE it, or the process inside is ` +
-            `listening on a different port than the Binding declares.`,
+            `${name}. Deploy mode asks the daemon to publish every port the Binding declares, ` +
+            `so a container that is still up always has one — the usual cause is the process ` +
+            `inside exiting within milliseconds of start, which drops the mapping. Check that ` +
+            `container's logs and exit code (containerId names it) for why it died.`,
         };
       }
       ports[name] = Number(arr[0].HostPort);

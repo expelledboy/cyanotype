@@ -266,15 +266,21 @@ export const createEventBus = <Cat extends EventCatalog>(
           beforeCheckpoint: sameName.filter((e) => e.seq <= from).length,
           hint:
             sameName.length === 0
-              ? `No "${name}" event was ingested at all. Either the component never emitted it, ` +
-                `or the Binding's logParser did not map the log line onto that catalog name — ` +
-                `check the parser against a raw line from this component.`
+              ? `No "${name}" event is in this component's buffer. Either it was never emitted, ` +
+                `or the Binding's logParser did not map the log line onto that catalog name, or ` +
+                `ingest dropped it — a drop logs "[events] dropping" with the reason: a name ` +
+                `absent from the Blueprint's catalog, or attributes its schema rejected. Check ` +
+                `the parser against a raw log line from this component. Restarting a component ` +
+                `empties its buffer, so events from before a chaos restart are no longer here.`
               : sameName.filter((e) => e.seq > from).length === 0
-                ? `"${name}" WAS ingested, but only before this wait began. waitFor matches ` +
-                  `events ingested after the call, so build the promise BEFORE the action that ` +
-                  `triggers it, or pass { after: FROM_START } to scan buffered history.`
-                : `"${name}" arrived but no event matched the filter. See candidates for the ` +
-                  `most recent ones; compare their attributes against what you filtered on.`,
+                ? `"${name}" was ingested, but only at or before the stream position this wait ` +
+                  `searched from — beforeCheckpoint counts those. waitFor matches only events ` +
+                  `ingested after that position: take a checkpoint with mark() before the ` +
+                  `action that triggers the event and pass it as { after: checkpoint }, or pass ` +
+                  `{ after: FROM_START } to search the whole buffer.`
+                : `"${name}" arrived after that position but nothing matched the filter. ` +
+                  `candidates holds the most recent three; compare their attributes and ` +
+                  `instance against what you filtered on.`,
         };
       }
       await sleep(100);
@@ -304,10 +310,12 @@ export const createEventBus = <Cat extends EventCatalog>(
         throw {
           kind: "sequence_timeout",
           hint:
-            `expectSequence waits for the names in order, matching only events ingested after ` +
-            `the call. Register it BEFORE the action that produces the sequence, or pass ` +
-            `{ after: FROM_START } to include already-buffered events. "matched" shows how far ` +
-            `it got — the name after that is the one that never arrived.`,
+            `expectSequence matches the names in order over events ingested after the stream ` +
+            `position it searched from, skipping events whose name is not in the list. "seen" ` +
+            `lists, in order, the ones it had to work with — compare it against "names" to see ` +
+            `where the run broke. Take a checkpoint with mark() before the action that produces ` +
+            `the sequence and pass { after: checkpoint } as the third argument, or pass ` +
+            `{ after: FROM_START } to search the whole buffer.`,
           names,
           elapsedMs,
           after: from,

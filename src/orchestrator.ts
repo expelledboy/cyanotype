@@ -384,10 +384,11 @@ export const startEnvironment = async <E extends Environment>(
       kind: "chaos_stop_unverified",
       name, instance, containerId: id,
       hint:
-        `The adapter's stop() returned, but the container was still reported as existing 5s ` +
-        `later, so chaos.stop() cannot promise the component is actually down. Usually the ` +
-        `substrate is slow or wedged — check the daemon or cluster. Asserting on a failure ` +
-        `mode that may not have been injected would be worse than failing here.`,
+        `The adapter's stop() returned, but for 5s afterwards exists() never reported the ` +
+        `container gone — it kept finding it, or kept erroring, and the poll cannot tell ` +
+        `those apart. chaos.stop() therefore cannot promise the component is down. Usually ` +
+        `the substrate is slow or wedged — check the daemon or cluster. Asserting on a ` +
+        `failure mode that may not have been injected would be worse than failing here.`,
     };
   };
 
@@ -402,8 +403,9 @@ export const startEnvironment = async <E extends Environment>(
         status: s.status,
         hint:
           `chaos.start() resumes a component that chaos.stop() stopped, but this one is ` +
-          `"${s.status}". Use chaos.restart() to cycle a running component, or drop the ` +
-          `chaos.start() if a previous stop already failed.`,
+          `"${s.status}". Use chaos.restart() to cycle a running component, or await the ` +
+          `chaos.stop() first. A stop marks the component stopped even when the substrate ` +
+          `errors, so reaching this means none ran, or its promise was never awaited.`,
       };
     }
     const chaosEmit = chaosScope(name, instance);
@@ -538,7 +540,8 @@ export const attachEnvironment = async <E extends Environment>(
             `but its Blueprint readiness probe never passed, so the container is running ` +
             `without serving. Attach probes deliberately (D-036) rather than handing back a ` +
             `runtime that fails inside your first assertion. Check that component's logs; ` +
-            `cause carries the probe's own timeout with the last error it saw.`,
+            `cause carries the probe's own failure — probe_timeout with the last error it ` +
+            `saw, or probe_aborted if attachReadinessTimeoutMs capped the whole attach.`,
         };
       }
     }
@@ -556,7 +559,7 @@ export const attachEnvironment = async <E extends Environment>(
           hint:
             `The persisted environment contains "${componentName}", but the Environment in ` +
             `this code does not -- the definition changed since those containers started. ` +
-            `Restore the component, or: Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run. shared.stopAll() will NOT do this: it stops what THIS process started, and those containers belong to an earlier one.`,
+            `Add it back to the Environment to re-attach to those containers. Otherwise discard the environment: Cyanotype cannot re-attach across that change and does not rebuild automatically. Delete the environment's state file (the <envKey>.json under the stateDir you passed to createSharedEnvs) and stop the containers Cyanotype started -- they carry the label cyanotype=1 -- then re-run. shared.stopAll() will NOT do this: it stops what THIS process started, and those containers belong to an earlier one.`,
         };
       }
       if (slotSnap.kind === "single") {
@@ -618,9 +621,11 @@ export const attachEnvironment = async <E extends Environment>(
     throw {
       kind: "chaos_not_supported_in_attach",
       hint:
-        `This runtime was built by attaching to an environment another process started, so it ` +
-        `owns no containers and must not stop them — another worker is using them. Run chaos ` +
-        `from the process that started the environment, or give this one its own.`,
+        `Chaos is unavailable on a runtime built by attaching: it owns none of its containers, ` +
+        `so the process or operator that started them controls their lifecycle (D-034), and ` +
+        `stopping or restarting one here would disrupt everyone else attached to it. Run ` +
+        `chaos from the process that started the environment, or give this process its own ` +
+        `envKey so it starts, and owns, a separate set of containers.`,
     };
   };
   return finalizeRuntime(env, components, opts, emitter, notSupported, notSupported, notSupported);

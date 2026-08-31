@@ -85,7 +85,9 @@ export const createCompositeAdapter = (opts: CompositeAdapterOptions): Adapter =
         hint:
           `Route key "${key}" contains "${SEP}", which the composite adapter uses to prefix ` +
           `container ids so it can route stop/logs/exists back to the substrate that started ` +
-          `them. Rename the route key in createCompositeAdapter.`,
+          `them. A route key has to match a component name exactly, or "component.instance", ` +
+          `so rename the component in your Environment and use the new name as the key — ` +
+          `renaming only the key leaves that component on the default substrate.`,
       };
     }
   }

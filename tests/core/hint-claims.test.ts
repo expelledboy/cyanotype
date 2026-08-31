@@ -101,6 +101,7 @@ const EXTERNAL_ALLOWLIST = new Map<string, string>([
   ["docker ps", "inspecting the consumer's own containers to see the state the error reports"],
   ["kubectl describe", "reading the consumer's own pod to distinguish unschedulable from crash-looping"],
   ["kubectl scale", "naming the write chaos performs, so the RBAC requirement is concrete"],
+  ["kubectl port-forward", "naming the process the adapter spawns, so a reader can find and kill leaked ones — not a command we ask them to run"],
 ]);
 
 /**
@@ -162,14 +163,29 @@ describe("hint claims resolve", () => {
     expect([...new Set(bad)]).toEqual([]);
   });
 
-  test("every file a hint points at exists", () => {
+  test("every file a hint points at exists AND is published to consumers", () => {
+    // Existing in this repo is not enough. A hint is read by someone who
+    // installed the package, so the path must be inside `package.json` files —
+    // otherwise it is the same failure as telling them to run a `just` recipe
+    // they do not have. `docs/` was referenced by hints for a release before
+    // anyone noticed it was not shipped.
+    const published: string[] = JSON.parse(readFileSync("package.json", "utf8")).files;
     const missing: string[] = [];
+    const unpublished: string[] = [];
     for (const { file, text } of hints) {
       for (const m of text.matchAll(/\b((?:docs|src|scripts|tests)\/[\w./-]+)/g)) {
-        if (m[1] !== undefined && !existsSync(m[1])) missing.push(`${m[1]} — ${file}`);
+        // Trim trailing sentence punctuation: "see docs/k8s-rbac.md." is a
+        // reference followed by a full stop, not a path ending in a dot.
+        const ref = (m[1] ?? "").replace(/[.,;:]+$/, "");
+        if (ref === "") continue;
+        if (!existsSync(ref)) missing.push(`${ref} — ${file}`);
+        else if (!published.some((root) => ref === root || ref.startsWith(`${root}/`))) {
+          unpublished.push(`${ref} (not in package.json files) — ${file}`);
+        }
       }
     }
     expect([...new Set(missing)]).toEqual([]);
+    expect([...new Set(unpublished)]).toEqual([]);
   });
 
   test("every env var a hint names is read by src", () => {

@@ -34,7 +34,7 @@ const collect = (): Entry[] => {
     // Strip comments so documented example throws are not mistaken for errors.
     const text = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     const lines = text.split("\n");
-    for (const m of text.matchAll(/throw\s*\{/g)) {
+    for (const m of text.matchAll(/(?:throw|reject\()\s*\{/g)) {
       let depth = 0;
       let i = (m.index ?? 0) + m[0].length - 1;
       for (; i < text.length; i++) {

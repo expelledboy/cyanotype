@@ -152,7 +152,14 @@ const claimLocalPort = (): Promise<number> =>
       const addr = srv.address();
       if (!addr || typeof addr === "string") {
         srv.close();
-        reject({ kind: "k8s_local_port_claim_failed" });
+        reject({
+          kind: "k8s_local_port_claim_failed",
+          hint:
+            "Could not obtain an ephemeral local port to forward through. Cyanotype asks the " +
+            "kernel for a free port by binding :0, so this means the machine could not supply " +
+            "one — most often thousands of sockets left in TIME_WAIT by repeated runs. Check " +
+            "for leaked kubectl port-forward processes still holding ports.",
+        });
         return;
       }
       const p = addr.port;
@@ -328,10 +335,12 @@ const resolveReadyPod = async (
       service: serviceName,
       stderr: r.stderr,
       hint:
-        `Could not read EndpointSlices for Service "${serviceName}". Attach mode needs at ` +
-        `least one READY endpoint to port-forward to. Check the Service selector matches ` +
-        `running pods, that those pods pass their readiness probe, and that the credentials ` +
-        `kubectl is using can list endpointslices in this namespace.`,
+        `Listing EndpointSlices for Service "${serviceName}" failed — the command itself ` +
+        `errored rather than returning an empty list, so this is not "no endpoints yet". ` +
+        `Attach mode reads them to find a pod to port-forward to, so the credentials in use ` +
+        `need list on endpointslices (discovery.k8s.io) in this namespace, and the namespace ` +
+        `and context must be the ones the workload lives in. See docs/k8s-rbac.md for the ` +
+        `verbs the adapter needs; stderr carries kubectl's own message.`,
     };
   }
   type Slice = {
@@ -354,9 +363,10 @@ const resolveReadyPod = async (
     kind: "k8s_attach_no_ready_endpoints",
     service: serviceName,
     hint:
-      `Service "${serviceName}" has EndpointSlices but none with a ready endpoint, so there ` +
-      `is no pod to port-forward to. Its pods are either not running or failing their ` +
-      `readiness probe — check them before attaching.`,
+      `Service "${serviceName}" resolves to no ready Pod endpoint, so there is no pod to ` +
+      `port-forward to. Either its selector matches no pods, or the pods it matches are not ` +
+      `passing their readiness probe. kubectl describe service ${serviceName} shows the ` +
+      `selector and the endpoints it currently has.`,
   };
 };
 
@@ -403,7 +413,17 @@ const startReconnectForward = async (
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         try { handle.kill(); } catch { /* ignore */ }
-        reject({ kind: "k8s_port_forward_timeout", podName: pod, containerPort });
+        reject({
+          kind: "k8s_port_forward_timeout",
+          podName: pod,
+          containerPort,
+        hint:
+          `kubectl port-forward did not report a local listener for pod ${pod} within ` +
+          `${PORT_READY_TIMEOUT_MS}ms. The pod is Ready, so the forward itself stalled: check that ` +
+          `the container is listening on port ${containerPort} — a Ready pod with no readiness ` +
+          `probe proves only that the process started — and that your kubeconfig can reach the ` +
+          `API server, since port-forward tunnels through it.`,
+        });
       }, PORT_READY_TIMEOUT_MS);
       (async () => {
         try {
@@ -415,7 +435,15 @@ const startReconnectForward = async (
             }
           }
           clearTimeout(timer);
-          reject({ kind: "k8s_port_forward_exited", podName: pod, containerPort });
+          reject({
+            kind: "k8s_port_forward_exited",
+            podName: pod,
+            containerPort,
+            hint:
+              `kubectl port-forward for pod ${pod} exited instead of forwarding port ` +
+              `${containerPort}. Usually the pod went away underneath it, or the credentials lack ` +
+              `create on pods/portforward in this namespace — see docs/k8s-rbac.md. No stderr is captured on this path.`,
+          });
         } catch (e) { clearTimeout(timer); reject(e); }
       })();
     });
@@ -492,9 +520,12 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
         kind: "kubectl_not_found",
         stderr: ver.stderr,
         hint:
-          `The Kubernetes adapter drives kubectl as a subprocess (D-019), and running it ` +
-          `failed. Install kubectl and make sure it is on PATH for the process running the ` +
-          `tests — in CI that means adding it to the image.`,
+          `The Kubernetes adapter shells out to kubectl, and the client-version check it runs ` +
+          `first exited non-zero. A kubectl was found and executed, so this is not an empty ` +
+          `PATH (a missing binary fails earlier, as a spawn ENOENT): what is on PATH is not a ` +
+          `usable client — commonly a wrapper script that failed, or a build too old for the ` +
+          `flags the adapter passes. Check which kubectl the test process resolves; stderr ` +
+          `carries its own message.`,
       };
     }
 
@@ -504,10 +535,14 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
         throw {
           kind: "k8s_namespace_missing",
           namespace,
+          stderr: ns.stderr,
           hint:
-            `Namespace "${namespace}" does not exist. Attach mode never creates cluster ` +
-            `resources, so it will not create it for you: create the namespace and deploy your ` +
-            `workloads there first, or point the adapter at the namespace they already live in.`,
+            `Namespace "${namespace}" could not be read: it either does not exist, or the ` +
+            `credentials in use cannot get it — namespaces are cluster-scoped, so a namespaced ` +
+            `Role never grants that, and stderr says which of the two it is. Attach mode never ` +
+            `creates cluster resources, so it will not create the namespace for you: create it ` +
+            `and deploy your workloads there first, or point the adapter at the namespace they ` +
+            `already live in.`,
         };
       }
       const create = await k.run(["create", "namespace", namespace]);
@@ -559,8 +594,9 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
       hint:
         `Pod ${podName} never became Ready (last phase "${lastPhase}"). This is the pod, not ` +
         `Cyanotype: "Pending" usually means it cannot be scheduled or the image cannot be ` +
-        `pulled, "Running" but not Ready means a container is crash-looping. ` +
-        `kubectl describe pod ${podName} shows which.`,
+        `pulled; "Failed" or "Succeeded" means the container already exited, and the adapter ` +
+        `sets restartPolicy: Never so nothing restarted it. kubectl describe pod ${podName} ` +
+        `shows which, and its container logs show why it exited.`,
     };
   };
 
@@ -570,7 +606,18 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         handle.kill();
-        reject({ kind: "k8s_port_forward_timeout", podName, containerPort, elapsedMs: PORT_READY_TIMEOUT_MS });
+        reject({
+          kind: "k8s_port_forward_timeout",
+          podName,
+          containerPort,
+          elapsedMs: PORT_READY_TIMEOUT_MS,
+        hint:
+          `kubectl port-forward did not report a local listener for pod ${podName} within ` +
+          `${PORT_READY_TIMEOUT_MS}ms. The pod is Ready, so the forward itself stalled: check that ` +
+          `the container is listening on port ${containerPort} — a Ready pod with no readiness ` +
+          `probe proves only that the process started — and that your kubeconfig can reach the ` +
+          `API server, since port-forward tunnels through it.`,
+        });
       }, PORT_READY_TIMEOUT_MS);
       (async () => {
         try {
@@ -585,7 +632,16 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
           clearTimeout(timer);
           let stderr = "";
           try { stderr = await new Response(handle.proc.stderr as unknown as ReadableStream).text(); } catch { /* ignore */ }
-          reject({ kind: "k8s_port_forward_exited", podName, containerPort, stderr });
+          reject({
+            kind: "k8s_port_forward_exited",
+            podName,
+            containerPort,
+            stderr,
+            hint:
+              `kubectl port-forward for pod ${podName} exited instead of forwarding port ` +
+              `${containerPort}. Usually the pod went away underneath it, or the credentials lack ` +
+              `create on pods/portforward in this namespace — see docs/k8s-rbac.md. stderr carries the message kubectl printed.`,
+          });
         } catch (e) {
           clearTimeout(timer);
           reject(e);
@@ -637,9 +693,11 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
           kind: "k8s_attach_scale_failed",
           deployment, replicas: 0, stderr: scaleRes.stderr,
           hint:
-            `kubectl scale deployment/${deployment} --replicas=0 failed. Chaos in attach mode ` +
-            `is the one write Cyanotype performs against your cluster, so the credentials in ` +
-            `use need the scale verb on deployments in this namespace. See docs/k8s-rbac.md; ` +
+            `kubectl scale deployment/${deployment} --replicas=0 failed, so chaos could not ` +
+            `take the component down. Either no Deployment by that name exists in this ` +
+            `namespace — adapter.k8s.attach.deployment must name the Deployment, not the ` +
+            `Service — or the credentials in use lack patch on deployments/scale (apps), which ` +
+            `is the one write Cyanotype performs against your cluster. See docs/k8s-rbac.md; ` +
             `the stderr field carries kubectl's own message.`,
         };
       }
@@ -734,9 +792,10 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
             deployment: paused.deployment, replicas: 1, stderr: scaleRes.stderr,
             hint:
               `Scaling deployment/${paused.deployment} back to 1 failed, so the component ` +
-              `chaos stopped is still down. The credentials kubectl is using need the scale ` +
-              `verb on deployments in this namespace (see docs/k8s-rbac.md); stderr carries ` +
-              `kubectl's message. The Deployment may need scaling up by hand to recover.`,
+              `chaos stopped is still down and will stay down. The credentials kubectl is ` +
+              `using need patch on deployments/scale (apps) in this namespace (see ` +
+              `docs/k8s-rbac.md); stderr carries kubectl's message. The Deployment may need ` +
+              `scaling up by hand to recover.`,
           };
         }
         await waitForEndpoints(paused.k, serviceName, (n) => n >= 1);

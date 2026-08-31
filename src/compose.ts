@@ -173,8 +173,10 @@ export const readStoredFingerprint = (
       path: fingerprintPath(stateDir, project),
       cause: "schema_mismatch",
       hint:
-        `The Compose stack fingerprint was written by a different version of its schema. ` +
-        `Delete the file; the next reconcile treats the stack as stale and rebuilds it.`,
+        `The Compose stack fingerprint is not a schema-version-1 record — either a different ` +
+        `Cyanotype version wrote it, or something else now occupies that path. Delete the ` +
+        `file; with no fingerprint stored, the next reconcile treats the stack as stale and ` +
+        `rebuilds it.`,
     };
   }
   return parsed.fields;

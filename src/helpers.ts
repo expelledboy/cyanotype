@@ -81,9 +81,11 @@ const doFetch = async (
       kind: "fetch_error",
       cause: err,
       hint:
-        `The request never completed. The component was reachable at readiness, so it has ` +
-        `since crashed, been stopped, or exceeded the timeout. cause carries the underlying ` +
-        `network error.`,
+        `The ${method} request to "${url}" got no response. A malformed url or baseUrl is ` +
+        `reported here too, so check those first, then whether the target is still running ` +
+        `(a chaos test may have stopped it deliberately), then whether the call outlived its ` +
+        `${init?.timeoutMs ?? 30_000}ms timeout or an AbortSignal its caller passed. cause ` +
+        `carries the underlying error.`,
     };
   }
   clearTimeout(timer);

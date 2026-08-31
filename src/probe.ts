@@ -125,10 +125,15 @@ export const runProbe = async <I extends InterfaceRecord>(
     kind: "probe_timeout",
     probe, lastError, elapsedMs: Date.now() - start, attempts,
     hint:
-      `The component started but never became ready within ${timeoutMs}ms (${attempts} ` +
-      `attempts). lastError carries what the final attempt saw: a connection refused usually ` +
-      `means the process is still booting or crashed — check its logs — while a non-2xx ` +
-      `status means it is serving but not healthy yet. Raise the Blueprint's readiness ` +
-      `timeoutMs if the component is simply slow to start.`,
+      `Readiness never passed within ${timeoutMs}ms (${attempts} attempts). lastError is what ` +
+      `the final attempt saw. For an http probe, a connect or fetch failure means nothing ` +
+      `answered on that URI — still booting, crashed, or listening elsewhere; check the ` +
+      `component's own logs. "status not acceptable" means it answered outside the accepted ` +
+      `range, which is statusMin..statusMax and defaults to 200-499, so a 5xx lands here and a ` +
+      `404 does not. An abort means one attempt outran its own budget, intervalMs capped at 5s. ` +
+      `For a custom probe, "custom probe returned false" says only that check resolved false; ` +
+      `throw a tagged error from it instead and its kind is carried on the probe.attempt ` +
+      `observer event. If the component is merely slow to start, raise timeoutMs on the ` +
+      `Blueprint's readiness probe.`,
   };
 };
