@@ -372,8 +372,12 @@ const startReconnectForward = async (
     },
     resume: async (pod: string) => {
       state.currentPod = pod;
-      state.paused = false;
+      // Clear `paused` only AFTER the new child exists. The supervisor polls
+      // this flag; if it were cleared first, the supervisor could wake while
+      // `state.proc` still referenced the dead child, see it already exited,
+      // and race into its own respawn.
       await spawnOnce(pod);
+      state.paused = false;
     },
   };
 
@@ -414,6 +418,12 @@ const startReconnectForward = async (
           await new Promise((r) => setTimeout(r, 100));
         }
         if (state.stopped) break;
+        // `resume()` has already spawned the replacement and published it as
+        // `state.proc`. Falling through to the respawn path below would spawn a
+        // SECOND child and overwrite the reference to the first, orphaning a
+        // `kubectl port-forward` that nothing can subsequently kill — one leaked
+        // process per chaos cycle. Re-enter instead and supervise the new child.
+        continue;
       }
       let attempts = 0;
       let newPod: string | null = null;

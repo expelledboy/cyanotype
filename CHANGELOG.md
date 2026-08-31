@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a compound fault that no real failure mode creates. See D-039.
 
 ### Fixed
+- The Kubernetes attach-mode reconnection layer no longer orphans a `kubectl
+  port-forward` child on every chaos cycle. `resume()` published the new child
+  only after clearing its `paused` flag, so the supervisor could wake, observe
+  the dead child as already exited, and race into its own respawn while
+  `resume` was spawning — leaving a process nothing held a reference to.
+  Measured on the k8s-attach petstore suite across three independent pairs of
+  runs: 2/2/4 orphaned processes before, 0/0/0 after.
 - The `cyanotype.session` label is now stamped by the adapter, which is what
   `teardown()` sweeps by. Previously `createSharedEnvs` supplied
   `${process.pid}-${Date.now()}` recomputed per call — so the label meant to
