@@ -110,14 +110,18 @@ If you are measuring or debugging a chaos suite, run one at a time, and do not
 delete the namespace or `.cyanotype-env` immediately before a run — a suite that
 starts into that churn produces failures that are yours, not the code's.
 
-**Clear `.cyanotype-env` when switching substrates.** Environment metadata is
-keyed by env key alone (`<stateDir>/<envKey>.json`) and records nothing about
-which substrate wrote it, so a Kubernetes run inherits the file a Compose-attach
-run left behind. Nothing breaks outright — `adapter.exists()` is asked about a
-container id from the other substrate, says no, and the environment is started
-fresh — but the invalidate-and-restart is slow and has been observed to produce
-spurious failures when suites run back to back. `rm -rf .cyanotype-env` between
-`CYANOTYPE_ADAPTER` changes.
+**Clean the CONTAINERS when switching substrates, not the state file.** Since
+D-041 the metadata records which substrate wrote it, so a Kubernetes run that
+finds a Compose-attach file no longer guesses: `startOrAttach` rebuilds, and
+`attach` refuses with `attach_substrate_mismatch`. `rm -rf .cyanotype-env` is
+no longer needed and was never the real problem — before D-041 this survived
+only because `adapter.exists()` happened to reject the other substrate's
+container ids, which the SPI never guaranteed.
+
+What a switch still leaves behind is containers. `startOrAttach` deliberately
+does not stop them, because they belong to a substrate this adapter cannot
+drive; they are left to their own substrate's teardown. Run
+`just clean-containers` when moving between substrates.
 
 ## Failures: invariant, or error?
 
