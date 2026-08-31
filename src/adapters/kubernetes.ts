@@ -684,19 +684,16 @@ export const createK8sAdapter = (opts: K8sAdapterOptions): Adapter => {
         };
       }
       const deployment = t.attach.deployment;
-      if (!deployment) {
-        throw {
-          kind: "k8s_attach_deployment_required",
-          hint:
-            `Chaos in attach mode scales a Deployment to 0 and back, so it needs the ` +
-            `Deployment's name — a Service alone is not enough to scale. Set ` +
-            `adapter.k8s.attach.deployment alongside allowChaos: true on this Binding ` +
-            `(service=${t.attach.serviceName}), or drop allowChaos if this component should ` +
-            `not be disrupted.`,
-          service: t.attach.serviceName,
-          namespace: t.namespace,
-        };
-      }
+      // `startAttach` refuses `allowChaos` without a deployment, and it is the
+      // only place an AttachState is built — so reaching here with `allowChaos`
+      // true and no deployment would mean that agreement broke. This was a
+      // thrown error carrying advice ("set adapter.k8s.attach.deployment") for a
+      // configuration the reader cannot be in: they would have been stopped at
+      // start time. A hint nobody can reach is not a hint.
+      invariant(() => deployment !== null,
+        "an AttachState that allows chaos names a Deployment",
+        () => ({ service: t.attach?.serviceName, namespace: t.namespace }));
+      if (!deployment) return;
       t.attach.paused = true;
       for (const r of t.attach.reconnects) r.pause();
       // D-023 (rewritten): real cluster mutation. Scale the Deployment to 0
