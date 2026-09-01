@@ -202,7 +202,12 @@ can trigger it. See D-042 and D-043.
 
 Two workflows, and what actually triggers them:
 
-- `.github/workflows/ci.yml` runs on `pull_request` targeting `master` **and on nothing else** — there is deliberately no push trigger, because the pre-merge run already validates the merge result. It runs `bun install --frozen-lockfile`, `lint`, `typecheck`, `build`, `bun run test` (which is `tests/core/` only), and `bun pm pack --dry-run`.
+- `.github/workflows/ci.yml` runs on `pull_request` targeting `master` **and on nothing else** — there is deliberately no push trigger, because the pre-merge run already validates the merge result. Three parallel jobs, so a failure in one substrate cannot hide another's result:
+  - `unit` — lint, typecheck, build, `tests/core/`, `bun pm pack --dry-run`.
+  - `docker` — the adapter suites, then the petstore example against the in-memory, Docker and Docker Compose attach adapters, then the leak gate.
+  - `kubernetes` — a kind cluster, then the Kubernetes **adapter** suites. Not the petstore example: it drives six components at once and the adapter cannot yet recover a `kubectl port-forward` that dies after establishing, which on kind gave 2 clean runs in 5. Those two paths are covered by `just pre-release` instead, against a shared-image-store cluster.
+
+  Both substrate jobs set `CYANOTYPE_REQUIRE_DOCKER` / `CYANOTYPE_REQUIRE_K8S`, so a substrate the job provisioned and then could not reach fails the build instead of skipping. The Kubernetes job also asserts the ASSERTION count, not just the test count: a test count cannot tell a real run from one whose bodies return early, which is the defect that made these suites report 22 hollow passes in the first place.
 - `.github/workflows/release.yml` runs on pushing a tag matching `v*.*.*`. It runs `bun run prepublishOnly`, publishes to npm through Trusted Publishers OIDC (no token; provenance is automatic), then extracts the matching CHANGELOG section and creates a GitHub Release from it.
 
 **Therefore: a commit is only ever validated by CI as part of a pull request.** Never tag a branch. A tag on an unmerged branch publishes code CI has never run against, from a commit outside `master`'s history, and attests provenance to a ref nobody can find later.
@@ -219,9 +224,16 @@ The cycle:
 One command, and it refuses rather than skips. It checks the tree (clean, on
 `master`, in sync with origin, tag unused, CHANGELOG dated and non-empty for
 `package.json`'s version, lockfile frozen), then runs lint, typecheck, build, a
-smoke of the built CLI, the core tests, all five substrate suites, and the leak
-gate. Structural failures stop it before the slow half and say so. It never
-tags, pushes or publishes.
+smoke of the built CLI, the core tests, the adapter suites, the package
+contents, the petstore example against all five substrates, and the leak gate.
+Structural failures stop it before the slow half and say so. It never tags,
+pushes or publishes.
+
+It is a **strict superset of CI**: everything the workflow runs, plus git state,
+tag availability, the built CLI, and the two Kubernetes petstore paths the
+workflow cannot run. Green CI is necessary and not sufficient. Point
+`CYANOTYPE_K8S_CONTEXT` at OrbStack or Docker Desktop before running it — those
+two paths are flaky on kind.
 
 Three reasons it exists, none of which the workflows cover:
 

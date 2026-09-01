@@ -105,7 +105,7 @@ bun test health.test.ts
 Now swap which `const adapter = …` line is active and re-run the same test:
 
 - **Docker Compose attach** — uncomment `createDockerAdapter({ mode: "attach", ... })`. Point it at an already-running `docker compose up` stack; Cyanotype discovers containers via `com.docker.compose.project`/`com.docker.compose.service` labels and never creates or removes containers. Services must publish their ports to the host (`ports:` in your Compose file). The test code does not change.
-- **Kubernetes** — uncomment `createK8sAdapter`. Your kubectl context must point at a cluster that can pull `cyanotype-health-example:latest` (OrbStack mounts the host Docker registry automatically; for `kind`, `kind load docker-image cyanotype-health-example:latest`). Also supports `mode: "attach"` to test against pre-deployed workloads without managing the cluster yourself. The test code does not change.
+- **Kubernetes** — uncomment `createK8sAdapter`. Your kubectl context must point at a cluster that can see `cyanotype-health-example:latest`. With kind, copy it in: `kind load docker-image cyanotype-health-example:latest`. OrbStack and Docker Desktop share their image store with their built-in cluster, so there it is already visible. Also supports `mode: "attach"` to test against pre-deployed workloads without managing the cluster yourself. The test code does not change.
 - **In-memory simulator** — uncomment `createInMemoryAdapter`. No Docker daemon, no cluster — milliseconds per test. The factories map registers a `Bun.serve` fake under the same image key the Binding already declares. The test code does not change.
 - **Mixed** — `createCompositeAdapter({ default, routes })` picks the substrate per component, so the component under test can run for real while its dependencies are simulated and a neighbouring team's broken build cannot fail your test. Routes key on component name or `component.instance`, so a real `stable` instance and a simulated `canary` instance of the *same* component can coexist. The test code does not change.
 
@@ -309,7 +309,7 @@ Same 15-test SLA suite green across five adapter modes (in-memory, Docker, Docke
 - [Bun](https://bun.sh) `~1.3` or newer (for development; Node consumers can `npm install` the published package)
 - [just](https://github.com/casey/just) — `brew install just`
 - **Docker** daemon running (Engine 20.10+), for the Docker adapter. Docker Desktop, OrbStack and plain Linux Docker all work unmodified.
-- **`kubectl`** on PATH and a reachable cluster context, for the K8s adapter. OrbStack's local Kubernetes works out of the box; for `kind` or remote clusters see [`docs/k8s-rbac.md`](./docs/k8s-rbac.md).
+- **`kubectl`** on PATH and a reachable cluster context, for the K8s adapter. `just kind-up` creates the one this repository's recipes default to; OrbStack's and Docker Desktop's built-in clusters work too, via `CYANOTYPE_K8S_CONTEXT`. For remote clusters see [`docs/k8s-rbac.md`](./docs/k8s-rbac.md).
 
 ## Run the tests
 

@@ -154,12 +154,20 @@ describe.skipIf(!HAS_DOCKER)("docker/adapter", () => {
     expect(r.ports["6379"]).toBeGreaterThan(0);
   }, 60_000);
 
+  // 393xx, not the 363xx the petstore example pins for its Redis instances.
+  // A fixed port is a claim on the whole machine, so two suites naming the same
+  // number cannot both run on one host — and CI now runs both in one job. The
+  // failure is remote from its cause: the daemon refuses the SECOND container
+  // with "address already in use", naming a port the reader has to trace back
+  // to another suite entirely.
+  const FIXED_PORT = 39379;
+
   test("port resolution with fixed port", async () => {
     adapter = createDockerAdapter({ sessionId: "s-fixed" });
     await adapter.connect();
-    const r = await adapter.start(mkSpec("s-fixed", { ports: { "6379": 36379 } }));
+    const r = await adapter.start(mkSpec("s-fixed", { ports: { "6379": FIXED_PORT } }));
     started.push(r.containerId);
-    expect(r.ports["6379"]).toBe(36379);
+    expect(r.ports["6379"]).toBe(FIXED_PORT);
   }, 60_000);
 
   test("mount-as-content writes tmpfile and binds it", async () => {
@@ -169,7 +177,9 @@ describe.skipIf(!HAS_DOCKER)("docker/adapter", () => {
     const r = await adapter.start(
       mkSpec("s-mount", {
         mounts: { "/etc/cyanotype/test.txt": "hello-cyanotype" },
-        ports: { "6379": 36380 },
+        // "auto": this test is about the bind mount, and a pinned port here
+        // only adds a way for it to fail for an unrelated reason.
+        ports: { "6379": "auto" },
       })
     );
     started.push(r.containerId);
