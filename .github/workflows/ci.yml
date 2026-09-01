@@ -51,6 +51,7 @@ jobs:
           restore-keys: ${{ runner.os }}-bun-
       - uses: extractions/setup-just@v3
       - run: bun install --frozen-lockfile
+      - run: bun scripts/prime-images.ts
       - run: just build-test-images
 
       # CYANOTYPE_REQUIRE_DOCKER turns an unreachable daemon into a failure
@@ -94,6 +95,7 @@ jobs:
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
 
+      - run: bun scripts/prime-images.ts
       - run: just build-test-images
       - run: just kind-up
       - run: bun scripts/k8s-load-images.ts

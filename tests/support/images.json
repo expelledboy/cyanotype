@@ -1,0 +1,34 @@
+{
+  "$comment": [
+    "Upstream container images this repository pulls, and where CI gets them instead.",
+    "",
+    "WHY A MIRROR. Anonymous Docker Hub pulls are limited to 100 per six hours per",
+    "IPv4 address. This repository pulls six images per CI run and will never",
+    "exhaust that alone — the quota is spent by OTHER tenants sharing GitHub's",
+    "hosted-runner addresses. So the fix is not to pull less, it is to stop",
+    "depending on Docker Hub at CI time. GitHub Container Registry has no pull",
+    "rate limit for public packages.",
+    "",
+    "WHY THE ORIGINAL NAMES ARE UNCHANGED. scripts/prime-images.ts pulls each",
+    "`mirror` and retags it to its `source` name before any suite starts, so every",
+    "Dockerfile, manifest and fixture keeps the reference it already had. CI and a",
+    "laptop run the same strings; nothing has to know the mirror exists.",
+    "",
+    "ABOUT `id`. This is the image CONFIG digest (`docker inspect --format {{.Id}}`),",
+    "not the registry manifest digest. The manifest digest changes when an image is",
+    "copied between registries, so it cannot verify anything after the retag; the",
+    "config digest does not. It IS platform-specific, so these values are the",
+    "linux/amd64 ones the mirror workflow records, and prime-images only checks them",
+    "when running on that platform. An empty string means the mirror has not run",
+    "since this image was added — priming still works, it just cannot verify."
+  ],
+  "registry": "ghcr.io/expelledboy/cyanotype",
+  "images": [
+    { "source": "node:20-alpine", "mirror": "mirror-node:20-alpine", "id": "", "usedBy": "tests/support/containers/petstore-sla/Dockerfile" },
+    { "source": "redis:7-alpine", "mirror": "mirror-redis:7-alpine", "id": "", "usedBy": "tests/support/containers/redis-configurable/Dockerfile, tests/substrate/docker.test.ts" },
+    { "source": "alpine:3.20", "mirror": "mirror-alpine:3.20", "id": "", "usedBy": "tests/substrate/docker.test.ts" },
+    { "source": "nginx:alpine", "mirror": "mirror-nginx:alpine", "id": "", "usedBy": "tests/petstore-example/env.ts, tests/support/k8s/*.yaml, tests/support/compose/petstore-attach/compose.yaml" },
+    { "source": "redis:alpine", "mirror": "mirror-redis:alpine", "id": "", "usedBy": "tests/support/k8s/petstore-attach/all.yaml" },
+    { "source": "kindest/node:v1.37.0", "mirror": "mirror-kindest-node:v1.37.0", "id": "", "usedBy": "scripts/kind-up.ts — kind 0.33.0's default node image" }
+  ]
+}
