@@ -15,42 +15,114 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    name: lint / typecheck / build / test
+  unit:
+    name: lint / typecheck / build / unit
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
         with:
           # Pinned, not `latest`, so CI and release run the same Bun.
           bun-version: "1.3.14"
-
-      - name: Cache Bun packages
-        uses: actions/cache@v5
+      - uses: actions/cache@v5
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
+          restore-keys: ${{ runner.os }}-bun-
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run build
+      - run: bun test tests/core/
+      - run: bun pm pack --dry-run
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+  docker:
+    name: docker substrate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - uses: extractions/setup-just@v3
+      - run: bun install --frozen-lockfile
+      - run: just build-test-images
 
-      - name: Lint
-        run: bun run lint
+      # CYANOTYPE_REQUIRE_DOCKER turns an unreachable daemon into a failure
+      # rather than a skip. This job provisions one, so its absence would mean
+      # the provisioning silently did nothing — which is the defect the skip
+      # rework exists to make visible.
+      - name: Adapter suites
+        env:
+          CYANOTYPE_REQUIRE_DOCKER: "1"
+        run: bun test tests/substrate/
 
-      - name: Typecheck
-        run: bun run typecheck
+      - name: Petstore example — in-memory, Docker, Docker Compose attach
+        env:
+          CYANOTYPE_REQUIRE_DOCKER: "1"
+        run: |
+          just test-petstore-memory
+          just test-petstore-docker
+          just test-petstore-docker-attach
 
-      - name: Build
-        run: bun run build
+      - run: just check-no-leaks
 
-      # tests/core/ — Docker adapter tests self-skip when no daemon is present.
-      - name: Test
-        run: bun run test
+  kubernetes:
+    name: kubernetes substrate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - uses: extractions/setup-just@v3
+      - run: bun install --frozen-lockfile
 
-      - name: Verify pack contents
-        run: bun pm pack --dry-run
+      - name: Install kind
+        run: |
+          curl -sSLo ./kind https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - run: just build-test-images
+      - run: just kind-up
+      - run: bun scripts/k8s-load-images.ts
+
+      # The ADAPTER suites, not the petstore example. The example opens one
+      # `kubectl port-forward` per component across six components, and the
+      # adapter cannot yet detect a forward that dies after establishing — on
+      # kind that produced 2 clean runs in 5, and identically on k3d, while a
+      # shared-image-store cluster shows none of it. These suites drive one
+      # component at a time and ran 5 of 5 clean. The example keeps its
+      # Kubernetes coverage in `just pre-release`, against such a cluster.
+      - name: Kubernetes adapter suites
+        env:
+          CYANOTYPE_REQUIRE_K8S: "1"
+        run: |
+          set -o pipefail
+          bun test tests/substrate/kubernetes.test.ts tests/substrate/kubernetes-attach.test.ts 2>&1 | tee k8s.log
+          # A TEST count cannot tell a real run from one whose bodies return
+          # early — that is precisely the defect this job exists to prevent, so
+          # it would be absurd to guard it with the one number that cannot see
+          # it. An ASSERTION count can: 17 from kubernetes.test.ts and 37 from
+          # the attach suite, both measured against a live cluster.
+          expected=54
+          actual=$(grep -oE '[0-9]+ expect\(\) calls' k8s.log | grep -oE '^[0-9]+')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::Expected $expected assertions from the Kubernetes adapter suites, saw ${actual:-none}."
+            echo "Fewer means a test stopped asserting; more means one was added. Update this number deliberately."
+            exit 1
+          fi
+
+      - run: just kind-down
+        if: always()

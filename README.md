@@ -296,7 +296,7 @@ The stream is also yours to consume directly — pass any `(e: ObserverEvent) =>
 
 See [D-024](docs/decisions.md#d-024-framework-lifecycle-telemetry-via-an-opt-in-observer-stream).
 
-**Linux support?** Yes for the K8s adapter (kubectl shellout — anywhere kubectl works). The Docker adapter works on Linux too; Bindings that use `host.docker.internal` for cross-container traffic need that DNS name configured (`--add-host=host.docker.internal:host-gateway`).
+**Linux support?** Yes for both. The K8s adapter is a kubectl shellout, so it works anywhere kubectl does. The Docker adapter creates every container with `host.docker.internal` mapped to the bridge gateway, so Bindings that wire their neighbours through that name work on plain Linux Docker as they do on Docker Desktop — no per-machine setup. Needs Docker Engine 20.10+ ([D-048](docs/decisions.md#d-048-the-docker-adapter-asks-for-hostdockerinternal-it-no-longer-assumes-the-runtime-defines-it)).
 
 ## Status
 
@@ -308,7 +308,7 @@ Same 15-test SLA suite green across five adapter modes (in-memory, Docker, Docke
 
 - [Bun](https://bun.sh) `~1.3` or newer (for development; Node consumers can `npm install` the published package)
 - [just](https://github.com/casey/just) — `brew install just`
-- **Docker** daemon running, for the Docker adapter (Mac/Windows Docker Desktop, or Linux Docker with `host.docker.internal` configured).
+- **Docker** daemon running (Engine 20.10+), for the Docker adapter. Docker Desktop, OrbStack and plain Linux Docker all work unmodified.
 - **`kubectl`** on PATH and a reachable cluster context, for the K8s adapter. OrbStack's local Kubernetes works out of the box; for `kind` or remote clusters see [`docs/k8s-rbac.md`](./docs/k8s-rbac.md).
 
 ## Run the tests

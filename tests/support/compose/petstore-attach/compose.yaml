@@ -16,6 +16,8 @@ name: cyanotype-petstore-attach
 
 services:
   cache-leader:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: cyanotype/redis-configurable:latest
     labels:
       cyanotype.component: redis
@@ -30,6 +32,8 @@ services:
       - "36379:6379"
 
   cache-follower:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: cyanotype/redis-configurable:latest
     labels:
       cyanotype.component: redis
@@ -46,6 +50,8 @@ services:
       - cache-leader
 
   pet-svc-1:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: cyanotype/petstore-sla:latest
     labels:
       cyanotype.component: petstore
@@ -65,6 +71,8 @@ services:
       - cache-follower
 
   pet-svc-2:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: cyanotype/petstore-sla:latest
     labels:
       cyanotype.component: petstore
@@ -84,6 +92,8 @@ services:
       - cache-follower
 
   pet-svc-3:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: cyanotype/petstore-sla:latest
     labels:
       cyanotype.component: petstore
@@ -103,6 +113,8 @@ services:
       - cache-follower
 
   front-door:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: nginx:alpine
     labels:
       cyanotype.component: nginx

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Docker adapter now creates containers with
+  `host.docker.internal:host-gateway`, instead of assuming the runtime defines
+  that name. Docker Desktop and OrbStack do; plain Linux Docker does not, so
+  every Binding wiring its neighbours through that name — including the
+  reference example — failed readiness on Linux with a 30-second
+  `probe_timeout` naming a container that was running correctly and could not
+  resolve its neighbours. Requires Docker Engine 20.10+ ([D-048](docs/decisions.md#d-048-the-docker-adapter-asks-for-hostdockerinternal-it-no-longer-assumes-the-runtime-defines-it)).
+
 ## [0.6.0] - 2026-08-31
 
 ### Changed (BREAKING)
