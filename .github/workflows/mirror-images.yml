@@ -1,0 +1,68 @@
+# Copy the upstream images this repository pulls into GitHub Container
+# Registry, once a month.
+#
+# WHY. Anonymous Docker Hub pulls are capped at 100 per six hours per IPv4
+# address, and GitHub's hosted runners share addresses with every other tenant.
+# This repository's own six pulls per run will never exhaust that; other
+# people's do. Mirroring removes the dependency instead of shrinking it —
+# GitHub Container Registry has no pull rate limit for public packages.
+#
+# WHAT IT DOES NOT FIX. Contributors running the suites locally still pull from
+# Docker Hub. This is a CI measure only.
+#
+# ITS OWN FAILURE IS BENIGN. This job is the one place that still touches Docker
+# Hub, once a month. If it is throttled, CI keeps using last month's mirror and
+# nothing breaks; the refresh simply happens later.
+#
+# WHAT IT PINS. Four of these six are floating tags — `nginx:alpine` means
+# something different from week to week. Mirroring monthly pins CI to a monthly
+# snapshot, which is a reproducibility gain and also means upstream security
+# fixes reach CI up to a month late. Recording the image ids makes that pin
+# visible in the diff rather than silent.
+name: Mirror upstream images
+
+on:
+  schedule:
+    # 04:00 UTC on the first of the month.
+    - cron: "0 4 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: mirror-images
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: pull from source, push to ghcr
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Mirror each image and record what was mirrored
+        run: bun scripts/mirror-images.ts
+
+      - name: Commit the recorded ids, if they changed
+        run: |
+          if git diff --quiet tests/support/images.json; then
+            echo "No change — the mirror already matched upstream."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/support/images.json
+          git commit -m "chore(images): refresh the upstream mirror
+
+          Monthly refresh of the images CI pulls. A changed id means the
+          upstream floating tag now points at different content; the diff is
+          the point, since that is the only place this pin is visible."
+          git push
