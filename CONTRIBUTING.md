@@ -7,14 +7,41 @@
 You need:
 
 - **[Bun](https://bun.sh)** `~1.3` or newer — the test runner and dev runtime.
-- **Docker** running locally — for the integration tests against real images.
+- **Docker** running locally (Engine 20.10+) — for the integration tests against
+  real images. Docker Desktop, OrbStack and plain Linux Docker all work; the
+  adapter no longer assumes the runtime defines `host.docker.internal` (D-048).
 - **[just](https://github.com/casey/just)** — task runner. `brew install just`, or `nix develop` (the flake provides it).
+- **[kind](https://kind.sigs.k8s.io)** and **`kubectl`** — for the Kubernetes
+  suites. `brew install kind kubectl`.
 
 Then:
 
 ```sh
 bun install
+just kind-up      # creates the `cyanotype` kind cluster the k8s recipes default to
 ```
+
+### Which Kubernetes cluster
+
+The k8s recipes default to kubectl context `kind-cyanotype`, which `just
+kind-up` creates. kind is the standard here because continuous integration runs
+the Kubernetes adapter suites against it on every pull request, so it is the one
+cluster whose behaviour is continuously checked.
+
+Set `CYANOTYPE_K8S_CONTEXT` to use a cluster you already have. OrbStack's and
+Docker Desktop's built-in clusters work and need no image copying, since they
+share the host Docker image store — but nothing verifies them automatically, so
+a break there will be found by a person rather than by CI.
+
+**One suite needs a shared-image-store cluster today.** `just test-petstore-k8s`
+and `just test-petstore-k8s-attach` are flaky on kind: the example drives six
+components at once, and the Kubernetes adapter opens one `kubectl port-forward`
+per component with no recovery for one that dies after establishing. Measured at
+2 clean runs in 5 on kind and the same on k3d, against none on OrbStack. Point
+`CYANOTYPE_K8S_CONTEXT` at OrbStack or Docker Desktop for those two, and for
+`just pre-release`, which runs them. The adapter suites — `just test-adapter-k8s`
+and `just test-adapter-k8s-attach` — drive one component at a time and are
+unaffected.
 
 ### Co-developing against a consumer repo via a `file:` pin
 
@@ -157,8 +184,22 @@ just pre-release
 It is a gate, not a list: silent and exit 0 when the tree is releasable,
 otherwise every failing check between two `[GATE]` lines. It covers git state,
 the CHANGELOG section the release workflow will look for, the lockfile, lint,
-typecheck, build, the core tests, all five substrate suites, and container
-leaks — and it tags nothing.
+typecheck, build, the core tests, the adapter suites, the package contents, the
+petstore example against all five substrates, and container leaks — and it tags
+nothing.
+
+It is a **strict superset of CI**, deliberately. Everything the pull-request
+workflow runs, this runs too, plus what only a release cares about: git state,
+tag availability, the built command-line interface, and the two Kubernetes
+petstore paths the workflow cannot run at all. So a green CI is necessary and
+not sufficient, and the difference between them is exactly the release-shaped
+risk.
+
+It runs every suite with `CYANOTYPE_REQUIRE_DOCKER` and `CYANOTYPE_REQUIRE_K8S`
+set, which turn an absent substrate into a failure rather than a skip. A release
+bar that quietly drops the suites it could not run is not a bar. Point
+`CYANOTYPE_K8S_CONTEXT` at a shared-image-store cluster before running it — see
+"Which Kubernetes cluster" above.
 
 It also smokes the built CLI, which is the one check with a story behind it:
 `tests/core/cli-derive.test.ts` covers `deriveCompose` and `deriveK8s` as pure

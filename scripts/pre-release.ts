@@ -9,7 +9,24 @@
  *
  * It refuses rather than skips. If Docker or the cluster is unreachable, the
  * substrate suites have not run, and a release bar that quietly drops them is
- * not a bar. Nothing here is opt-out for that reason.
+ * not a bar. Nothing here is opt-out for that reason, which is why every suite
+ * below runs with CYANOTYPE_REQUIRE_DOCKER and CYANOTYPE_REQUIRE_K8S set: those
+ * turn an absent substrate into a failure rather than a skip.
+ *
+ * IT IS A STRICT SUPERSET OF CI, deliberately. Everything the pull-request
+ * workflow runs, this runs too, plus the things only a release cares about —
+ * git state, tag availability, the CHANGELOG section the release workflow will
+ * extract, the built command-line interface, and the petstore example against
+ * all five substrates. Two of those the workflow cannot cover at all: the
+ * Kubernetes example paths, for the reason below.
+ *
+ * POINT CYANOTYPE_K8S_CONTEXT AT A SHARED-IMAGE-STORE CLUSTER (OrbStack,
+ * Docker Desktop) BEFORE RUNNING THIS. The petstore example drives six
+ * components at once, and the Kubernetes adapter opens one `kubectl
+ * port-forward` per component with no recovery for one that dies after
+ * establishing. On kind that produced 2 clean runs in 5, and identically on
+ * k3d. The default context is a kind cluster, so running this gate unset will
+ * fail intermittently for a reason that has nothing to do with the release.
  *
  * What it deliberately does NOT do: tag, push, or publish. It answers "may
  * this be released", not "release it".
@@ -19,9 +36,16 @@ import { readFileSync } from "node:fs";
 
 type Check = { readonly name: string; readonly run: () => string[] | null };
 
+/**
+ * Every check runs with the substrates DEMANDED. Without these the Kubernetes
+ * suites skip when no cluster answers, and a release gate that skips is the
+ * thing this file exists not to be.
+ */
+const REQUIRE_SUBSTRATES = { CYANOTYPE_REQUIRE_DOCKER: "1", CYANOTYPE_REQUIRE_K8S: "1" };
+
 const sh = (cmd: string[], env?: Record<string, string>) =>
   Bun.spawnSync(cmd, {
-    env: env ? { ...process.env, ...env } : process.env,
+    env: { ...process.env, ...REQUIRE_SUBSTRATES, ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -175,10 +199,18 @@ const verification: Check[] = [
   },
   { name: "core tests", run: () => mustPass(["bun", "test", "tests/core/"], "tests/core/ failed.") },
   {
-    name: "substrate suites (memory, docker, docker-attach, k8s, k8s-attach)",
+    name: "adapter suites",
+    run: () => mustPass(["bun", "test", "tests/substrate/"], "tests/substrate/ failed."),
+  },
+  {
+    name: "package contents",
+    run: () => mustPass(["bun", "pm", "pack", "--dry-run"], "`bun pm pack --dry-run` failed."),
+  },
+  {
+    name: "petstore example (memory, docker, docker-attach, k8s, k8s-attach)",
     run: () => {
-      // Neither workflow runs these — CI and release both stop at tests/core/.
-      // This is the only place they are enforced.
+      // CI runs the first three. The two Kubernetes paths run nowhere else —
+      // see the note at the top about which cluster they need.
       for (const recipe of [
         "test-petstore-memory",
         "test-petstore-docker",
