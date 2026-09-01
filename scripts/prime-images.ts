@@ -28,6 +28,23 @@
 import { readFileSync } from "node:fs";
 
 type Image = { source: string; mirror: string; id: string; usedBy: string };
+
+/**
+ * LINUX/AMD64 ONLY, and this refusal is the whole reason the check exists.
+ *
+ * The mirror workflow runs on a linux/amd64 runner and pushes the
+ * single-platform image it pulled there — these are not multi-architecture
+ * manifests. Pulling one on arm64 succeeds and yields an amd64 image, so
+ * retagging it as `alpine:3.20` would silently replace a working local image
+ * with one that cannot run natively. Nothing would report an error until a
+ * container failed for reasons that have nothing to do with the test.
+ *
+ * Refusing costs a developer nothing: the source registry works locally, which
+ * is what they were already using. Making the mirror multi-architecture would
+ * need `docker buildx imagetools create` and is not worth it for a measure that
+ * exists to fix CI flake.
+ */
+const PLATFORM_OK = process.platform === "linux" && process.arch === "x64";
 type Manifest = { registry: string; images: Image[] };
 
 const manifest = JSON.parse(
@@ -42,6 +59,21 @@ const fail = (lines: string[]): never => {
   console.error("[GATE] prime-images");
   process.exit(1);
 };
+
+if (!PLATFORM_OK) {
+  console.error("[GATE] prime-images");
+  console.error(`This runs on linux/amd64 only; this is ${process.platform}/${process.arch}.`);
+  console.error("");
+  console.error("The mirror holds single-platform linux/amd64 images, so retagging one");
+  console.error("here would replace a working local image with one that cannot run");
+  console.error("natively — and nothing would say so until a container failed for an");
+  console.error("unrelated-looking reason.");
+  console.error("");
+  console.error("Nothing to do: pull from the source registry as you already do.");
+  console.error("`just build-test-images` and the suites handle it.");
+  console.error("[GATE] prime-images");
+  process.exit(1);
+}
 
 const problems: string[] = [];
 const fellBack: string[] = [];
@@ -69,10 +101,9 @@ for (const img of manifest.images) {
     continue;
   }
 
-  // Verify only when the mirror has recorded an id AND we are on the platform
-  // it recorded. The config digest differs per architecture, so a mismatch on
-  // arm64 against an amd64 record would be noise, not a finding.
-  if (img.id !== "" && process.arch === "x64") {
+  // Verify only when the mirror has recorded an id. The platform is already
+  // known to match: this script refuses to run anywhere else.
+  if (img.id !== "") {
     const got = run(["docker", "inspect", "--format", "{{.Id}}", img.source]).stdout.toString().trim();
     if (got !== img.id) {
       problems.push(
