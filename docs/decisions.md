@@ -51,6 +51,7 @@
 - [D-045 — A hint may only state what a test proves or the claim lint resolves](#d-045-a-hint-may-only-state-what-a-test-proves-or-the-claim-lint-resolves)
 - [D-046 — `Adapter.reconnect`: one optional SPI method, for adapters whose reported ports are process-local](#d-046-adapterreconnect--one-optional-spi-method-for-adapters-whose-reported-ports-are-process-local)
 - [D-047 — Attach resolves a COMPONENT, not a container id: `reconnect` reconciles by label](#d-047-attach-resolves-a-component-not-a-container-id--reconnect-reconciles-by-label)
+- [D-048 — The Docker adapter asks for `host.docker.internal`; it no longer assumes the runtime defines it](#d-048-the-docker-adapter-asks-for-hostdockerinternal-it-no-longer-assumes-the-runtime-defines-it)
 
 ---
 
@@ -1003,3 +1004,27 @@ No SPI change. D-046 shaped `ReconnectSpec` to carry `envKey`, `component` and `
 - **Attach means something different for these adapters, and it is a widening.** Previously it meant "re-attach to exactly these containers"; now it means "attach to whatever is currently serving this environment's components". A caller who wanted the first meaning cannot express it. Nothing in the codebase wanted it: the recorded id was a convenience, and its staleness was a documented defect rather than a guarantee anyone relied on.
 - Docker, Compose, in-memory and composite are untouched, since none implements `reconnect`. The composite adapter therefore loses reconcile for members that could support it — a real gap, left open deliberately rather than solved by routing an id through a wrapper whose members disagree about what identity means.
 - The mid-chaos ambiguity is handled by excluding terminating Pods, but two simultaneously-Ready Pods for one component remains an error rather than a choice. If that ever fires in practice it means the environment is not what it claims, and picking one silently would hide it.
+
+---
+
+## D-048. The Docker adapter asks for `host.docker.internal`; it no longer assumes the runtime defines it
+
+**Context:** Containers this adapter starts reach each other through published host ports rather than a shared Docker network, so a Binding wires its neighbours as `host.docker.internal:<pinned host port>`. The reference example does exactly this, and `tests/support/containers/petstore-sla/Dockerfile` bakes the name into its default `REDIS_PRIMARY_HOST`.
+
+Docker Desktop and OrbStack define that name inside every container. Plain Linux Docker does not; it requires the container be created with `--add-host=host.docker.internal:host-gateway`. The adapter created containers with `HostConfig: { Binds, PortBindings, AutoRemove }` and never asked, so the idiom worked on the machines the harness was developed on and silently did not exist anywhere else. `README.md` documented the consequence — the Docker adapter needing that name "configured" on Linux — which located the problem correctly and left it with the reader.
+
+It surfaced when continuous integration first ran the example suite on a Linux runner: every component failed readiness with a 30-second `probe_timeout` naming a container that was running correctly and simply could not resolve its neighbours. The error was accurate and pointed at the wrong system, which is the failure mode this project treats as worse than a missing feature.
+
+**Decision:** The adapter always passes `ExtraHosts: ["host.docker.internal:host-gateway"]` when creating a container. `host-gateway` is Docker's own alias for the bridge gateway, and the precondition holds unchanged: `PortBindings` sets no `HostIp`, so published ports bind `0.0.0.0` and are reachable through that gateway.
+
+Not opt-in through `AdapterConfig`. An option only helps a consumer who already knows the name is missing, and the whole difficulty is that its absence presents as a component that will not start.
+
+The Compose attach fixture carries the same alias per service, because Compose does not inherit an adapter's `HostConfig`.
+
+**Consequences:**
+
+- The Docker adapter works on Linux without per-machine setup. Readiness failures on Linux stop being a rite of passage.
+- **Requires Docker Engine 20.10 or newer** (December 2020), which is when `host-gateway` was introduced. Stated rather than guarded: a version check would fail with our message instead of Docker's, and Docker's is better.
+- On Docker Desktop and OrbStack the setting is redundant and harmless — it names the value those runtimes already supply.
+- Guarded by `tests/core/docker-host-alias.test.ts`, which asserts on what the adapter ASKS FOR rather than on connectivity. A substrate test cannot catch a regression here on a machine whose runtime supplies the name anyway, which is precisely how this survived so long.
+- It does not follow that every cross-container idiom now works everywhere. This fixes name resolution; it does not give containers a shared network, and Bindings that assume one still need Kubernetes deploy mode's Service DNS (D-020).

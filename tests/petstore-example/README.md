@@ -30,7 +30,7 @@ The suites use the real Docker adapter by default. Build the container images on
 just build-test-images
 ```
 
-Then `bun test tests/petstore-example/` (Mac/Windows Docker Desktop only — petstore reaches the host-bound redis via `host.docker.internal`).
+Then `bun test tests/petstore-example/`. Runs on any Docker runtime: petstore reaches the host-bound redis via `host.docker.internal`, which the adapter maps to the bridge gateway on every container it creates (D-048).
 
 ## Substrates
 

@@ -696,7 +696,20 @@ export const createDockerAdapter = (opts: DockerAdapterOptionsInternal): Adapter
       Env: Object.entries(spec.env).map(([k, v]) => `${k}=${v}`),
       ExposedPorts: exposedPorts,
       Labels: { ...spec.labels, "cyanotype.substrate": "docker" },
-      HostConfig: { Binds: binds, PortBindings: portBindings, AutoRemove: false },
+      HostConfig: {
+        Binds: binds,
+        PortBindings: portBindings,
+        AutoRemove: false,
+        // WHY: containers reach each other through published host ports, and
+        // `host.docker.internal` is the name they use to get back to the host.
+        // Docker Desktop and OrbStack define it themselves; plain Linux Docker
+        // does not, so on Linux every cross-container hop resolved to nothing
+        // and readiness timed out against a component that was running fine.
+        // `host-gateway` is Docker's own alias for the bridge gateway, and the
+        // published ports are bound on 0.0.0.0 (PortBindings sets no HostIp),
+        // so they are reachable through it. Requires Engine 20.10+ (D-048).
+        ExtraHosts: ["host.docker.internal:host-gateway"],
+      },
     });
     emit?.({ type: "container.created", containerId: created.id });
 
