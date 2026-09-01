@@ -19,7 +19,7 @@ import { createKubectl } from "../../src/adapters/kubectl";
 import type { Adapter, StartSpec } from "../../src/adapter";
 import { k8sAvailable, requireSubstrate } from "../support/require-substrate";
 
-const CONTEXT = process.env.CYANOTYPE_K8S_CONTEXT ?? "orbstack";
+const CONTEXT = process.env.CYANOTYPE_K8S_CONTEXT ?? "kind-cyanotype";
 const NAMESPACE = "cyanotype-attach-tests";
 const SERVICE = "attach-nginx";
 const FIXTURE = path.join(import.meta.dir, "..", "support", "k8s", "attach-fixture.yaml");
