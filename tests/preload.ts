@@ -32,10 +32,18 @@ beforeAll(() => {
   // visible in one place when future preload-level setup is needed.
 });
 
+/**
+ * The explicit timeout is load-bearing. `bun:test` gives a hook 5 seconds by
+ * default, and this one stops every container the run started — six of them
+ * for the reference example. On a developer's machine that finishes inside the
+ * default; on a continuous-integration runner it does not, and the run then
+ * reports a failed unnamed test after every suite has passed, while leaving
+ * the containers it was cancelled halfway through removing.
+ */
 afterAll(async () => {
   try {
     await shared.stopAll();
   } catch (e) {
     console.error("[preload] stopAll failed:", e);
   }
-});
+}, 120_000);

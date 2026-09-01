@@ -65,10 +65,12 @@ If you wire your own integration suite for a Cyanotype-based project, you'll nee
 import { afterAll } from "bun:test";
 import { shared } from "./your-harness";
 
+// The timeout is not optional: bun:test allows a hook 5s by default, and
+// stopping a multi-component environment exceeds that on slower machines.
 afterAll(async () => {
   try { await shared.stopAll(); }
   catch (e) { console.error("[preload] stopAll failed:", e); }
-});
+}, 120_000);
 ```
 
 ```toml
