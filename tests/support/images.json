@@ -24,11 +24,41 @@
   ],
   "registry": "ghcr.io/expelledboy/cyanotype",
   "images": [
-    { "source": "node:20-alpine", "mirror": "mirror-node:20-alpine", "id": "", "usedBy": "tests/support/containers/petstore-sla/Dockerfile" },
-    { "source": "redis:7-alpine", "mirror": "mirror-redis:7-alpine", "id": "", "usedBy": "tests/support/containers/redis-configurable/Dockerfile, tests/substrate/docker.test.ts" },
-    { "source": "alpine:3.20", "mirror": "mirror-alpine:3.20", "id": "", "usedBy": "tests/substrate/docker.test.ts" },
-    { "source": "nginx:alpine", "mirror": "mirror-nginx:alpine", "id": "", "usedBy": "tests/petstore-example/env.ts, tests/support/k8s/*.yaml, tests/support/compose/petstore-attach/compose.yaml" },
-    { "source": "redis:alpine", "mirror": "mirror-redis:alpine", "id": "", "usedBy": "tests/support/k8s/petstore-attach/all.yaml" },
-    { "source": "kindest/node:v1.37.0", "mirror": "mirror-kindest-node:v1.37.0", "id": "", "usedBy": "scripts/kind-up.ts — kind 0.33.0's default node image" }
+    {
+      "source": "node:20-alpine",
+      "mirror": "mirror-node:20-alpine",
+      "id": "sha256:11cedc39e663e7c5d5cb9cc77a461a0d2adc25537b94e6831a6108f09cb2001b",
+      "usedBy": "tests/support/containers/petstore-sla/Dockerfile"
+    },
+    {
+      "source": "redis:7-alpine",
+      "mirror": "mirror-redis:7-alpine",
+      "id": "sha256:5509c0097c6064aa8a3b1df58f1d950e67090fffa6678ae8f3f1dc2385f12deb",
+      "usedBy": "tests/support/containers/redis-configurable/Dockerfile, tests/substrate/docker.test.ts"
+    },
+    {
+      "source": "alpine:3.20",
+      "mirror": "mirror-alpine:3.20",
+      "id": "sha256:bf8527eb54c3680e728d5b4b383a8ba730d72dae7236fbc8dff97ed6b224a731",
+      "usedBy": "tests/substrate/docker.test.ts"
+    },
+    {
+      "source": "nginx:alpine",
+      "mirror": "mirror-nginx:alpine",
+      "id": "sha256:7bc5ba2f958a043e123135f456af857350673b64eaddcf811698239f3a53d6e6",
+      "usedBy": "tests/petstore-example/env.ts, tests/support/k8s/*.yaml, tests/support/compose/petstore-attach/compose.yaml"
+    },
+    {
+      "source": "redis:alpine",
+      "mirror": "mirror-redis:alpine",
+      "id": "sha256:00c30ddf0ef8074bbc7b7e5ea655bb6d359dc66694edd57d70fe95ce6ba531aa",
+      "usedBy": "tests/support/k8s/petstore-attach/all.yaml"
+    },
+    {
+      "source": "kindest/node:v1.37.0",
+      "mirror": "mirror-kindest-node:v1.37.0",
+      "id": "sha256:24f646398ba8fe575fbdcf6f48831e3a88d0853da8ecc9d2774168070e5a3bea",
+      "usedBy": "scripts/kind-up.ts — kind 0.33.0's default node image"
+    }
   ]
 }
