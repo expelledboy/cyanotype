@@ -29,9 +29,13 @@ the Kubernetes adapter suites against it on every pull request, so it is the one
 cluster whose behaviour is continuously checked.
 
 Set `CYANOTYPE_K8S_CONTEXT` to use a cluster you already have. OrbStack's and
-Docker Desktop's built-in clusters work and need no image copying, since they
-share the host Docker image store — but nothing verifies them automatically, so
-a break there will be found by a person rather than by CI.
+Docker Desktop's built-in clusters need no image copying, because they run
+Kubernetes against the same image store as the host Docker daemon — an image
+you just built is already visible to them. This document calls those
+**shared-image-store clusters**. kind gives each node its own store, so images
+must be copied in, which `just test-petstore-k8s` does for you. Nothing
+verifies the shared-store clusters automatically, so a break there will be
+found by a person rather than by CI.
 
 **One suite needs a shared-image-store cluster today.** `just test-petstore-k8s`
 and `just test-petstore-k8s-attach` are flaky on kind: the example drives six
@@ -39,9 +43,12 @@ components at once, and the Kubernetes adapter opens one `kubectl port-forward`
 per component with no recovery for one that dies after establishing. Measured at
 2 clean runs in 5 on kind and the same on k3d, against none on OrbStack. Point
 `CYANOTYPE_K8S_CONTEXT` at OrbStack or Docker Desktop for those two, and for
-`just pre-release`, which runs them. The adapter suites — `just test-adapter-k8s`
-and `just test-adapter-k8s-attach` — drive one component at a time and are
-unaffected.
+`just pre-release`, which runs them.
+
+The **adapter suites** — `just test-adapter-k8s` and `just
+test-adapter-k8s-attach`, which live in `tests/substrate/` and exercise one
+adapter directly rather than a whole example environment — drive one component
+at a time and are unaffected. They are safe on kind, and are what CI runs.
 
 ### Co-developing against a consumer repo via a `file:` pin
 
