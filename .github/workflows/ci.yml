@@ -65,7 +65,7 @@ jobs:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - run: bun install --frozen-lockfile
       - run: bun scripts/prime-images.ts
       - run: just build-test-images
@@ -102,7 +102,7 @@ jobs:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - run: bun install --frozen-lockfile
 
       # Both pinned for the same reason Bun is: the runner image's own versions
