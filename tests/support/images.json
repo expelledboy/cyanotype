@@ -19,7 +19,7 @@
     "",
     "WHY A MIRROR AT ALL. Anonymous Docker Hub pulls are limited to 100 per six",
     "hours per IPv4 address. This repository pulls six images per CI run and will",
-    "never exhaust that alone \u2014 the quota is spent by OTHER tenants sharing",
+    "never exhaust that alone — the quota is spent by OTHER tenants sharing",
     "GitHub's hosted-runner addresses. So the fix is not to pull less, it is to",
     "stop depending on Docker Hub at CI time. GitHub Container Registry has no",
     "pull rate limit for public packages.",
@@ -34,7 +34,7 @@
     "flake than the one this prevents.",
     "",
     "ABOUT `id`. The image CONFIG digest (`docker inspect --format {{.Id}}`), not",
-    "the registry manifest digest \u2014 that one changes when an image is copied",
+    "the registry manifest digest — that one changes when an image is copied",
     "between registries and so cannot verify anything after the retag. Being a",
     "config digest it is platform-specific too, which is consistent with the",
     "artifacts themselves. An empty string means the mirror has not run since this",
@@ -51,7 +51,7 @@
     {
       "source": "redis:7-alpine",
       "mirror": "mirror-redis:7-alpine",
-      "id": "sha256:5509c0097c6064aa8a3b1df58f1d950e67090fffa6678ae8f3f1dc2385f12deb",
+      "id": "sha256:f84b0c4678011602b9b98c227a4dcd5468bf8b088b02fdd4165cb7758bad8058",
       "usedBy": "tests/support/containers/redis-configurable/Dockerfile, tests/substrate/docker.test.ts"
     },
     {
@@ -63,20 +63,20 @@
     {
       "source": "nginx:alpine",
       "mirror": "mirror-nginx:alpine",
-      "id": "sha256:7bc5ba2f958a043e123135f456af857350673b64eaddcf811698239f3a53d6e6",
+      "id": "sha256:3dd08163706a20b20622f310ec10258cc96e9007ab357f7201955bc880ac17f4",
       "usedBy": "tests/petstore-example/env.ts, tests/support/k8s/*.yaml, tests/support/compose/petstore-attach/compose.yaml"
     },
     {
       "source": "redis:alpine",
       "mirror": "mirror-redis:alpine",
-      "id": "sha256:00c30ddf0ef8074bbc7b7e5ea655bb6d359dc66694edd57d70fe95ce6ba531aa",
+      "id": "sha256:15f5a4aad4c3ba34b9874ddbc7f755b469dbd7b8a9e88c12690c52ef6c72465c",
       "usedBy": "tests/support/k8s/petstore-attach/all.yaml"
     },
     {
       "source": "kindest/node:v1.37.0",
       "mirror": "mirror-kindest-node:v1.37.0",
       "id": "sha256:24f646398ba8fe575fbdcf6f48831e3a88d0853da8ecc9d2774168070e5a3bea",
-      "usedBy": "scripts/kind-up.ts \u2014 kind 0.33.0's default node image"
+      "usedBy": "scripts/kind-up.ts — kind 0.33.0's default node image"
     }
   ]
 }
